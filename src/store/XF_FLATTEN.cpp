@@ -33,12 +33,71 @@ XF_FLATTEN::~XF_FLATTEN(void) noexcept(false)
 /*----------------------------------------------------------------------------*/
 /* XF_Fold a from                                                             */
 /*----------------------------------------------------------------------------*/
+/*----------------------------------------------------------------------------*/
+/* renumber the stream columns of an op after a <from> sub-query is folded    */
+/*----------------------------------------------------------------------------*/
+// See vFold_from(). Every <term> $n in the subtree of p_card that refers to
+// the joined stream is renumbered: $n for n <= nOuter becomes $(n + nCalled),
+// and $n for nOuter < n <= nOuter + nCalled becomes $(n - nOuter).
+// The <injectable> of a table describes the table's own columns, not the
+// stream, so it is left alone.
+static void vRenumber_expCols(Card* p_card, i8 nOuter, i8 nCalled)
+{
+  if (p_card->bIsCard(CK_p_INJECTABLE)) {
+    return;
+  }
+
+  if (p_card->bIsCard(CK_TERM)) {
+    Symbol* pSymbol = p_card->pSymbol();
+    if (pSymbol->bHasFacet(SF_EXP_COL) && !pSymbol->bHasFacet(SF_TBL_COL)) {
+      Stz* szExpCol = pSymbol->szFacet(SF_EXP_COL);
+      if (szExpCol && szExpCol->azChar()[0] == '$') {
+        i8 iExpCol = atoll((const char*) szExpCol->azChar() + 1);
+        if (iExpCol >= 1 && iExpCol <= nOuter) {
+          pSymbol->vApplyFacet(SF_EXP_COL, iExpCol + nCalled);
+        } else if (iExpCol > nOuter && iExpCol <= nOuter + nCalled) {
+          pSymbol->vApplyFacet(SF_EXP_COL, iExpCol - nOuter);
+        }
+      }
+    }
+  }
+
+  for (i8 i_Child = 0; i_Child < p_card->nChildCards(); i_Child++) {
+    vRenumber_expCols(p_card->pGetChild(i_Child), nOuter, nCalled);
+  }
+}
+
 void XF_FLATTEN::vFold_from(Stz* szFoldNm, CardIter* pCI)
 {
 
   // 1) find W_A_C_ro subquery call in mq:<where>/<boolPred>
 
   RASSERT(pCI->bEachOp(CK_o_CALL));
+
+  // The outer query reads a stream that is the columns of the ops before the
+  // <call> (nOuter of them) followed by the columns that the called sub-query
+  // emits (nCalled of them). The fold puts the sub-query first, so the stream
+  // becomes the sub-query's columns followed by the outer columns. Columns of
+  // tables are referred to by table ($$a.n) and are not affected, but columns
+  // that come from the sub-query are referred to by position ($n), so those
+  // references are renumbered below.
+  i8 nOuter = 0;
+  i8 nCalled = 0;
+  {
+    Card* p_deck = pCI->E.p_deck;
+    for (i8 i_Card = 0; i_Card < p_deck->nChildCards(); i_Card++) {
+      Card* p_card = p_deck->pGetChild(i_Card);
+      if (p_card == pCI->E.p_call) {
+        break;
+      }
+      if (Card_Emit* p_emit = p_card->pSub_emit()) {
+        nOuter = p_emit->nChildCards(CK_EXPR);
+      }
+    }
+    if (Card_Emit* p_emit_called = pCI->pCalled_emit(pCI->E.p_call)) {
+      nCalled = p_emit_called->nChildCards(CK_EXPR);
+    }
+  }
 
   Board* pBoard = pCI->m_pBench->pFindBoard(pCI->E.p_call->pSymbol());
   if (! pBoard) {
@@ -47,6 +106,7 @@ void XF_FLATTEN::vFold_from(Stz* szFoldNm, CardIter* pCI)
   }
 
   pCI->E.p_fold = Card_Fold::pCraft_fold(szFoldNm, pBoard->i_Board());
+  pCI->Flat.m_p_fold_current = pCI->E.p_fold;
   pCI->E.p_deck->vPushChild(pCI->E.p_fold);
 
   // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -75,9 +135,36 @@ void XF_FLATTEN::vFold_from(Stz* szFoldNm, CardIter* pCI)
   // 7) derive the fold (SQ result) expr
   pCI->vClearRegisters();
   pCI->vBeginEach();
-  if (pCI->bEachOp(CK_o_FOLD)) {
+  if (pCI->bEachOp_fold_current()) {
     pCI->Flat.m_i_fold = pCI->E.i_Op;
     Board::vDerive_foldProjection_F(pCI);
+  }
+
+  // 8) renumber the stream columns of the outer ops that read the joined
+  //    stream: those after the <fold>, up to and including the first op
+  //    that emits a new row.
+  if (nOuter > 0 && nCalled > 0) {
+    Card* p_deck = pCI->E.p_deck;
+    bool bAfterFold = false;
+
+    for (i8 i_Card = 0; i_Card < p_deck->nChildCards(); i_Card++) {
+      Card* p_card = p_deck->pGetChild(i_Card);
+
+      if (p_card == pCI->Flat.m_p_fold_current) {
+        bAfterFold = true;
+        continue;
+      }
+      if (!bAfterFold || !Card_OP::bIsOp(p_card->eCard())) {
+        continue;
+      }
+
+      vRenumber_expCols(p_card, nOuter, nCalled);
+
+      if (p_card->bIsCard(CK_o_PROJECT) || p_card->bIsCard(CK_o_GBYAGG) ||
+          p_card->bIsCard(CK_o_AGGREG)  || p_card->bIsCard(CK_o_ORDAGG)) {
+        break;
+      }
+    }
   }
 }
 
@@ -130,6 +217,7 @@ void XF_FLATTEN::vFold_subQuery(CardIter* pCI, Stz* szFoldNm, eCK eCardWithSQ)
 
   // 5) add <fold> (before MQ)
   pCI->E.p_fold = Card_Fold::pCraft_fold(szFoldNm, pBoard_inner->i_Board());
+  pCI->Flat.m_p_fold_current = pCI->E.p_fold;
   pCI->E.p_deck->vPushChild(pCI->E.p_fold);
 
   // 6) copy up inner (add before fold)
@@ -145,7 +233,7 @@ void XF_FLATTEN::vFold_subQuery(CardIter* pCI, Stz* szFoldNm, eCK eCardWithSQ)
   while (pCI->bEachOp()) {
 
     pCI->vSnapIf_arriving();
-    if (pCI->pPeekNextIf(CK_o_FOLD))
+    if (pCI->pPeekNextIf(CK_o_FOLD) == pCI->Flat.m_p_fold_current)
       break;
   }
 
@@ -154,7 +242,7 @@ void XF_FLATTEN::vFold_subQuery(CardIter* pCI, Stz* szFoldNm, eCK eCardWithSQ)
   // 7) derive the fold (SQ result) expr
   pCI->Flat.m_pExpr_fold = nullptr;
   pCI->vBeginEach();
-  if (pCI->bEachOp(CK_o_FOLD)) {
+  if (pCI->bEachOp_fold_current()) {
     pCI->Flat.m_i_fold = pCI->E.i_Op;
     pCI->E.p_fold->vDerive_emit_fold(pCI, pBoard_inner->pSubQuery());
     pCI->Flat.m_pExpr_fold = pCI->E.p_expr;
@@ -281,7 +369,7 @@ void XF_FLATTEN::vSet_smooth(CardIter* pCI, eCK eCardWithSQ, eQO eWhatOp)
 {
   pCI->vBeginEach();
 
-  RASSERT(pCI->bEachOp(CK_o_FOLD));
+  RASSERT(pCI->bEachOp_fold_current());
   RASSERT(pCI->E.p_Op->bIsCard(CK_o_FOLD));
 
   // <subQuery>
@@ -342,8 +430,12 @@ void XF_FLATTEN::vSmooth(CardIter* pCI)
   //pCI->PRINTBOARD_dbg();
 
   pCI->vBeginEach();
-  RASSERT(pCI->bEachOp(CK_o_FOLD));
+  RASSERT(pCI->bEachOp_fold_current());
   RASSERT(pCI->E.p_Op->bIsCard(CK_o_FOLD));
+
+  // The rows that arrive after the <fold> are the rows of the folded
+  // sub-query, whose emit is the emit of the <fold>.
+  pCI->vSnap_arriving(pCI->E.p_Op->pSub_emit(), nullptr);
 
   if (pCI->pPeekNextIf(CK_SUBQUERY))
     RASSERT(pCI->bEachOp());
@@ -520,7 +612,7 @@ void XF_FLATTEN::vPromote_aggreg_To_gbyAgg(CardIter* pCI)
   // fold fold fold fold fold fold fold fold fold fold fold fold fold fold fold
   // + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + +
 
-  RASSERT(pCI->bEachOp(CK_o_FOLD));
+  RASSERT(pCI->bEachOp_fold_current());
 
   // = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =
   // outerQuery outerQuery outerQuery outerQuery outerQuery outerQuery outerQuery
@@ -565,7 +657,7 @@ void XF_FLATTEN::vPromote_aggreg_To_gbyAgg(CardIter* pCI)
   // fold fold fold fold fold fold fold fold fold fold fold fold fold fold fold
   // + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + +
 
-  RASSERT(pCI->bEachOp(CK_o_FOLD));
+  RASSERT(pCI->bEachOp_fold_current());
 
   // todo: this is messy and unclear
 
@@ -575,7 +667,7 @@ void XF_FLATTEN::vPromote_aggreg_To_gbyAgg(CardIter* pCI)
   }
 
   pCI->vSnapIf_arriving();
-  RASSERT(pCI->bEachOp(CK_o_FOLD));
+  RASSERT(pCI->bEachOp_fold_current());
 
   // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
   // ???
@@ -622,7 +714,7 @@ void XF_FLATTEN::vPromote_aggreg_To_gbyAgg(CardIter* pCI)
   // f         +       bc          //           $d.2  ((pCI->m_pTerm_corrArg))
   //           + b <-  cp          //             %1
 
-  RASSERT(pCI->bEachOp(CK_o_FOLD));
+  RASSERT(pCI->bEachOp_fold_current());
   RASSERT(pCI->bEachOp(CK_o_WHERE, CK_PREDICATE));
   vMove_OQ_rlnConj_rslTest_To_from_filter(pCI, pCI->E.p_predicate);
 
@@ -630,7 +722,7 @@ void XF_FLATTEN::vPromote_aggreg_To_gbyAgg(CardIter* pCI)
 
 //  pCI->vClearRegisters();
   pCI->vBeginEach();
-//  if (pCI->bEachOp(CK_o_FOLD)) {
+//  if (pCI->bEachOp_fold_current()) {
 //    if (pCI->bEachOp(CK_o_WHERE)) {
 //      // TODO:
 //      // R_vUTE_Unproject_foldExpr_After_where();

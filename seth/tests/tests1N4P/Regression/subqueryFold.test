@@ -1,0 +1,149 @@
+/*----------------------------------------------------------------------------*/
+/* subqueryFold.test -- sub-queries that the optimiser folds into the query   */
+/*----------------------------------------------------------------------------*/
+
+// Each query below used to crash the node (or, for the last one, hang it)
+// in the pipeline optimiser. The expected rows were computed from
+// DATA/TPCH/supplier_2k.tbl and DATA/TPCH/nation.tbl independently of
+// RapidsSE.
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  Setup
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+create table ${testName2}_supplier (
+  S_SUPPKEY   INTEGER       NOT NULL,
+  S_NAME      VARCHAR(25)   NOT NULL,
+  S_ADDRESS   VARCHAR(40)   NOT NULL,
+  S_NATIONKEY INTEGER       NOT NULL,
+  S_PHONE     VARCHAR(15)   NOT NULL,
+  S_ACCTBAL   DECIMAL(15,2) NOT NULL,
+  S_COMMENT   VARCHAR(101)  NOT NULL
+);
+success
+
+create index IxS_SUPPKEY on ${testName2}_supplier (S_SUPPKEY);
+affected: 0
+
+create index IxS_NATIONKEY on ${testName2}_supplier (S_NATIONKEY);
+affected: 0
+
+load ${testName2}_supplier "../DATA/TPCH/supplier_2k.tbl" <field_delimiter> = "|";
+success
+
+create table ${testName2}_nation (
+  N_NATIONKEY INTEGER      NOT NULL,
+  N_NAME      VARCHAR(25)  NOT NULL,
+  N_REGIONKEY INTEGER      NOT NULL,
+  N_COMMENT   VARCHAR(152) NOT NULL
+);
+success
+
+create index IxN_NATIONKEY on ${testName2}_nation (N_NATIONKEY);
+affected: 0
+
+load ${testName2}_nation "../DATA/TPCH/nation.tbl" <field_delimiter> = "|";
+success
+
+// The same suppliers, in a table without any index.
+create table ${testName2}_supplier_noidx (
+  S_SUPPKEY   INTEGER       NOT NULL,
+  S_NAME      VARCHAR(25)   NOT NULL,
+  S_ADDRESS   VARCHAR(40)   NOT NULL,
+  S_NATIONKEY INTEGER       NOT NULL,
+  S_PHONE     VARCHAR(15)   NOT NULL,
+  S_ACCTBAL   DECIMAL(15,2) NOT NULL,
+  S_COMMENT   VARCHAR(101)  NOT NULL
+);
+success
+
+load ${testName2}_supplier_noidx "../DATA/TPCH/supplier_2k.tbl" <field_delimiter> = "|";
+success
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  (1) a WHERE on the rows of a sub-query in the FROM clause
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+with r (k, t) as (select s_nationkey, sum(s_acctbal) from ${testName2}_supplier group by s_nationkey)
+select k, t from r where t > 400000 order by k;
+ordered rows:
+  (9, 434427.01)
+  (18, 411936.08)
+  (20, 401371.72)
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  (2) a sub-query in the FROM clause joined with a table
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+with r (k, t) as (select s_nationkey, sum(s_acctbal) from ${testName2}_supplier group by s_nationkey)
+select n_nationkey, n_name, t from ${testName2}_nation, r where n_nationkey = k order by n_nationkey;
+ordered rows:
+  (0, 'ALGERIA', 354044.28)
+  (1, 'ARGENTINA', 281902.69)
+  (2, 'BRAZIL', 346929.08)
+  (3, 'CANADA', 331045.06)
+  (4, 'EGYPT', 357336.12)
+  (5, 'ETHIOPIA', 322921.24)
+  (6, 'FRANCE', 324308.62)
+  (7, 'GERMANY', 347719.63)
+  (8, 'INDIA', 371329.05)
+  (9, 'INDONESIA', 434427.01)
+  (10, 'IRAN', 393818.71)
+  (11, 'IRAQ', 367673.59)
+  (12, 'JAPAN', 391821.71)
+  (13, 'JORDAN', 282480.39)
+  (14, 'KENYA', 313150.51)
+  (15, 'MOROCCO', 359099.25)
+  (16, 'MOZAMBIQUE', 341596.93)
+  (17, 'PERU', 356232.98)
+  (18, 'CHINA', 411936.08)
+  (19, 'ROMANIA', 238266.51)
+  (20, 'SAUDI ARABIA', 401371.72)
+  (21, 'VIETNAM', 329862.01)
+  (22, 'RUSSIA', 373941.93)
+  (23, 'UNITED KINGDOM', 318969.50)
+  (24, 'UNITED STATES', 338146.61)
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  (3) a WHERE that compares with an uncorrelated scalar sub-query
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+select s_suppkey, s_name from ${testName2}_supplier
+ where s_acctbal = (select max(s_acctbal) from ${testName2}_supplier);
+rows: (892, 'Supplier#000000892')
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  (4) the same on a table without an index: the cross join needs one
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+select s_suppkey, s_name from ${testName2}_supplier_noidx
+ where s_acctbal = (select max(s_acctbal) from ${testName2}_supplier_noidx);
+failure contains: 'missing suitable index for join'
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  (5) a sub-query in the FROM clause that is also read by a scalar
+//      sub-query (the shape of TPC-H Q15 written with a view): not
+//      supported, and must fail rather than hang the node
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+with r (k, t) as (select s_nationkey, sum(s_acctbal) from ${testName2}_supplier group by s_nationkey)
+select n_nationkey, n_name, t from ${testName2}_nation, r
+ where n_nationkey = k and t = (select max(t) from r) order by n_nationkey;
+failure contains: 'Feature not yet implemented'
+
+// the node still answers
+select count(*) from ${testName2}_nation;
+rows: (25)
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  Cleanup
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+drop table ${testName2}_supplier;
+success
+
+drop table ${testName2}_supplier_noidx;
+success
+
+drop table ${testName2}_nation;
+success
