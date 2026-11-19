@@ -1,0 +1,78 @@
+# Keeps this repository's copy of upstream RapidsSE current.
+#
+# Source: https://github.com/RoCEPool/RapidsSE (an unmodified mirror of
+# https://bitbucket.org/rapidsdataproject/rapidsse/).
+#
+# What it copies into this repository:
+#   - upstream `master` and `releases/*` branches (fast-forward only)
+#   - every upstream tag
+#   - the Git LFS objects those refs need
+#
+# It never touches `main` or any other development branch here. Merging new
+# upstream work into `main` is a normal pull request from `master`.
+name: sync-upstream
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 18 * * 0"
+  push:
+    branches: [main]
+    paths: [".github/workflows/sync-upstream.yml"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      UPSTREAM: https://github.com/RoCEPool/RapidsSE.git
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Fetch upstream branches and tags
+        run: |
+          set -euo pipefail
+          git init -q work
+          cd work
+          git lfs install --local
+          git remote add upstream "$UPSTREAM"
+          git remote add self "https://github.com/${GITHUB_REPOSITORY}.git"
+          git config "http.https://github.com/${GITHUB_REPOSITORY}.git/.extraheader" \
+            "AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          GIT_LFS_SKIP_SMUDGE=1 git fetch --no-tags upstream \
+            'refs/heads/master:refs/remotes/upstream/master' \
+            'refs/heads/releases/*:refs/remotes/upstream/releases/*' \
+            'refs/tags/*:refs/tags/*'
+
+      - name: Copy Git LFS objects
+        working-directory: work
+        run: |
+          set -euo pipefail
+          git lfs fetch --all upstream
+          git lfs push --all self
+
+      - name: Push branches (fast-forward only) and tags
+        working-directory: work
+        run: |
+          set -euo pipefail
+          # LFS objects were uploaded in the previous step.
+          git push --no-verify self \
+            'refs/remotes/upstream/master:refs/heads/master' \
+            'refs/remotes/upstream/releases/*:refs/heads/releases/*'
+          git push --no-verify self 'refs/tags/*:refs/tags/*'
+
+      - name: Summary
+        working-directory: work
+        run: |
+          {
+            echo "### sync-upstream"
+            echo "- upstream master: $(git rev-parse refs/remotes/upstream/master)"
+            echo "- tags: $(git tag | wc -l)"
+            echo "- LFS objects: $(find .git/lfs/objects -type f | wc -l)"
+          } >> "$GITHUB_STEP_SUMMARY"

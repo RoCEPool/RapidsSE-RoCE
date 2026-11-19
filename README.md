@@ -13,8 +13,9 @@ distributed storage.
 - **Branches.**
   - `main` -- development here. Starts at upstream `master`
     (`90012081f5a9`, 2026-09-22).
-  - `master` and `releases/*` -- upstream, unmodified. They never receive
-    commits from this project.
+  - `master`, `releases/*` and all tags -- upstream, unmodified. They are
+    updated only by `.github/workflows/sync-upstream.yml` (fast-forward only)
+    and never receive commits from this project.
 - **Taking upstream changes.** Open a pull request from `master` into `main`.
 
 The original upstream README follows.
