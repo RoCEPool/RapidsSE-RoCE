@@ -791,6 +791,7 @@ namespace OBLIQUE
     static Table* pMetaDataTableSchema      (void);
     static Table* pMetaDataTableSessions    (void);
     static Table* pMetaDataTableOfTables    (void);
+    static Table* pMetaDataTableViews       (void);
   
     static i8   iNextEpoch(void);
     static i8   iNextTxId(void);

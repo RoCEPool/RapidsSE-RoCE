@@ -1,0 +1,59 @@
+/*============================================================================*/
+/* OP_createView.sen -- Operator create view                                  */
+/*============================================================================*/
+
+" OP_createView.sen" .verbose
+
+/*----------------------------------------------------------------------------*/
+/* handler for EV_M_DATAPULSE ...                                             */
+/*----------------------------------------------------------------------------*/
+: createView_DataMarker \handler
+
+  PipeIn[].pipeOut
+
+  // Record the view in this node's "views" metadata table. A view of the same
+  // name is replaced. The statement was checked on the origin node before
+  // this pipeline was started (see CommandParser::visitCreateViewCmd).
+  <viewDef> <viewCols> <viewNm> MetaDataTable[].insertView
+
+  Marker[].newEosMarker
+  Marker[].pipeOut
+
+  true
+;
+
+/*----------------------------------------------------------------------------*/
+/* execute for createView req                         (on node where spawned) */
+/*----------------------------------------------------------------------------*/
+: createView_op \operator
+
+  _lu_initialise_
+
+  op__topology
+
+  find: createView_DataMarker EV_M_DATAPULSE [op].handler!
+
+  op__loop
+
+  _lu_finalise_
+
+  op__retires
+
+  HAZARD
+;
+
+/*----------------------------------------------------------------------------*/
+/*                                                                            */
+/*----------------------------------------------------------------------------*/
+cmdSyntax: createView :: createView <viewNm> <viewCols> <viewDef> ;
+
+: createView_cmdTags _cmdTags tagCopy: op_tags
+  tags{
+    <cmdDesc> = "record a view definition on this node"
+    <opEntry> = "createView_op"
+  }
+;
+
+/*============================================================================*/
+/* end                                                                        */
+/*============================================================================*/

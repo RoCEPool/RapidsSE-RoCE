@@ -1,0 +1,59 @@
+/*============================================================================*/
+/* OP_dropView.sen -- Operator drop view                                      */
+/*============================================================================*/
+
+" OP_dropView.sen" .verbose
+
+/*----------------------------------------------------------------------------*/
+/* handler for EV_M_DATAPULSE ...                                             */
+/*----------------------------------------------------------------------------*/
+: dropView_DataMarker \handler
+
+  PipeIn[].pipeOut
+
+  // Remove the view from this node's "views" metadata table. That the view
+  // exists was checked on the origin node before this pipeline was started
+  // (see CommandParser::visitDropViewCmd).
+  <viewNm> MetaDataTable[].deleteView
+
+  Marker[].newEosMarker
+  Marker[].pipeOut
+
+  true
+;
+
+/*----------------------------------------------------------------------------*/
+/* execute for dropView req                           (on node where spawned) */
+/*----------------------------------------------------------------------------*/
+: dropView_op \operator
+
+  _lu_initialise_
+
+  op__topology
+
+  find: dropView_DataMarker EV_M_DATAPULSE [op].handler!
+
+  op__loop
+
+  _lu_finalise_
+
+  op__retires
+
+  HAZARD
+;
+
+/*----------------------------------------------------------------------------*/
+/*                                                                            */
+/*----------------------------------------------------------------------------*/
+cmdSyntax: dropView :: dropView <viewNm> ;
+
+: dropView_cmdTags _cmdTags tagCopy: op_tags
+  tags{
+    <cmdDesc> = "remove a view definition from this node"
+    <opEntry> = "dropView_op"
+  }
+;
+
+/*============================================================================*/
+/* end                                                                        */
+/*============================================================================*/

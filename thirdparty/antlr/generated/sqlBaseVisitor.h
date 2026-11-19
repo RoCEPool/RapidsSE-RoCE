@@ -161,6 +161,10 @@ public:
     return visitChildren(ctx);
   }
 
+  virtual std::any visitCreateViewCmd(sqlParser::CreateViewCmdContext *ctx) override {
+    return visitChildren(ctx);
+  }
+
   virtual std::any visitDeleteCmd(sqlParser::DeleteCmdContext *ctx) override {
     return visitChildren(ctx);
   }
@@ -186,6 +190,10 @@ public:
   }
 
   virtual std::any visitDropIndexCmd(sqlParser::DropIndexCmdContext *ctx) override {
+    return visitChildren(ctx);
+  }
+
+  virtual std::any visitDropViewCmd(sqlParser::DropViewCmdContext *ctx) override {
     return visitChildren(ctx);
   }
 

@@ -50,6 +50,7 @@ assert::stack_0
   "OP_createSchema.sen"         include
   "OP_createTable.sen"          include
   "OP_createTableNC.sen"        include
+  "OP_createView.sen"           include
   "OP_createTenant.sen"         include
 
 "d" .verbose
@@ -63,6 +64,7 @@ assert::stack_0
   "OP_dropIndex.sen"            include
   "OP_dropSchema.sen"           include
   "OP_dropTable.sen"            include
+  "OP_dropView.sen"             include
   "OP_dropTenant.sen"           include
   "OP_dump.sen"                 include
   "OP_dumpGridInfo.sen"         include

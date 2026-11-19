@@ -590,6 +590,7 @@ void Table::vMetaDataKind(Stz *szTableNm)
   else if(szTableNm->bSame(C_TDEF_SCHEMA))        m_eMetaDataKind = MD_SCHEMA;
   else if(szTableNm->bSame(C_TDEF_SESSIONS))      m_eMetaDataKind = MD_SESSIONS;
   else if(szTableNm->bSame(C_TDEF_TABLES))        m_eMetaDataKind = MD_TABLES;
+  else if(szTableNm->bSame(C_TDEF_VIEWS))         m_eMetaDataKind = MD_VIEWS;
   else                                                  m_eMetaDataKind = MD_NONE;
 }
 

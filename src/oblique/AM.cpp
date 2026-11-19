@@ -223,6 +223,10 @@ void AM::ATTACHMAP::vMetaDataTables(Table* pTable)
       gpAttachMap->m_mdTables       = pTable;
       break;
     }
+    case MD_VIEWS: {
+      gpAttachMap->m_mdViews        = pTable;
+      break;
+    }
     default: {
       break;
     }
@@ -246,6 +250,7 @@ Table* AM::ATTACHMAP::pMetaDataTables(Stz* szMDKind)
   else if (szMDKind->bSame("MD_SCHEMA"_Stz))        { return gpAttachMap->m_mdSchema; }
   else if (szMDKind->bSame("MD_SESSIONS"_Stz))      { return gpAttachMap->m_mdSessions; }
   else if (szMDKind->bSame("MD_TABLES"_Stz))        { return gpAttachMap->m_mdTables; }
+  else if (szMDKind->bSame("MD_VIEWS"_Stz))         { return gpAttachMap->m_mdViews; }
   else return nullptr;
 }
 
@@ -3795,6 +3800,7 @@ Table* AM::pMetaDataTableQueries     (void)      { return gpAttachMap->m_mdQueri
 Table* AM::pMetaDataTableSchema      (void)      { return gpAttachMap->m_mdSchema;                }
 Table* AM::pMetaDataTableSessions    (void)      { return gpAttachMap->m_mdSessions;              }
 Table* AM::pMetaDataTableOfTables    (void)      { return gpAttachMap->m_mdTables;                }
+Table* AM::pMetaDataTableViews       (void)      { return gpAttachMap->m_mdViews;                 }
 
 i8   AM::iNextTxId(void)      { return gpAttachMap->m_pTxSet->iNextTxId();    }
 

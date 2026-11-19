@@ -111,6 +111,12 @@
 #include "SqlException.hpp"
 
 #include "AttachMap.hpp"
+#include "ViewCatalog.hpp"
+
+#include <algorithm>
+#include <memory>
+#include <string>
+#include <vector>
 
 extern AttachMap*  gpAttachMap;
 
@@ -126,6 +132,232 @@ __aFooterFunction(SqlPlanner)
 
 
 /*----------------------------------------------------------------------------*/
+/*-- Views -------------------------------------------------------------------*/
+/*----------------------------------------------------------------------------*/
+
+namespace
+{
+  // The parse of one view definition. The parse tree refers to the token
+  // stream and input stream, so they are all kept together.
+  struct ViewParse
+  {
+    std::string                  m_text;
+    antlr4::ANTLRInputStream     m_stream;
+    sqlLexer                     m_lexer;
+    antlr4::CommonTokenStream    m_tokens;
+    sqlParser                    m_parser;
+    ErrorListener                m_errorListener;
+    sqlParser::WithQueryContext* m_pCtx;
+
+    explicit ViewParse(const std::string& text)
+      : m_text(text), m_stream(m_text), m_lexer(&m_stream), m_tokens(&m_lexer),
+        m_parser(&m_tokens), m_pCtx(nullptr)
+    {
+      m_parser.removeErrorListeners();
+      m_parser.addErrorListener(&m_errorListener);
+    }
+  };
+
+  // What has been done so far to expand the views of one statement.
+  struct ViewExpansion
+  {
+    bool                                    m_bStarted = false;
+    std::vector<std::unique_ptr<ViewParse>> m_parses;      // kept until planning ends
+    std::vector<std::string>                m_expanded;    // views already expanded
+    std::vector<std::string>                m_inProgress;  // views being expanded now
+    std::string                             m_beingDefined; // see vSetViewBeingDefined()
+  };
+
+  std::string sLowerCase(const std::string& str)
+  {
+    std::string lower(str);
+    for (char& c : lower) {
+      c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+    }
+    return lower;
+  }
+
+  bool bContains(const std::vector<std::string>& names, const std::string& name)
+  {
+    return std::find(names.begin(), names.end(), name) != names.end();
+  }
+
+  // The text of an identifier without its quotes, in lower case.
+  std::string sIdentifierKey(sqlParser::IdentifierContext* pCtx)
+  {
+    std::string idStr = pCtx->getText();
+    size_t len = idStr.length();
+
+    if (len >= 2 && ((idStr.front() == '"' && idStr.back() == '"') ||
+                     (idStr.front() == '`' && idStr.back() == '`'))) {
+      idStr = idStr.substr(1, len - 2);
+    }
+
+    return sLowerCase(idStr);
+  }
+
+  // Collects the names of the tables a parse tree refers to. Only names
+  // without a catalog or schema are collected, as only those can be views.
+  void vCollectTableNames(antlr4::tree::ParseTree* pTree, std::vector<std::string>& names)
+  {
+    if (!pTree) {
+      return;
+    }
+
+    sqlParser::TableReferenceContext* pRef = dynamic_cast<sqlParser::TableReferenceContext*>(pTree);
+    if (pRef) {
+      if (!pRef->catalog && !pRef->schema && pRef->table && pRef->table->id) {
+        std::string name = sIdentifierKey(pRef->table->id);
+        if (!bContains(names, name)) {
+          names.push_back(name);
+        }
+      }
+      return;
+    }
+
+    for (antlr4::tree::ParseTree* pChild : pTree->children) {
+      vCollectTableNames(pChild, names);
+    }
+  }
+
+  // Collects the names that a parse tree defines with WITH.
+  void vCollectWithNames(antlr4::tree::ParseTree* pTree, std::vector<std::string>& names)
+  {
+    if (!pTree) {
+      return;
+    }
+
+    sqlParser::WithQueryContext* pWith = dynamic_cast<sqlParser::WithQueryContext*>(pTree);
+    if (pWith && pWith->name && pWith->name->id) {
+      names.push_back(sIdentifierKey(pWith->name->id));
+    }
+
+    for (antlr4::tree::ParseTree* pChild : pTree->children) {
+      vCollectWithNames(pChild, names);
+    }
+  }
+}
+
+/*----------------------------------------------------------------------------*/
+/* Name the view whose definition is being checked                            */
+/*----------------------------------------------------------------------------*/
+// CREATE VIEW checks a definition by planning a query that reads from it (see
+// CommandParser::visitCreateViewCmd). If the views that the definition refers
+// to lead back to the view being defined, the definition is rejected.
+void SqlPlanner::vSetViewBeingDefined(Stz* szViewNm)
+{
+  if (!m_pViewExpansion) {
+    m_pViewExpansion = new ViewExpansion();
+  }
+
+  static_cast<ViewExpansion*>(m_pViewExpansion)->m_beingDefined = sLowerCase((const char*) szViewNm->azChar());
+}
+
+/*----------------------------------------------------------------------------*/
+/* Expand the views that a statement refers to                                */
+/*----------------------------------------------------------------------------*/
+// Called for the outermost query of a statement, before its own WITH queries
+// are visited. Each view the statement refers to is planned as a table
+// subquery, exactly as if the statement had begun with
+//
+//   WITH <view> <column list> AS ( <view definition> )
+//
+// A view that refers to other views brings those in first. A name that the
+// statement itself defines with WITH is not a view within that statement.
+void SqlPlanner::vExpandViews(antlr4::tree::ParseTree* pOutermostQuery)
+{
+  if (!m_pViewExpansion) {
+    m_pViewExpansion = new ViewExpansion();
+  }
+
+  ViewExpansion* pExpansion = static_cast<ViewExpansion*>(m_pViewExpansion);
+
+  // Only the outermost query of a statement expands views. The queries inside
+  // it, and the queries of the views themselves, come back through here.
+  if (pExpansion->m_bStarted) {
+    return;
+  }
+  pExpansion->m_bStarted = true;
+
+  std::vector<std::string> shadowedNames;
+  vCollectWithNames(pOutermostQuery, shadowedNames);
+
+  vExpandViewsIn(pOutermostQuery, shadowedNames);
+}
+
+/*----------------------------------------------------------------------------*/
+/* Expand the views that a parse tree refers to                               */
+/*----------------------------------------------------------------------------*/
+void SqlPlanner::vExpandViewsIn(antlr4::tree::ParseTree* pTree, const std::vector<std::string>& shadowedNames)
+{
+  ViewExpansion* pExpansion = static_cast<ViewExpansion*>(m_pViewExpansion);
+
+  std::vector<std::string> tableNames;
+  vCollectTableNames(pTree, tableNames);
+
+  for (const std::string& tableName : tableNames) {
+
+    if (bContains(shadowedNames, tableName) || bContains(pExpansion->m_expanded, tableName)) {
+      continue;
+    }
+
+    s256 sStoredNm;
+    s4K  sColumnList;
+    s4K  sDefinition;
+
+    if (!pExpansion->m_inProgress.empty() && tableName == pExpansion->m_beingDefined) {
+      SemanticException::vThrow(EC_SEMANTIC_ERROR,
+                                ": view \"%s\" refers to the view being defined"_Stz,
+                                (Stz*) pExpansion->m_inProgress.back().c_str());
+    }
+
+    if (!ViewCatalog::bFind((Stz*) tableName.c_str(), sStoredNm, sColumnList, sDefinition)) {
+      continue;   // Not a view
+    }
+
+    if (bContains(pExpansion->m_inProgress, tableName)) {
+      SemanticException::vThrow(EC_SEMANTIC_ERROR,
+                                ": the definition of view \"%s\" refers to the view itself"_Stz,
+                                sStoredNm.szStz());
+    }
+
+    // Parse the view as a WITH query.
+    std::string text;
+    text.append("\"").append((const char*) sStoredNm.szStz()->azChar()).append("\" ");
+    text.append((const char*) sColumnList.szStz()->azChar());
+    text.append(" AS ( ");
+    text.append((const char*) sDefinition.szStz()->azChar());
+    text.append(" )");
+
+    pExpansion->m_parses.emplace_back(new ViewParse(text));
+    ViewParse* pParse = pExpansion->m_parses.back().get();
+
+    pParse->m_pCtx = pParse->m_parser.withQuery();
+
+    if (pParse->m_errorListener.bGotError()) {
+      SemanticException::vThrow(EC_SEMANTIC_ERROR,
+                                ": the definition of view \"%s\" is not valid: %s"_Stz,
+                                sStoredNm.szStz(),
+                                pParse->m_errorListener.szErrorMsg());
+    }
+
+    // The views that this view refers to must come first. Within the view's
+    // query, only the names that the query itself defines with WITH are not views.
+    std::vector<std::string> viewShadowedNames;
+    vCollectWithNames(pParse->m_pCtx->query(), viewShadowedNames);
+
+    pExpansion->m_inProgress.push_back(tableName);
+    vExpandViewsIn(pParse->m_pCtx->query(), viewShadowedNames);
+    pExpansion->m_inProgress.pop_back();
+
+    // Plan the view. This puts a table subquery on the statement stack.
+    pParse->m_pCtx->accept(this);
+
+    pExpansion->m_expanded.push_back(tableName);
+  }
+}
+
+/*----------------------------------------------------------------------------*/
 /* constructor                                                                */
 /*----------------------------------------------------------------------------*/
 SqlPlanner::SqlPlanner(void)
@@ -138,7 +370,8 @@ SqlPlanner::SqlPlanner(void)
   m_pExprSubqueryList(nullptr),
   m_pExprStack(nullptr),
   m_pSelectItems(nullptr),
-  m_pOrderItems(nullptr)
+  m_pOrderItems(nullptr),
+  m_pViewExpansion(nullptr)
 {
   _precondition_(_ADDRESS_,_MAGIC_,CN_SQLPLANNER,_FOOTER_);
   
@@ -153,6 +386,11 @@ SqlPlanner::SqlPlanner(void)
 SqlPlanner::~SqlPlanner(void) noexcept
 {
   _precondition_(_ADDRESS_,_MAGIC_,CN_SQLPLANNER,_FOOTER_);
+
+  if (m_pViewExpansion) {
+    delete static_cast<ViewExpansion*>(m_pViewExpansion);
+    m_pViewExpansion = nullptr;
+  }
 
   if (m_pQueryHints) {
     delete m_pQueryHints;
@@ -671,6 +909,9 @@ antlrcpp::Any SqlPlanner::visitSelectQuery(sqlParser::SelectQueryContext *pCtx)
   // but before we can do that we need to visit any WITH queries first.
   // Calling visitChildren() doesn't allow us to do this.
 
+  // The views that the statement refers to come before its own WITH queries.
+  vExpandViews(pCtx);
+
   // Call each WITH subquery first. The main subquery should be last.
   for (sqlParser::WithQueryContext* pWithCtx : pCtx->withQuery()) {
     pWithCtx->accept(this);
@@ -895,6 +1136,9 @@ antlrcpp::Any SqlPlanner::visitSetQuery(sqlParser::SetQueryContext *pCtx)
 
   // We don't call visitChildren() in this function because we need to control
   // the order of execution.
+
+  // The views that the statement refers to come before its own WITH queries.
+  vExpandViews(pCtx);
 
   // Call each WITH subquery first. The main subquery should be last.
   for (sqlParser::WithQueryContext* pWithCtx : pCtx->withQuery()) {

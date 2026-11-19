@@ -1,0 +1,217 @@
+/*----------------------------------------------------------------------------*/
+/* view tests -- CREATE VIEW, DROP VIEW and queries that use views            */
+/*----------------------------------------------------------------------------*/
+
+// A view is a named query. A statement that refers to a view is compiled as
+// if the view had been written as a WITH query at the start of the statement,
+// so the plans below are the plans of the equivalent WITH queries.
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  Setup
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+CREATE TABLE ${testName2}_nation (
+	 N_NATIONKEY       INTEGER NOT NULL,
+	 N_NAME            CHAR(25) NOT NULL,
+	 N_REGIONKEY       INTEGER NOT NULL,
+	 N_COMMENT         VARCHAR(152)
+);
+success
+
+CREATE TABLE ${testName2}_region (
+	 R_REGIONKEY       INTEGER NOT NULL,
+	 R_NAME            CHAR(25) NOT NULL,
+	 R_COMMENT         VARCHAR(152)
+);
+success
+
+trackmemory force;
+success
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  CREATE VIEW
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+// (1) a view without a column list
+CREATE VIEW ${testName2}_v1 AS SELECT n_nationkey, n_name FROM ${testName2}_nation WHERE n_regionkey = 1;
+success
+
+// (2) the view is recorded in the views metadata table, as it was written
+SELECT * FROM views;
+contains rows:
+  ('rapids', 'public', '${testName2}_v1', '', 'SELECT n_nationkey, n_name FROM ${testName2}_nation WHERE n_regionkey = 1')
+
+// (3) a view with a column list. The text of the query is kept exactly,
+//     including quotes and runs of spaces inside string literals.
+CREATE VIEW ${testName2}_v2 (region_key, nations) AS
+  SELECT n_regionkey, count(*)
+    FROM ${testName2}_nation
+   WHERE n_name <> 'it''s  "quoted"'
+   GROUP BY n_regionkey;
+success
+
+SELECT * FROM views;
+contains rows:
+  ('rapids', 'public', '${testName2}_v2', '(region_key, nations)', 'SELECT n_regionkey, count(*)
+    FROM ${testName2}_nation
+   WHERE n_name <> ''it''''s  "quoted"''
+   GROUP BY n_regionkey')
+
+// (4) a view of the same name already exists
+CREATE VIEW ${testName2}_v1 AS SELECT r_name FROM ${testName2}_region;
+failure contains: 'already exists'
+
+// (5) view names are not case sensitive
+CREATE VIEW ${testName2}_V1 AS SELECT r_name FROM ${testName2}_region;
+failure contains: 'already exists'
+
+// (6) a view cannot have the name of a table
+CREATE VIEW ${testName2}_region AS SELECT n_name FROM ${testName2}_nation;
+failure contains: 'a table named'
+
+// (7) a table cannot have the name of a view
+CREATE TABLE ${testName2}_v1 (a INTEGER NOT NULL);
+failure contains: 'a view named'
+
+// (8) the query of a view must be valid: unknown column
+CREATE VIEW ${testName2}_bad AS SELECT no_such_column FROM ${testName2}_nation;
+failure contains: 'No such column'
+
+// (9) the query of a view must be valid: unknown table
+CREATE VIEW ${testName2}_bad AS SELECT n_name FROM ${testName2}_no_such_table;
+failure contains: 'No such table'
+
+// (10) the column list must match the query
+CREATE VIEW ${testName2}_bad (a, b, c) AS SELECT n_name FROM ${testName2}_nation;
+failure contains: 'is not valid'
+
+// (11) none of the failed statements left a view behind
+EXPLAIN SELECT * FROM ${testName2}_bad;
+failure contains: 'No such table'
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  Queries that use views
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+// (12) a query on a view runs
+SELECT count(*) FROM ${testName2}_v1;
+rows: (0)
+
+// (13) a view is used through its column list
+EXPLAIN SELECT nations FROM ${testName2}_v2 WHERE region_key >= 0;
+success
+
+// (14) the columns of the query are not visible through a column list
+EXPLAIN SELECT n_regionkey FROM ${testName2}_v2;
+failure contains: 'No such column'
+
+// (15) the name of a view is not case sensitive in a query
+EXPLAIN SELECT nations FROM ${testName2}_V2;
+success
+
+// (16) a view may be used more than once in a statement
+EXPLAIN SELECT region_key FROM ${testName2}_v2 WHERE nations = (SELECT max(nations) FROM ${testName2}_v2);
+success
+
+// (17) a view may be joined with a table
+EXPLAIN SELECT r_name, nations FROM ${testName2}_region, ${testName2}_v2 WHERE r_regionkey = region_key;
+success
+
+// (18) a view may be used inside a WITH query of the statement
+EXPLAIN WITH w AS (SELECT n_name FROM ${testName2}_v1) SELECT * FROM w;
+success
+
+// (19) a name defined by WITH is not the view of that name in that statement:
+//      r_name is a column of the WITH query, not of the view
+EXPLAIN WITH ${testName2}_v1 AS (SELECT r_name FROM ${testName2}_region) SELECT r_name FROM ${testName2}_v1;
+success
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  Views on views
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+// (20) a view may refer to another view
+CREATE VIEW ${testName2}_v3 AS SELECT region_key FROM ${testName2}_v2 WHERE nations > 3;
+success
+
+EXPLAIN SELECT count(*) FROM ${testName2}_v3;
+success
+
+// (21) a view cannot be redefined so that it refers to itself through another view
+CREATE OR REPLACE VIEW ${testName2}_v2 AS SELECT region_key FROM ${testName2}_v3;
+failure contains: 'refers to the view being defined'
+
+// (22) nor so that it refers to itself directly
+CREATE OR REPLACE VIEW ${testName2}_v2 AS SELECT region_key FROM ${testName2}_v2;
+failure contains: 'is not valid'
+
+// (23) the failed statements did not change the view
+EXPLAIN SELECT region_key, nations FROM ${testName2}_v2;
+success
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  CREATE OR REPLACE VIEW
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+// (24) replace the definition of a view
+CREATE OR REPLACE VIEW ${testName2}_v1 (name) AS SELECT r_name FROM ${testName2}_region;
+success
+
+// (25) the new definition is the one used
+EXPLAIN SELECT name FROM ${testName2}_v1;
+success
+
+EXPLAIN SELECT n_name FROM ${testName2}_v1;
+failure contains: 'No such column'
+
+// (26) CREATE OR REPLACE VIEW creates a view that does not exist
+CREATE OR REPLACE VIEW ${testName2}_v4 AS SELECT r_regionkey FROM ${testName2}_region;
+success
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  DROP VIEW
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+// (27) drop a view
+DROP VIEW ${testName2}_v4;
+success
+
+// (28) the view is gone
+EXPLAIN SELECT * FROM ${testName2}_v4;
+failure contains: 'No such table'
+
+// (29) drop a view that does not exist
+DROP VIEW ${testName2}_v4;
+failure contains: 'there is no view named'
+
+// (30) DROP VIEW IF EXISTS of a view that does not exist is not an error
+DROP VIEW IF EXISTS ${testName2}_v4;
+success
+
+// (31) DROP VIEW does not drop a table
+DROP VIEW ${testName2}_region;
+failure contains: 'there is no view named'
+
+// (32) a view that refers to a dropped view can no longer be used
+DROP VIEW ${testName2}_v2;
+success
+
+EXPLAIN SELECT * FROM ${testName2}_v3;
+failure contains: 'No such table'
+
+// (33) the name of a view is not case sensitive in DROP VIEW
+DROP VIEW ${testName2}_V3;
+success
+
+DROP VIEW IF EXISTS ${testName2}_v1;
+success
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  Cleanup
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+DROP TABLE ${testName2}_nation;
+success
+
+DROP TABLE ${testName2}_region;
+success
