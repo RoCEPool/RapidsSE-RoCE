@@ -251,7 +251,7 @@ void XF_Flatten_Reorder_join::vReorderTables(void)
   // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
   // 5) Calculate join load
 
-  p_streamPrmAll->vEstCostsForAllPermutations(m_pCI,m_pCI->E.p_tableList, m_pCI->E.p_filtPredList);
+  p_streamPrmAll->vEstCostsForAllPermutations(m_pCI,m_pCI->E.p_tableList, m_pCI->E.p_filtPredList, pPipeline, m_pCI->E.p_joinPredList);
   m_pCI->E.p_deck->vAppendChild((new Card_Section) ->SYM(SF_NOTE, "Join Cost Est."_Stz));
 
   xStreamPrmAll.vEnded();

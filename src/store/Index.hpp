@@ -50,6 +50,7 @@ namespace STORE
     bool   bIsPrimaryKey(void);
     void   vIsPrimaryKey(bool bPrimaryKey);
     bool   bIsUnique(void);
+    i8     nEstKeyFanOut(void);
     void   vIsUnique(bool bUnique);
     void   vResetPointers(void);
     i8     iSortKeyDatum(void);

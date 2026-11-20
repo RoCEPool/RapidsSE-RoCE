@@ -13,6 +13,8 @@
 #include "Op.hpp"
 #include "Stage.hpp"
 #include "Stream.hpp"
+#include "Ent.hpp"
+#include "Key.hpp"
 
 Index*  gpReadApiIndex;
 
@@ -208,6 +210,64 @@ void Index::vAnalyze(i8 i_TablePtn, i8& nBuffers, i8& nEntries)
     
   if (pIndexBuffer)
     pIndexBuffer->vAnalyze(nBuffers, nEntries);
+}
+
+/*----------------------------------------------------------------------------*/
+/* estimate how many rows share one key of this index (at least 1)            */
+/*----------------------------------------------------------------------------*/
+// Join ordering needs to know whether probing this index returns one row or
+// many. Entries are kept in key order, so a prefix of the index in the first
+// local table partition gives the average number of entries per key. The cost
+// is bounded by the sample size, whatever the size of the table.
+i8 Index::nEstKeyFanOut(void)
+{
+  _precondition_(_ADDRESS_,_MAGIC_,CN_INDEX,_FOOTER_);
+
+  static const i8 C_FANOUT_SAMPLE = 20000;
+
+  if (bIsUnique())
+    return 1;
+
+  TablePtn* pTablePtn = m_pTable->pTablePtn(m_pTable->iPtnNoToTablePtn(0));
+  if (! pTablePtn)
+    return 1;
+
+  IndexTree* pIndexTree = pTablePtn->pIndexTree(m_iIndexNo);
+  if (! pIndexTree)
+    return 1;
+
+  eKE eKind = pIndexTree->eKeyKind();
+  if (eKind != KE_INT && eKind != KE_GENERAL)
+    return 1;
+
+  EntBuffer* pEntBuffer = nullptr;
+  Ent* aEnt = IndexTree::aIndexBegin(pIndexTree, &pEntBuffer);
+  Ent* aEnt_prev = nullptr;
+
+  i8 nEntries = 0;
+  i8 nKeys    = 0;
+
+  while (aEnt && nEntries < C_FANOUT_SAMPLE) {
+    bool bNewKey;
+    if (! aEnt_prev)
+      bNewKey = true;
+    else if (KE_INT == eKind)
+      bNewKey = aEnt->iIntElm0() != aEnt_prev->iIntElm0();
+    else
+      bNewKey = ! Key::bEqualTo(m_pIndexDef, aEnt->aKey(), aEnt_prev->aKey());
+
+    if (bNewKey)
+      nKeys++;
+    nEntries++;
+
+    aEnt_prev = aEnt;
+    aEnt = EntBuffer::aGetNextEntry(&pEntBuffer, aEnt);
+  }
+
+  if (! nKeys)
+    return 1;
+
+  return (nEntries + nKeys - 1) / nKeys;
 }
 
 /*----------------------------------------------------------------------------*/
