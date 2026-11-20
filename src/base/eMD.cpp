@@ -17,6 +17,7 @@ Stz* aMD[MD_ENUMS]
   /* 8 */ "MD_SCHEMA"_Stz,
   /* 9 */ "MD_SESSIONS"_Stz,
   /* 10 */ "MD_TABLES"_Stz,
+  /* 11 */ "MD_VIEWS"_Stz,
 //  /*   */ "MD_ENUMS"_Stz,
 };
 

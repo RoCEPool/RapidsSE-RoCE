@@ -224,6 +224,60 @@ table.
 
 
 .. index::
+   single: Commands; CREATE VIEW
+   single: CREATE VIEW (command); syntax
+
+.. _createViewCmd:
+
+``CREATE VIEW``
+---------------
+
+Creates a view: a query with a name. The view can then be used in the ``FROM``
+clause of a query wherever a table can be used.
+
+The optional column list names the columns of the view. Without it the columns
+of the view have the names of the columns of the query.
+
+``CREATE OR REPLACE VIEW`` replaces the view if it already exists. Without
+``OR REPLACE`` it is an error to create a view that already exists.
+
+The query is checked when the view is created. It is an error if the query
+refers to a table or column that does not exist, or to the view itself.
+
+.. seealso::
+
+  :ref:`views`
+
+.. rubric:: *CREATE VIEW* Syntax:
+
+.. only:: html
+
+  .. image:: /rr/diagram/createViewStmt.png
+     :alt: ``CREATE VIEW`` statement syntax
+     :align: center
+     :target: syntax-tree.html#createViewStmt
+
+.. only:: latex
+
+  .. image:: /rr/diagram/createViewStmt.png
+     :alt: ``CREATE VIEW`` statement syntax
+     :align: center
+
+.. rubric:: Example
+
+.. code:: sql
+
+   CREATE VIEW revenue0 (supplier_no, total_revenue) AS
+     SELECT l_suppkey, SUM(l_extendedprice * (1 - l_discount))
+       FROM lineitem
+      WHERE l_shipdate >= DATE '1996-01-01'
+        AND l_shipdate <  DATE '1996-01-01' + INTERVAL '3' MONTH
+      GROUP BY l_suppkey
+   ;
+
+
+
+.. index::
    single: Commands; DLOAD
    single: DLOAD (command); syntax
 
@@ -346,6 +400,41 @@ Removes an existing table and all of its indexes and data.
 
   .. image:: /rr/diagram/dropTableStmt.png
      :alt: ``DROP TABLE`` statement syntax
+     :align: center
+
+
+
+.. index::
+   single: Commands; DROP VIEW
+   single: DROP VIEW (command); syntax
+
+.. _dropViewCmd:
+
+``DROP VIEW``
+-------------
+
+Removes a view. The tables that the view reads from are not changed.
+
+It is an error to drop a view that does not exist, unless ``IF EXISTS`` is
+given.
+
+.. seealso::
+
+  :ref:`views`
+
+.. rubric:: *DROP VIEW* Syntax:
+
+.. only:: html
+
+  .. image:: /rr/diagram/dropViewStmt.png
+     :alt: ``DROP VIEW`` statement syntax
+     :align: center
+     :target: syntax-tree.html#dropViewStmt
+
+.. only:: latex
+
+  .. image:: /rr/diagram/dropViewStmt.png
+     :alt: ``DROP VIEW`` statement syntax
      :align: center
 
 

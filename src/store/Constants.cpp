@@ -260,6 +260,7 @@ void Constants::vAddConstantsCpp(void)
   vAddConstant("C_TDEF_TOTALUNITS"_Stz,    C_TDEF_TOTALUNITS);
   vAddConstant("C_TDEF_VERIFYINDEX"_Stz,   C_TDEF_VERIFYINDEX);
   vAddConstant("C_TDEF_VERIFYTABLE"_Stz,   C_TDEF_VERIFYTABLE);
+  vAddConstant("C_TDEF_VIEWS"_Stz,         C_TDEF_VIEWS);
   vAddConstant("C_TDEF_WARNINGS"_Stz,      C_TDEF_WARNINGS);
 
   // hardware

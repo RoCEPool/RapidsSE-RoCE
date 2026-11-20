@@ -194,6 +194,7 @@ cmd::fillOut_allCmds
   "md_schema.sen"           include
   "md_sessions.sen"         include
   "md_tables.sen"           include
+  "md_views.sen"            include
 
   "job_startSystem.sen"     include // last last
 

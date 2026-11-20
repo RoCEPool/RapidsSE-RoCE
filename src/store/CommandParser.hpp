@@ -59,6 +59,8 @@ class CommandParser : public Object, public Parser::sqlBaseVisitor
     antlrcpp::Any visitCountCmd(Parser::sqlParser::CountCmdContext *pCtx)                   override;
     antlrcpp::Any visitCreateIndexCmd(Parser::sqlParser::CreateIndexCmdContext *pCtx)       override;
     antlrcpp::Any visitCreateTableCmd(Parser::sqlParser::CreateTableCmdContext* pCtx)       override;
+    antlrcpp::Any visitCreateViewCmd(Parser::sqlParser::CreateViewCmdContext* pCtx)         override;
+    antlrcpp::Any visitDropViewCmd(Parser::sqlParser::DropViewCmdContext* pCtx)             override;
     antlrcpp::Any visitDocolCmd(Parser::sqlParser::DocolCmdContext *pCtx)                   override;
     antlrcpp::Any visitDloadCmd(Parser::sqlParser::DloadCmdContext *pCtx)                   override;
     antlrcpp::Any visitDropIndexCmd(Parser::sqlParser::DropIndexCmdContext* pCtx)           override;
@@ -92,6 +94,7 @@ class CommandParser : public Object, public Parser::sqlBaseVisitor
     static Text* pCleanId(Parser::sqlParser::IdentifierContext* pCtx);
     static Text* pCleanString(Parser::sqlParser::StringLiteralContext* pCtx);
     static Text* pCleanString(antlr4::Token* pToken);
+    static void  vCheckQuery(Stz* szQuery, Stz* szViewName);
     static void  vCleanString(Parser::sqlParser::StringLiteralContext* pCtx, s256& sBuf, eEC eLenErr);
     static void  vCleanString(Parser::sqlParser::IdentifierContext* pCtx, s256& sBuf, eEC eLenErr);
     static void  vCleanString(antlr4::Token* pToken, s256& sBuf, eEC eLenErr);
