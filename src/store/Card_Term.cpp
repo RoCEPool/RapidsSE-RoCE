@@ -279,6 +279,17 @@ void Card_Term::vUpdate_expCol(CardIter* pCI, Card_Emit* p_Dic_expr, bool bAlt)
   else
     p_expr_dic = p_Dic_expr->pFind_term(pCI,pSym_term);
 
+  // A sub-query parameter "%m $n" refers to arriving column n by position.
+  // Matching by symbol fails when that column is emitted straight from a
+  // GBYAGG as a key reference ($K1) instead of through a <project> ($1), as
+  // for a correlated "= (select min(..))"; the term then keeps no column
+  // name and the pipeline fails verification.
+  if (! p_expr_dic && pSym_term->bHasFacet(SF_SQY_PRM)) {
+    i8 iOrdinal = pSym_term->iTo_ordinal(SF_EXP_COL);
+    if (iOrdinal >= 1 && iOrdinal <= p_Dic_expr->nChildCards())
+      p_expr_dic = p_Dic_expr->pGet_expr(iOrdinal - 1);
+  }
+
   if (p_expr_dic) {
     pSym_term->vApplyCastFacets(p_expr_dic->pSymbol());
 
