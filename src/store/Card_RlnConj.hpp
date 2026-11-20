@@ -9,6 +9,7 @@
 
 namespace STORE
 {
+  class Card_IdxColList;
   class Card_RlnConj : public Card_CONJ
   {
   public:
@@ -31,7 +32,7 @@ namespace STORE
     bool bIsIndexBound(Card_Index* p_index);
     bool bIsRlnOp(void);
     char cOtherTable(char cTblSyn);
-    bool bSubsetOf_bounds(Card_Bounds* p_bounds);
+    bool bSubsetOf_bounds(Card_Bounds* p_bounds, Card_IdxColList* p_idxColList);
     bool bUsesTable(char cTblSyn);
 
     void vValidate(CardIter* pCI, i8 iDepth, Card* pParent);
