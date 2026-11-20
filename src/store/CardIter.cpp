@@ -53,6 +53,7 @@ CardIter::CardIter(Bench* pBench)
   Flat.m_i_fold         = C_UNKNOWN;
   Flat.m_pExpr_fold     = nullptr;
   Flat.m_pCopy_inner  = nullptr;
+  Flat.m_p_fold_current = nullptr;
 
 //  G.pBoard    = nullptr;
 //  G.p_deck     = nullptr;
@@ -820,6 +821,22 @@ bool CardIter::bEachOp(void)
   E.p_Op = nullptr;
   E.e_Op = CK_NONE;
   E.xEachOp.vEnded();
+  return false;
+}
+
+/*----------------------------------------------------------------------------*/
+/* advance to the <fold> made by the fold in progress                         */
+/*----------------------------------------------------------------------------*/
+// See Flat.m_p_fold_current. If it is not set, this is the first <fold>.
+bool CardIter::bEachOp_fold_current(void)
+{
+  _precondition_( _MAGIC_, _FOOTER_);
+
+  while (bEachOp(CK_o_FOLD)) {
+    if (!Flat.m_p_fold_current || E.p_Op == Flat.m_p_fold_current)
+      return true;
+  }
+
   return false;
 }
 
@@ -2310,12 +2327,44 @@ void CardIter::vSnapIf_arriving(bool bSub_emit)
   if (E.p_Op->bIsCard(CK_o_FOLD))
     return;
 
+  // A <call> has no emit of its own: the rows that arrive after it are the
+  // rows that the called sub-pipeline emits.
+  if (E.p_Op->bIsCard(CK_o_CALL)) {
+    vSnapIf_arriving(pCalled_emit(E.p_Op), nullptr);
+    return;
+  }
+
   if (bSub_emit) {
     vSnapIf_arriving(E.p_Op->pSub_emit(),E.p_Op->pSub_streamKey());
   }
   else {
     vSnapIf_arriving(E.p_emit,E.p_Op->pSub_streamKey());
   }
+}
+
+/*----------------------------------------------------------------------------*/
+/* emit of the sub-pipeline that a <call> calls                               */
+/*----------------------------------------------------------------------------*/
+// This is the emit of the last op of the called sub-pipeline that has one.
+// Returns nullptr if the called sub-pipeline cannot be found or has no emit.
+Card_Emit* CardIter::pCalled_emit(Card* p_call)
+{
+  _precondition_(_MAGIC_, _FOOTER_);
+
+  Board* pBoard = m_pBench->pFindBoard(p_call->pSymbol());
+  if (!pBoard) {
+    return nullptr;
+  }
+
+  Card* p_deck = pBoard->pDeck();
+  for (i8 i_Card = p_deck->nChildCards() - 1; i_Card >= 0; i_Card--) {
+    Card_Emit* p_emit = p_deck->pGetChild(i_Card)->pSub_emit();
+    if (p_emit) {
+      return p_emit;
+    }
+  }
+
+  return nullptr;
 }
 
 /*----------------------------------------------------------------------------*/

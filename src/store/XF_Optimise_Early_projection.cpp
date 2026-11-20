@@ -365,6 +365,26 @@ bool XF_Optimise_Early_projection::bIsRoot(void)
   }
 
   // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+  // if the rows of this arc come from an aggregation (e.g. a folded sub-query
+  // that aggregates), they carry computed columns that are referred to only
+  // by position ($n). The needed columns of an arc are tracked by table
+  // column ($$c.n), so an early project here would drop those columns. And
+  // an aggregation already emits only the columns it computes, so there is
+  // nothing to gain from projecting early: do not start an arc here.
+
+  for (i8 i_Card = m_pCI->E.i_Op - 1; i_Card >= 0; i_Card--) {
+    Card* p_prior = m_pCI->E.p_deck->pGetChild(i_Card);
+    if (!Card_OP::bIsOp(p_prior->eCard()))
+      continue;
+    if (p_prior->bIsCard(CK_o_SCAN) || p_prior->bIsCard(CK_o_INDEXSCAN) ||
+        p_prior->bIsCard(CK_o_PROJECT))
+      break;
+    if (p_prior->bIsCard(CK_o_AGGREG) || p_prior->bIsCard(CK_o_GBYAGG) ||
+        p_prior->bIsCard(CK_o_ORDAGG))
+      return false;
+  }
+
+  // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
   // can a needed root be formed using the emit of this operator?
 
   m_pCI->E.p_emit = m_pCI->E.p_Op->pSub_emit();
@@ -388,6 +408,17 @@ bool XF_Optimise_Early_projection::bIsTip(void)
 
   if (m_pCI->E.p_Op->bIsCard(CK_o_INDEXSCAN) ||
       m_pCI->E.p_Op->bIsCard(CK_o_SCAN))
+    return true;
+
+  // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+  // an aggregation emits only the columns it computes, so it is the source of
+  // the rows of this arc, just as a scan is. This is how the ops of a folded
+  // sub-query that aggregates (e.g. W_A_NC_ro, or F with a GROUP BY) appear
+  // to the outer query's arc.
+
+  if (m_pCI->E.p_Op->bIsCard(CK_o_AGGREG) ||
+      m_pCI->E.p_Op->bIsCard(CK_o_GBYAGG) ||
+      m_pCI->E.p_Op->bIsCard(CK_o_ORDAGG))
     return true;
 
   // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
