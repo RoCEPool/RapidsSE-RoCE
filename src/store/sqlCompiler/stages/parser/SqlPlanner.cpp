@@ -371,7 +371,8 @@ SqlPlanner::SqlPlanner(void)
   m_pExprStack(nullptr),
   m_pSelectItems(nullptr),
   m_pOrderItems(nullptr),
-  m_pViewExpansion(nullptr)
+  m_pViewExpansion(nullptr),
+  m_bDistinctNextSelect(false)
 {
   _precondition_(_ADDRESS_,_MAGIC_,CN_SQLPLANNER,_FOOTER_);
   
@@ -1733,6 +1734,29 @@ antlrcpp::Any SqlPlanner::visitSetExpr(sqlParser::SetExprContext* pCtx)
 }
 
 /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -*/
+/* Count the parse tree nodes of one type at or below a node                  */
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -*/
+template <class T>
+static i8 nCount(antlr4::tree::ParseTree* pTree)
+{
+  if (!pTree) {
+    return 0;
+  }
+
+  i8 n = (dynamic_cast<T*>(pTree) != nullptr) ? 1 : 0;
+  for (antlr4::tree::ParseTree* pChild : pTree->children) {
+    n += nCount<T>(pChild);
+  }
+  return n;
+}
+
+template <class T>
+static b1 bContains(antlr4::tree::ParseTree* pTree)
+{
+  return nCount<T>(pTree) > 0;
+}
+
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -*/
 /* Select Expression node (for each select of each query/subquery)            */
 /* Contains select list / FROM / WHERE / GROUP BY / HAVING                    */
 /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -*/
@@ -1760,15 +1784,38 @@ antlrcpp::Any SqlPlanner::visitSelectExpr(sqlParser::SelectExprContext* pCtx)
   // -----------------------
   // DISTINCT keyword
   // -----------------------
-  if (pCtx->distinct) {
-    __NOT_IMPL("DISTINCT")
+  // SELECT DISTINCT a, b FROM ... is planned as SELECT a, b FROM ... GROUP BY
+  // a, b. The same is done for the query of "x IN (query)" when
+  // visitSubqueryInOp() asked for it.
+  b1 bImpliedDistinct = m_bDistinctNextSelect;
+  m_bDistinctNextSelect = false;
+
+  b1 bDistinct = false;
+  if (pCtx->distinct || bImpliedDistinct) {
+    b1 bHasAggregate = bContains<sqlParser::AggFuncContext>(pCtx->selectList()) ||
+                       bContains<sqlParser::CountAllContext>(pCtx->selectList());
+    b1 bHasWildcard  = bContains<sqlParser::ColumnWildcardContext>(pCtx->selectList());
+
+    if (pCtx->groupBy || bHasWildcard) {
+      // Not supported as DISTINCT. When it was only implied by IN, leave
+      // the query as it is.
+      if (pCtx->distinct) {
+        __NOT_IMPL("DISTINCT with GROUP BY or with *")
+      }
+    }
+    else if (bHasAggregate) {
+      // An aggregate without GROUP BY returns one row: nothing to do.
+    }
+    else {
+      bDistinct = true;
+    }
   }
 
   // -----------------------
   // Select List (Project)
   // -----------------------
   QueryNode *pProjectOp = nullptr;
-  if (!pCtx->groupBy) {
+  if (!pCtx->groupBy && !bDistinct) {
     // If we have a group by clause then we will get this selectList there
     m_pSelectItems = new QueryNodeList;
 
@@ -1791,7 +1838,7 @@ antlrcpp::Any SqlPlanner::visitSelectExpr(sqlParser::SelectExprContext* pCtx)
   // GROUP BY clause
   // -----------------------
   QueryNode* pAggregateOp = nullptr;
-  if (pCtx->groupBy) {
+  if (pCtx->groupBy || bDistinct) {
     // First gather the select list items
       m_pSelectItems = new QueryNodeList;
 
@@ -1807,7 +1854,19 @@ antlrcpp::Any SqlPlanner::visitSelectExpr(sqlParser::SelectExprContext* pCtx)
 
       // Visit the children of the GROUP BY clause
       try {
-        pCtx->groupBy->accept(this);
+        if (pCtx->groupBy) {
+          pCtx->groupBy->accept(this);
+        }
+        else {
+          // DISTINCT: group by the expressions of the select list, in order
+          // (see visitGroupByListItem for the pop/append).
+          for (sqlParser::SelectListItemContext* pItem : pCtx->selectList()->selectListItem()) {
+            pItem->expr()->accept(this);
+            ASSERT(m_pExprStack->nItems() > 0);
+            QueryNode* pExpr = m_pExprStack->pPop();
+            m_pExprStack->vAppend(pExpr);
+          }
+        }
 
       } catch (SqlException& e) {
         if (pProjectOp)       delete pProjectOp;
@@ -2552,13 +2611,23 @@ antlrcpp::Any SqlPlanner::visitSubqueryInOp(sqlParser::SubqueryInOpContext *pCtx
 
   b1 bInvert = (pCtx->NOT() != nullptr);
 
+  // "x IN (query)" is true once per row of x, however many rows of the query
+  // equal x. A query over one table is run as a key lookup, which has this
+  // property. A query that joins tables, or that has sub-queries of its own,
+  // is joined to the outer query instead and gave one result row per match:
+  // make such a query return distinct rows.
+  m_bDistinctNextSelect = !bInvert &&
+                          nCount<sqlParser::TableReferenceContext>(pCtx->query()) > 1;
+
   // Visit the subquery. First we need to save and clear the member variables
   PlannerContext xContext = xSaveMemberContext();
 
   try {
     pCtx->query()->accept(this);
+    m_bDistinctNextSelect = false;
 
   } catch (SqlException& e) {
+    m_bDistinctNextSelect = false;
     // Cleanup current member variables and restore all of the saved stacks/lists.
     vRestoreMemberContext(&xContext);
     delete pLeftExpr;
