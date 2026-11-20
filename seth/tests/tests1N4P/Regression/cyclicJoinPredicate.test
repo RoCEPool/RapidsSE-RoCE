@@ -1,0 +1,79 @@
+/*----------------------------------------------------------------------------*/
+/* cyclicJoinPredicate.test -- every predicate of a cyclic join is applied     */
+/*----------------------------------------------------------------------------*/
+
+// A, B and C each have columns ID and P, and the join predicates form a cycle:
+//   A.P = B.ID,  B.P = C.ID,  C.P = A.ID
+// Whichever table is joined last, two predicates apply at that join: one
+// becomes the index bound and the other must stay as a filter. The optimiser
+// used to drop the filter as "already implied by the bound" because it
+// compared terms by any one facet, so a column named ID (or P) of one table
+// matched the same-named column of another table.
+//
+// Data (DATA/Regression): cycle_ab.tbl has rows (i, i) for i = 1..2000 and is
+// loaded into A and B; cycle_c.tbl has (i, i) for odd i and (i, i % 2000 + 1)
+// for even i. A row of C closes the cycle only when C.P = C.ID, so the answer
+// is 1000; dropping any one predicate gives 2000.
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  Setup
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+create table ${testName2}_A(ID integer, P integer);
+success
+create table ${testName2}_B(ID integer, P integer);
+success
+create table ${testName2}_C(ID integer, P integer);
+success
+
+create index ${testName2}_A_ID on ${testName2}_A (ID);
+success
+create index ${testName2}_A_P  on ${testName2}_A (P);
+success
+create index ${testName2}_B_ID on ${testName2}_B (ID);
+success
+create index ${testName2}_B_P  on ${testName2}_B (P);
+success
+create index ${testName2}_C_ID on ${testName2}_C (ID);
+success
+create index ${testName2}_C_P  on ${testName2}_C (P);
+success
+
+load ${testName2}_A "../DATA/Regression/cycle_ab.tbl" <field_delimiter> = "|";
+success
+load ${testName2}_B "../DATA/Regression/cycle_ab.tbl" <field_delimiter> = "|";
+success
+load ${testName2}_C "../DATA/Regression/cycle_c.tbl" <field_delimiter> = "|";
+success
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  The cycle closes for half of the rows of C
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+select count(*)
+  from ${testName2}_A, ${testName2}_B, ${testName2}_C
+ where ${testName2}_A.P = ${testName2}_B.ID
+   and ${testName2}_B.P = ${testName2}_C.ID
+   and ${testName2}_C.P = ${testName2}_A.ID;
+rows:
+  (1000)
+
+// the same with the predicates in another order
+select count(*)
+  from ${testName2}_C, ${testName2}_A, ${testName2}_B
+ where ${testName2}_C.P = ${testName2}_A.ID
+   and ${testName2}_A.P = ${testName2}_B.ID
+   and ${testName2}_B.P = ${testName2}_C.ID;
+rows:
+  (1000)
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  Cleanup
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+drop table ${testName2}_A;
+success
+drop table ${testName2}_B;
+success
+drop table ${testName2}_C;
+success

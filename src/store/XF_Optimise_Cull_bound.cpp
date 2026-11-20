@@ -3,6 +3,9 @@
 /*============================================================================*/
 
 #include "XF_Optimise_Cull_bound.hpp"
+#include "Card_IndexList.hpp"
+#include "Card_Index.hpp"
+#include "Card_IdxColList.hpp"
 
 #include "eOT.h"
 
@@ -116,17 +119,24 @@ bool XF_Optimise_Cull_bound::bXF_Cull_Used_bound(void)
            m_pCI->E.p_Op->bIsCard(CK_o_KEYNOTEXISTS)
     ))
       continue;
-    if (! (m_pCI->E.p_bounds = m_pCI->E.p_Op->pSub_bounds()))
+    // only the bounds of the chosen index are applied by the operator; the
+    // first <bounds> found under it may belong to another index
+    Card_IndexList* p_indexList = m_pCI->E.p_Op->pSub_indexList();
+    Card_Index* p_index = p_indexList ? p_indexList->pFindChosenIndex() : nullptr;
+    if (! p_index)
       continue;
+    if (! (m_pCI->E.p_bounds = p_index->pSub_bounds()))
+      continue;
+    Card_IdxColList* p_idxColList = p_index->pSub_idxColList();
 
     if ((m_pCI->E.p_filter = m_pCI->E.p_Op->pSub_filter())) {
 
       // have <bounds> & <filter> under <main>
 
       CardIter* pCI = m_pCI;
-      auto bfDerive = [pCI](Card* p_card) {
+      auto bfDerive = [pCI, p_idxColList](Card* p_card) {
         Card_RlnConj* p_rlnConj = _pCard_RlnConj(p_card);
-        if (p_rlnConj->bSubsetOf_bounds(pCI->E.p_bounds) &&
+        if (p_rlnConj->bSubsetOf_bounds(pCI->E.p_bounds, p_idxColList) &&
             ! p_rlnConj->pSymbol()->Y_bHas(P_CrlKeyTest)) {
           //RASSERT(m_pCI->G.p_rlnConj->bIsJoinConj());
           p_rlnConj->vMark1(MARK_AT);
@@ -145,9 +155,9 @@ bool XF_Optimise_Cull_bound::bXF_Cull_Used_bound(void)
       // have <bounds> & <filter> under <main>
 
       CardIter* pCI = m_pCI;
-      auto bfDerive = [pCI](Card* p_card) {
+      auto bfDerive = [pCI, p_idxColList](Card* p_card) {
         Card_RlnConj* p_rlnConj = _pCard_RlnConj(p_card);
-        if (p_rlnConj->bSubsetOf_bounds(pCI->E.p_bounds))
+        if (p_rlnConj->bSubsetOf_bounds(pCI->E.p_bounds, p_idxColList))
           p_rlnConj->vMark1(MARK_AT);
 
         return C_CONTINUE_RECURSION;

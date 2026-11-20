@@ -3,6 +3,7 @@
 /*============================================================================*/
 
 #include "Card_RlnConj.hpp"
+#include "Card_IdxColList.hpp"
 #include "Card_Term.hpp"
 #include "CardIter.hpp"
 #include "Card_Table.hpp"
@@ -292,34 +293,77 @@ char Card_RlnConj::cOtherTable(char cTblSyn)
 }
 
 /*----------------------------------------------------------------------------*/
-/* is given cmpPred a subset of bounds?                                       */
+/* is this comparison implied by one of the given bounds of an index?         */
 /*----------------------------------------------------------------------------*/
-bool Card_RlnConj::bSubsetOf_bounds(Card_Bounds* p_bounds)
+// A bound "<op> $In value" says that column n of the index (p_idxColList)
+// compares with value. This comparison is implied only if it compares that
+// same index column with that same value: matching on any one facet (for
+// example the column name alone) would also accept fb.ID for fa.ID.
+static bool bSameTerm(Symbol* pSym_a, Symbol* pSym_b)
+{
+  if (pSym_a->bHasFacet(SF_TBL_COL) || pSym_b->bHasFacet(SF_TBL_COL))
+    return pSym_a->bMatches(SF_TBL_COL, pSym_b);
+
+  if (pSym_a->bHasFacet(SF_EXP_COL) || pSym_b->bHasFacet(SF_EXP_COL))
+    return pSym_a->bMatches(SF_EXP_COL, pSym_b) &&
+           (pSym_a->bHasFacet(SF_SQY_NO) == pSym_b->bHasFacet(SF_SQY_NO)) &&
+           (! pSym_a->bHasFacet(SF_SQY_NO) || pSym_a->bMatches(SF_SQY_NO, pSym_b)) &&
+           (pSym_a->bHasFacet(SF_SQY_PRM) == pSym_b->bHasFacet(SF_SQY_PRM));
+
+  if (pSym_a->bIs_Col() || pSym_b->bIs_Col())
+    return false;
+
+  // literals and parameters
+  return pSym_a->bMatches(pSym_b);
+}
+
+bool Card_RlnConj::bSubsetOf_bounds(Card_Bounds* p_bounds, Card_IdxColList* p_idxColList)
 {
   _precondition_(_ADDRESS_, _MAGIC_, CN_CARD, _FOOTER_);
+
+  if (! p_bounds || ! p_idxColList)
+    return false;
+
+  Symbol* pSym_rlnConj = pSymbol();
+  if (! pSym_rlnConj->bHasFacet(SF_RLN_OP))
+    return false;
+
+  Symbol* pSym_child0 = pGetChild(0)->pSymbol();
+  Symbol* pSym_child1 = pGetChild(1)->pSymbol();
+
+  Stz* szOp = pSym_rlnConj->szFacet(SF_RLN_OP);
+  bool bSymmetric = szOp->bSame("=="_Stz) || szOp->bSame("<>"_Stz) || szOp->bSame("!="_Stz);
 
   Kid xBounds(p_bounds);
   while (xBounds.bEach(CK_BOUND)) {
     Card_Bound* p_bound = xBounds.p_bound();
-    Symbol* pSym_bound = p_bound->pSymbol();
-
-    Card* p_child1_bound = p_bound->pGetChild(1);
-    Symbol* pSym_child1_bound = p_child1_bound->pSymbol();
-
-    Symbol* pSym_rlnConj = pSymbol();
-    Symbol* pSym_rlnConj_child0 = this->pGetChild(0)->pSymbol();
-    Symbol* pSym_rlnConj_child1 = this->pGetChild(1)->pSymbol();
-
-    if (! pSym_bound->bMatches(pSym_rlnConj))
+    if (p_bound->nChildCards() < 2)
       continue;
 
-    // todo: need bounds to be bndTyp , etc
-    // anyways...
+    if (! p_bound->pSymbol()->bMatches(SF_RLN_OP, pSym_rlnConj))
+      continue;
 
-    if (pSym_rlnConj_child0->bMatches(pSym_child1_bound))
+    Symbol* pSym_idxColRef = p_bound->pGetChild(0)->pSymbol();
+    Symbol* pSym_value     = p_bound->pGetChild(1)->pSymbol();
+    if (! pSym_idxColRef->bHasFacet(SF_IDX_COL))
+      continue;
+
+    i8 iIdxCol = pSym_idxColRef->iTo_ordinal(SF_IDX_COL);
+    if (iIdxCol < 1 || iIdxCol > p_idxColList->nChildCards())
+      continue;
+    Symbol* pSym_idxCol = p_idxColList->pGetChild(iIdxCol - 1)->pSymbol();
+    if (! pSym_idxCol->bHasFacet(SF_TBL_COL))
+      continue;
+
+    if (pSym_child0->bHasFacet(SF_TBL_COL) &&
+        pSym_child0->bMatches(SF_TBL_COL, pSym_idxCol) &&
+        bSameTerm(pSym_child1, pSym_value))
       return true;
 
-    if (pSym_rlnConj_child1->bMatches(pSym_child1_bound))
+    if (bSymmetric &&
+        pSym_child1->bHasFacet(SF_TBL_COL) &&
+        pSym_child1->bMatches(SF_TBL_COL, pSym_idxCol) &&
+        bSameTerm(pSym_child0, pSym_value))
       return true;
   }
 
