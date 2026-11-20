@@ -15,6 +15,14 @@
 #include "Card_TableList.hpp"
 #include "Card_Term.hpp"
 #include "CardIter.hpp"
+#include "AM.hpp"
+#include "Card_RowCount.hpp"
+#include "Card_Index.hpp"
+#include "Card_IndexList.hpp"
+#include "Card_IdxColList.hpp"
+#include "Card_TablePtn.hpp"
+#include "Card_COLUMN.hpp"
+#include "Card_Deck.hpp"
 
 
 /*----------------------------------------------------------------------------*/
@@ -51,12 +59,18 @@ Card_StreamPer::~Card_StreamPer(void) noexcept(false)
 /*-- Public ------------------------------------------------------------------*/
 /*----------------------------------------------------------------------------*/
 
+// added to the network cost of a join sequence whose intermediate result
+// explodes (see bExplodes), so that it ranks after every other sequence
+static const i8 C_EXPLOSION_PENALTY = (i8)1 << 50;
+
 /*----------------------------------------------------------------------------*/
 /* estimate the query cost of this join permutation sequence                  */
 /*----------------------------------------------------------------------------*/
 void Card_StreamPer::vEstStreamCost(CardIter* pCI,
                                     Card_TableList* p_tableList,
-                                    Card_FiltPredList* p_filtPredList)
+                                    Card_FiltPredList* p_filtPredList,
+                                    Card_Deck* p_pipeline,
+                                    Card_JoinPredList* p_joinPredList)
 {
   _precondition_(_ADDRESS_, _MAGIC_, CN_CARD, _FOOTER_);
 
@@ -137,6 +151,14 @@ void Card_StreamPer::vEstStreamCost(CardIter* pCI,
     i_Join++;
   }
 
+  // The buffer model above does not see how many rows a join produces. A
+  // join on a column that is not a key (e.g. customer to supplier on the
+  // nation key) can multiply the stream by thousands and exhaust memory, so
+  // rank any sequence whose estimated intermediate result explodes after
+  // every sequence that does not.
+  if (bExplodes(p_tableList, p_filtPredList, p_pipeline, p_joinPredList))
+    nSumNetworkCost += C_EXPLOSION_PENALTY;
+
   // record the sum network and unicast costs
   Card_CostNetwork* p_costNetwork = new Card_CostNetwork;
   p_costNetwork->SYM(SF_INT_LIT,nSumNetworkCost);
@@ -151,6 +173,155 @@ void Card_StreamPer::vEstStreamCost(CardIter* pCI,
   vPushChild(p_costQuery);
 
   delete p_streamPtn;
+}
+
+/*----------------------------------------------------------------------------*/
+/* does the estimated intermediate result of this sequence explode?           */
+/*----------------------------------------------------------------------------*/
+// Rows are estimated as in index nested-loop execution: the head table's rows,
+// then for every join the arriving rows times the rows per key of the join
+// column on the joined table (Index::nEstKeyFanOut). Every filter on a table
+// keeps C_FILTER_COEFF of its rows. The sequence explodes when a stream grows
+// beyond C_EXPLOSION_FACTOR times the largest table of the query.
+bool Card_StreamPer::bExplodes(Card_TableList* p_tableList,
+                               Card_FiltPredList* p_filtPredList,
+                               Card_Deck* p_pipeline,
+                               Card_JoinPredList* p_joinPredList)
+{
+  _precondition_(_ADDRESS_, _MAGIC_, CN_CARD, _FOOTER_);
+
+  static const d8 C_EXPLOSION_FACTOR = 4.0;
+
+  d8 dRows    = 0.0;
+  d8 dMaxRows = 0.0;
+  d8 dLargest = 1.0;
+
+  char acJoined[64];   // table syntaxes already in the stream
+  i8 nJoined = 0;
+
+  Kid xStreamPer(this);
+  while (xStreamPer.bEach()) {
+
+    char cTblSyn;
+    d8 dRead;
+
+    if (xStreamPer.pChild()->bIsCard(CK_STREAMHEAD)) {
+      cTblSyn = xStreamPer.p_streamHead()->pSymbol()->cTblSyn();
+      dRead = 0.0;
+    }
+    else
+    if (xStreamPer.pChild()->bIsCard(CK_STREAMJOIN)) {
+      cTblSyn = xStreamPer.p_streamJoin()->pSymbol()->cTblSyn();
+
+      // every join predicate between this table and the stream applies, so
+      // the rows read are bounded by the most selective of them
+      i8 nFanOut = 0;
+      Kid xJoinPredList(p_joinPredList);
+      while (xJoinPredList.bEach(CK_RLNCONJ)) {
+        Card_RlnConj* p_rlnConj = xJoinPredList.p_rlnConj();
+        if (! p_rlnConj->bUsesTable(cTblSyn))
+          continue;
+        char cTblSyn_other = p_rlnConj->cOtherTable(cTblSyn);
+        bool bInStream = false;
+        for (i8 i = 0; i < nJoined; i++)
+          if (acJoined[i] == cTblSyn_other)
+            bInStream = true;
+        if (! bInStream)
+          continue;
+        i8 n = nJoinFanOut(p_pipeline, p_tableList, cTblSyn, p_rlnConj);
+        if (! nFanOut || n < nFanOut)
+          nFanOut = n;
+      }
+      dRead = dRows * (d8)(nFanOut ? nFanOut : 1);
+    }
+    else
+      continue;
+
+    Card_RowCount* p_rowCount = p_tableList->pGetRowCount(cTblSyn);
+    d8 dTableRows = p_rowCount ? (d8)p_rowCount->pSymbol()->iTo_integer(SF_INT_LIT) : 1.0;
+    if (dTableRows > dLargest)
+      dLargest = dTableRows;
+    if (xStreamPer.pChild()->bIsCard(CK_STREAMHEAD))
+      dRead = dTableRows;
+
+    i8 nFilters = p_filtPredList->nFiltersFor(cTblSyn);
+    dRows = dRead;
+    while (nFilters-- > 0)
+      dRows *= C_FILTER_COEFF;
+    if (dRows < 1.0)
+      dRows = 1.0;
+
+    if (dRead > dMaxRows)
+      dMaxRows = dRead;
+
+    if (nJoined < (i8)sizeof(acJoined))
+      acJoined[nJoined++] = cTblSyn;
+  }
+
+  return dMaxRows > C_EXPLOSION_FACTOR * dLargest;
+}
+
+/*----------------------------------------------------------------------------*/
+/* rows of the joined table matched by one arriving row (1 if unknown)        */
+/*----------------------------------------------------------------------------*/
+// Uses the fan-out estimated for the index whose leading column is the join
+// column on the joined side (Index::nEstKeyFanOut, recorded as P_FanOut).
+i8 Card_StreamPer::nJoinFanOut(Card_Deck* p_pipeline,
+                               Card_TableList* p_tableList,
+                               char cTblSyn_join,
+                               Card_RlnConj* p_rlnConj)
+{
+  _static_
+
+  if (! p_rlnConj)
+    return 1;
+
+  Symbol* p_Y_tablePtn_join = p_tableList->pGetTablePtn(cTblSyn_join)->pSymbol();
+  Symbol* p_Y_term_0 = p_rlnConj->pGetTerm_0()->pSymbol();
+  Symbol* p_Y_term_1 = p_rlnConj->pGetTerm_1()->pSymbol();
+
+  Symbol* p_Y_col_join = nullptr;
+  if (p_Y_term_0->bHasFacet(SF_TBL_COL) && Card_COLUMN::bMatchingTblSyn(p_Y_tablePtn_join, p_Y_term_0))
+    p_Y_col_join = p_Y_term_0;
+  else
+  if (p_Y_term_1->bHasFacet(SF_TBL_COL) && Card_COLUMN::bMatchingTblSyn(p_Y_tablePtn_join, p_Y_term_1))
+    p_Y_col_join = p_Y_term_1;
+
+  if (! p_Y_col_join)
+    return 1;
+
+  i8 iOrdinal = p_Y_col_join->iTo_ordinal(SF_TBL_COL);
+
+  Kid xDeck(p_pipeline);
+  while (xDeck.bEach(CK_o_FROM, CK_p_TABLE)) {
+    Card_Table* p_table = _pCard_Table(xDeck.pSub1());
+    if (p_table->pSymbol()->cTblSyn() != cTblSyn_join)
+      continue;
+
+    Card_IndexList* p_indexList = p_table->pSub_indexList();
+    if (! p_indexList)
+      return 1;
+
+    i8 nFanOut = 0;
+    Kid xIndexList(p_indexList);
+    while (xIndexList.bEach(CK_INDEX)) {
+      Card_Index* p_index = xIndexList.p_index();
+      Card_IdxColList* p_idxColList = p_index->pSub_idxColList();
+      if (! p_idxColList || ! p_idxColList->nChildCards())
+        continue;
+      Symbol* p_Y_idxCol = p_idxColList->pGetChild(0)->pSymbol();
+      if (! p_Y_idxCol->bHasFacet(SF_TBL_COL) ||
+          p_Y_idxCol->iTo_ordinal(SF_TBL_COL) != iOrdinal ||
+          ! p_index->pSymbol()->Y_bHas(P_FanOut))
+        continue;
+      i8 n = p_index->pSymbol()->Y_iGet(P_FanOut);
+      if (! nFanOut || n < nFanOut)
+        nFanOut = n;
+    }
+    return nFanOut ? nFanOut : 1;
+  }
+
+  return 1;
 }
 
 /*----------------------------------------------------------------------------*/
