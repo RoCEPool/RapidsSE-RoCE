@@ -72,6 +72,12 @@ Card_TableList* Card_TableList::pExtractList(Card_Deck* p_deck)
     Card* p_table_dup = _pCard_Table(p_table->pDupCard());
     p_tableList->vAppendChild(p_table_dup);
 
+    // pDupCard copies facets but not properties: carry over the position
+    // fixed by XF_Flatten_Anchor_table, or join ordering ignores it and may
+    // put a table with no join predicate next to the sub-query result
+    if (p_table->pSymbol()->Y_bHas(P_FixedPos))
+      p_table_dup->pSymbol()->Y_vSet(P_FixedPos, p_table->pSymbol()->Y_iGet(P_FixedPos));
+
     if (Card_TableNm* p_tableNm = p_table->pSub_tableNm()) {
       p_tableNm = _pCard_TableNm(p_tableNm->pDupCard());
       p_table_dup->vAppendChild(p_tableNm);
