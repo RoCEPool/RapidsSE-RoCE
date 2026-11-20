@@ -5,26 +5,118 @@
 //------------------------------------------------------------------------------
 //  Original Query
 //------------------------------------------------------------------------------
+create view revenue0 (supplier_no, total_revenue) as
+  select l_suppkey, sum(l_extendedprice * (1 - l_discount))
+    from lineitem
+   where l_shipdate >= date '1996-01-01'
+     and l_shipdate < date '1996-01-01' + interval '3' month
+   group by l_suppkey;
+
 select s_suppkey, s_name, s_address, s_phone, total_revenue
-     from supplier, revenue
-     where s_suppkey = supplier_no
-     and total_revenue >= ( select max(total_revenue) from revenue)
-     order by s_suppkey;
+  from supplier, revenue0
+ where s_suppkey = supplier_no
+   and total_revenue = ( select max(total_revenue) from revenue0 )
+ order by s_suppkey;
+
+drop view revenue0;
 
 //------------------------------------------------------------------------------
 //  Transliterate Query
 //------------------------------------------------------------------------------
+create view revenue0 (supplier_no, total_revenue) as
+  select l_suppkey, sum(l_extendedprice * (1 - l_discount))
+    from lineitem
+   where l_shipdate >= date '1996-01-01'
+     and l_shipdate < date '1996-01-01' + interval '3' month
+   group by l_suppkey;
+
 EXPLAIN STAGE TRANSLITERATE
 select s_suppkey, s_name, s_address, s_phone, total_revenue
-     from supplier, revenue
-     where s_suppkey = supplier_no
-     and total_revenue >= ( select max(total_revenue) from revenue)
-     order by s_suppkey;
+  from supplier, revenue0
+ where s_suppkey = supplier_no
+   and total_revenue = ( select max(total_revenue) from revenue0 )
+ order by s_suppkey;
+
+drop view revenue0;
 
 //------------------------------------------------------------------------------
 // Pipeline Generated
 //------------------------------------------------------------------------------
+pipeline unamed
+begin
+  pipeline revenue0
+  begin
+    stage stageStart on origin :
+      start
+      | pulse once
+      | stageMarker1008
+    stage stageMarker1008 on all partitions :
+      scan rapids public Lineitem
+      | filter " type BOOLEAN  $11 DATE '1996-01-01'  >=  $11 DATE '1996-01-01'  INTERVAL_YM 771  +  <  and  "
+      | gbyAgg " groupBy  type INTEGER ( 19 ) $3 aggregates  type INTEGER ( 19 ) $K1 , type DECIMAL ( 19 2 ) )  $6 1.00  $7 -  *  sum  "
+      | combined 0
+      | stageMarker1011
+    stage stageMarker1011 on all nodes :
+      gbyAgg " groupBy  type INTEGER ( 19 ) $1 aggregates  type INTEGER ( 19 ) $K1 , type DECIMAL ( 19 2 ) )  $2 sum  "
+      | combined 0
+      | stageMarker1014
+    stage stageMarker1014 on origin :
+      gbyAgg " groupBy  type INTEGER ( 19 ) $1 aggregates  type INTEGER ( 19 ) $K1 , type DECIMAL ( 19 2 ) )  $2 sum  "
+      | combined 0
+      | stageLast
+    stage stageLast on origin :
+      output
+      | sink
+      | stageStart
+  end
 
+  pipeline __subquery0004
+  begin
+    stage stageStart on origin :
+      start
+      | pulse once
+      | stageMarker1020
+    stage stageMarker1020 on origin :
+      call "revenue0 "
+      | aggreg " type DECIMAL ( 19 2 ) )  $2 max  "
+      | combined 0
+      | stageLast
+    stage stageLast on origin :
+      output
+      | sink
+      | stageStart
+  end
+
+  stage stageStart on origin :
+    start
+    | pulse once
+    | stageMarker1026
+  stage stageMarker1026 on all partitions :
+    scan rapids public Supplier
+    | stageMarker1029 broadcast
+  stage stageMarker1029 on all partitions :
+    call "revenue0 "
+    | abstractJoin "CROSS true  "
+    | stageMarker1032
+  stage stageMarker1032 on all partitions :
+    filter " type BOOLEAN  $1 $8 ==  $9 __subquery0004  ==  and  "
+    | project " type INTEGER ( 19 ) as s_suppkey $1 , type VARCHAR ( 0 ) as s_name $2 , type VARCHAR ( 0 ) as s_address $3 , type VARCHAR ( 0 ) as s_phone $5 , type DECIMAL ( 19 2 ) as total_revenue $9 "
+    | sort " type INTEGER ( 19 ) $1 ASC  "
+    | combined 0
+    | stageMarker1035
+  stage stageMarker1035 on all nodes :
+    sort " type INTEGER ( 19 ) $1 ASC  "
+    | combined 0
+    | stageMarker1038
+  stage stageMarker1038 on origin :
+    sort " type INTEGER ( 19 ) $1 ASC  "
+    | combined 0
+    | stageLast
+  stage stageLast on origin :
+    output
+    | sink
+    | stageStart
+end ;
 
 /*============================================================================*/
 /* end                                                                        */

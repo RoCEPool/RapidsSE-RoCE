@@ -91,6 +91,26 @@ void XF_Flatten_Flatten_pipeline::vFlatten(void)
 }
 
 /*----------------------------------------------------------------------------*/
+/* stop if folding a sub-query did not remove the reference to it             */
+/*----------------------------------------------------------------------------*/
+// Without this the flattening loops forever, holding the job's resources.
+// It happens when the query cannot be flattened into a single pipeline, e.g.
+// when a sub-query that aggregates (a view or WITH query) is both joined in
+// the FROM clause and read by a scalar sub-query, as in TPC-H Q15 written
+// with a view.
+static void vCheck_progress(Card_Term* p_term, Card_Term*& p_term_folded)
+{
+  if (p_term == p_term_folded) {
+    Error xError(EC_NOT_IMPLEMENTED,
+                 "the optimiser cannot flatten this combination of sub-queries"_Stz,
+                 (Stz*) __FILE__, __LINE__);
+    throw xError;
+  }
+
+  p_term_folded = p_term;
+}
+
+/*----------------------------------------------------------------------------*/
 /*                                                                            */
 /*----------------------------------------------------------------------------*/
 void XF_Flatten_Flatten_pipeline::vFlatten_recurse(Symbol* pSym_sqyNo_inner, i8 iDepth)
@@ -130,15 +150,22 @@ void XF_Flatten_Flatten_pipeline::vFlatten_recurse(Symbol* pSym_sqyNo_inner, i8 
 
   bool bFound;
 
+  // The sub-query reference that the last fold was for. Folding a sub-query
+  // replaces its reference, so finding it again means the fold did not
+  // apply to this query (see vCheck_progress).
+  Card_Term* p_term_folded = nullptr;
+
   do {
     m_pCI->vBeginEach_tail();
     if (!m_pCI->bEachOp_reverse_foldBreak(CK_o_WHERE, CK_PREDICATE))
       break;
 
-    auto bLambdaFn = [&bFound,this, iDepth](Card_Term* p_term)
+    auto bLambdaFn = [&bFound,&p_term_folded,this, iDepth](Card_Term* p_term)
     {
        if (! p_term->pSymbol()->bHasFacet(SF_SQY_NO))
          return C_CONTINUE_RECURSION;
+
+      vCheck_progress(p_term, p_term_folded);
 
       Symbol* pSym_sqyNo_nested = p_term->pSymbol();
       vFlatten_recurse(pSym_sqyNo_nested, iDepth + 1);
@@ -164,10 +191,12 @@ void XF_Flatten_Flatten_pipeline::vFlatten_recurse(Symbol* pSym_sqyNo_inner, i8 
     if (!m_pCI->bEachOp_reverse_foldBreak(CK_o_HAVING, CK_PREDICATE))
       break;
 
-    auto bLambdaFn = [&bFound,this,iDepth](Card_Term* p_term)
+    auto bLambdaFn = [&bFound,&p_term_folded,this,iDepth](Card_Term* p_term)
     {
       if (! p_term->pSymbol()->bHasFacet(SF_SQY_NO))
         return C_CONTINUE_RECURSION;
+
+      vCheck_progress(p_term, p_term_folded);
 
       Symbol* pSym_sqyNo_nested = p_term->pSymbol();
       vFlatten_recurse(pSym_sqyNo_nested, iDepth + 1);

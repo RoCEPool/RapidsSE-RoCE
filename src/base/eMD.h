@@ -17,6 +17,7 @@ enum eMD // MetaData Table
   /* 8 */ MD_SCHEMA,
   /* 9 */ MD_SESSIONS,
   /* 10 */ MD_TABLES,
+  /* 11 */ MD_VIEWS,
   /*   */ MD_ENUMS
 };
 

@@ -16,6 +16,14 @@
 #include "Procedure.hpp"
 #include "Api.hpp"
 #include "Job.hpp"
+#include "ViewCatalog.hpp"
+#include "PlanNode.hpp"
+#include "RootNode.hpp"
+#include "PlanDefinitionParser.hpp"
+#include "SqlPlanner.hpp"
+#include "NameValidator.hpp"
+#include "ExprValidator.hpp"
+#include "SetOpValidator.hpp"
 
 extern AttachMap*  gpAttachMap;
 
@@ -371,6 +379,10 @@ antlrcpp::Any CommandParser::visitStatementChoice(Parser::sqlParser::StatementCh
                                       { m_szProcName = "drop__table"_Stz;    return visitChildren(pCtx); }
   else if (pCtx->dropCmd() && pCtx->dropCmd()->dropIndexCmd())
                                       { m_szProcName = "drop__index"_Stz;    return visitChildren(pCtx); }
+  else if (pCtx->createCmd() && pCtx->createCmd()->createViewCmd())
+                                      { m_szProcName = "create__view"_Stz;   return visitChildren(pCtx); }
+  else if (pCtx->dropCmd() && pCtx->dropCmd()->dropViewCmd())
+                                      { m_szProcName = "drop__view"_Stz;     return visitChildren(pCtx); }
   else if (pCtx->loadCmd())           { m_szProcName = "load"_Stz;           return visitChildren(pCtx); }
   else if (pCtx->loadReplicatedCmd()) { m_szProcName = "loadReplicated"_Stz; return visitChildren(pCtx); }
   else if (pCtx->dloadCmd())          { m_szProcName = "dload"_Stz;          return visitChildren(pCtx); }
@@ -664,6 +676,14 @@ antlrcpp::Any CommandParser::visitCreateTableCmd(Parser::sqlParser::CreateTableC
   // First append a token for the table name
   s256 sTableName;
   vCleanString(pCtx->tableName()->identifier(), sTableName, EC_MAX_TABLE_NAME_LENGTH);
+
+  // A table cannot have the name of a view.
+  if (ViewCatalog::bExists(sTableName.szStz())) {
+    Parser::SemanticException::vThrow(EC_SEMANTIC_ERROR,
+                                      ": a view named \"%s\" already exists"_Stz,
+                                      sTableName.szStz());
+  }
+
   m_pArgValues->vAppendToken(sTableName, TN_STRING);
 
   // Now reconstitute a string for the rest of the statement.
@@ -686,6 +706,153 @@ antlrcpp::Any CommandParser::visitCreateTableCmd(Parser::sqlParser::CreateTableC
   m_pArgValues->vAppendVector(pInput->pInpTknVec());
   pInput->vUseEnd();
   delete pInput;
+
+  return nullptr; // No need to visit any further down the tree
+}
+
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -*/
+/* Add command parameters for a CREATE VIEW statement                         */
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -*/
+antlrcpp::Any CommandParser::visitCreateViewCmd(Parser::sqlParser::CreateViewCmdContext* pCtx)
+{
+  // The "create view" procedure takes three parameters:
+  //   the name of the view,
+  //   its column list as written, parentheses included, or "-" if it has none,
+  //   the text of its query.
+  // The column list and the query are encoded (see below).
+  //
+  // Everything that can be wrong with the statement is checked here, on the
+  // node that received it, so the procedure only has to record the view on
+  // every node.
+
+  s256 sViewName;
+  vCleanString(pCtx->name->identifier(), sViewName, EC_MAX_TABLE_NAME_LENGTH);
+
+  // The name must not already be in use.
+  if (AM::pTableFind(sViewName.szStz())) {
+    Parser::SemanticException::vThrow(EC_SEMANTIC_ERROR,
+                                      ": a table named \"%s\" already exists"_Stz,
+                                      sViewName.szStz());
+  }
+
+  if (!pCtx->replace && ViewCatalog::bExists(sViewName.szStz())) {
+    Parser::SemanticException::vThrow(EC_SEMANTIC_ERROR,
+                                      ": a view named \"%s\" already exists"_Stz,
+                                      sViewName.szStz());
+  }
+
+  // Get the column list and the query as they were written.
+  antlr4::CharStream* pInput = pCtx->start->getInputStream();
+
+  std::string sColumnList("-");
+  if (pCtx->colAliases()) {
+    antlr4::misc::Interval colInterval(pCtx->colAliases()->start->getStartIndex(),
+                                       pCtx->colAliases()->stop->getStopIndex());
+    sColumnList = pInput->getText(colInterval);
+  }
+
+  antlr4::misc::Interval queryInterval(pCtx->viewQuery->start->getStartIndex(),
+                                       pCtx->viewQuery->stop->getStopIndex());
+  std::string sQuery = pInput->getText(queryInterval);
+
+  // Both are kept in the "views" metadata table and must fit in a row of it.
+  s4K sLimit;
+  if ((i8) sColumnList.length() >= sLimit.nSpace() || (i8) sQuery.length() >= sLimit.nSpace()) {
+    Parser::SemanticException::vThrow(EC_SEMANTIC_ERROR,
+                                      ": the definition of view \"%s\" is too long (the limit is %lld characters)"_Stz,
+                                      sViewName.szStz(),
+                                      (i8) (sLimit.nSpace() - 1));
+  }
+
+  // Check that the view can be used: plan and validate a query that reads
+  // from it. The view is written as a WITH query here, which is also how it
+  // will be expanded when it is used.
+  std::string sCheck("WITH \"");
+  sCheck.append((const char*) sViewName.szStz()->azChar()).append("\" ");
+  if (pCtx->colAliases()) {
+    sCheck.append(sColumnList).append(" ");
+  }
+  sCheck.append("AS ( ").append(sQuery).append(" ) SELECT * FROM \"");
+  sCheck.append((const char*) sViewName.szStz()->azChar()).append("\";");
+
+  vCheckQuery((Stz*) sCheck.c_str(), sViewName.szStz());
+
+  // The column list and the query are free text: they can hold quotes, runs
+  // of spaces and line breaks, none of which survive being substituted into
+  // the text of the procedure's pipeline. So they are passed encoded, and the
+  // createView operator decodes them (see ViewCatalog::sEncodeText).
+  std::string sEncodedQuery = ViewCatalog::sEncodeText(sQuery);
+  std::string sEncodedColumnList("-");
+  if (pCtx->colAliases()) {
+    sEncodedColumnList = ViewCatalog::sEncodeText(sColumnList);
+  }
+
+  m_pArgValues->vAppendToken(sViewName.szStz(), TN_STRING);
+  m_pArgValues->vAppendToken((Stz*) sEncodedColumnList.c_str(), TN_STRING);
+  m_pArgValues->vAppendToken((Stz*) sEncodedQuery.c_str(), TN_STRING);
+
+  return nullptr; // No need to visit any further down the tree
+}
+
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -*/
+/* Plan and validate a query without running it. Used to check a view.        */
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -*/
+void CommandParser::vCheckQuery(Stz* szQuery, Stz* szViewName)
+{
+  const Parser::PlanNode* pGraphTemplate = Parser::PlanDefinitionParser::pGraphTemplate();
+  RASSERT(pGraphTemplate);
+
+  Parser::SqlPlanner* pPlanner = new Parser::SqlPlanner();
+  Parser::PlanNode*   pPlanRoot = nullptr;
+
+  s2K sError;
+  bool bFailed = false;
+
+  try {
+    pPlanner->vSetViewBeingDefined(szViewName);
+    pPlanRoot = pPlanner->plan(szQuery, pGraphTemplate);
+
+    Parser::RootNode* pRootNode = Parser::_pRootNode(pPlanRoot);
+    Parser::NameValidator::vValidateNames(pRootNode);
+    Parser::NameValidator::vCheckDisabledFunctionality(pRootNode);
+    Parser::ExprValidator::vValidateExprs(pRootNode);
+    Parser::SetOpValidator::vValidateSetOps(pRootNode);
+
+  } catch (Parser::SqlException& e) {
+    sError.vCopy(e.szError(), sError.nFreeBytes() - 1);
+    bFailed = true;
+  }
+
+  if (pPlanRoot) {
+    delete pPlanRoot;
+  }
+  delete pPlanner;
+
+  if (bFailed) {
+    Parser::SemanticException::vThrow(EC_SEMANTIC_ERROR,
+                                      ": the definition of view \"%s\" is not valid: %s"_Stz,
+                                      szViewName,
+                                      sError.szStz());
+  }
+}
+
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -*/
+/* Add command parameters for a DROP VIEW statement                           */
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -*/
+antlrcpp::Any CommandParser::visitDropViewCmd(Parser::sqlParser::DropViewCmdContext* pCtx)
+{
+  s256 sViewName;
+  vCleanString(pCtx->name->identifier(), sViewName, EC_MAX_TABLE_NAME_LENGTH);
+
+  // DROP VIEW IF EXISTS of a view that does not exist still runs the
+  // procedure, which then finds nothing to remove.
+  if (!pCtx->ifExists && !ViewCatalog::bExists(sViewName.szStz())) {
+    Parser::SemanticException::vThrow(EC_SEMANTIC_ERROR,
+                                      ": there is no view named \"%s\""_Stz,
+                                      sViewName.szStz());
+  }
+
+  m_pArgValues->vAppendToken(sViewName.szStz(), TN_STRING);
 
   return nullptr; // No need to visit any further down the tree
 }

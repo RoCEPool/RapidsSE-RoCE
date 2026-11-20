@@ -115,6 +115,7 @@
   start::md_queries
   start::md_schema
   start::md_sessions
+  start::md_views
 
   // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
   // Metadata table inserts

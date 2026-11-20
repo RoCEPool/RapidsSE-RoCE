@@ -13,6 +13,7 @@
 
 #include "LogicUnit.hpp"
 #include "Error.hpp"
+#include "Card.hpp"
 
 /*----------------------------------------------------------------------------*/
 /* add primitives                                                             */
@@ -141,6 +142,19 @@ void Step::vOptimiserWeave(void)
     
   Stz* szOptStmt = m_pLogicUnit->m_xpOptimiser->szWeave();
   UNUSED(szOptStmt);
+
+  // With <optimiser_trace>, show the pipeline that the optimiser produced.
+  if (szOptStmt && AM::JOB::bHasTag(C_OPTIMISER_TRACE)) {
+    const char* azStmt = (const char*) szOptStmt->azChar();
+    i8 nLen = (i8) strlen(azStmt);
+    vTrace("Optimised pipeline:\n"_Stz);
+    for (i8 i_Pos = 0; i_Pos < nLen; i_Pos += 1000) {
+      s2K sChunk;
+      sChunk.vCopy((Stz*) (azStmt + i_Pos), (nLen - i_Pos < 1000) ? nLen - i_Pos : 1000);
+      vTrace("%s"_Stz, sChunk.szStz());
+    }
+    vTrace("\nEnd of optimised pipeline\n"_Stz);
+  }
 
   //m_pJob->vCmdText(szOptStmt);
 

@@ -1,2 +1,3 @@
 regLoop.test
 timestampCompare.test
+subqueryFold.test

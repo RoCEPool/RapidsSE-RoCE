@@ -67,6 +67,12 @@ namespace STORE
       i8         m_i_fold;
       Card_Expr* m_pExpr_fold;
       Card*      m_pCopy_inner;
+
+      // The <fold> made by the fold in progress. A deck can hold other folds
+      // (e.g. those copied in with a sub-query that itself had a sub-query
+      // folded into it), so this is how the fold in progress is found.
+      // Not cleared by vClearRegisters().
+      Card*      m_p_fold_current;
     } Flat;
 
     struct {
@@ -187,6 +193,7 @@ namespace STORE
 
     bool bEachOp(void);
     bool bEachOp(eCK eOp);
+    bool bEachOp_fold_current(void);
     bool bEachOp_break(eCK eOp, eCK eBreak= CK_o_FOLD);
     bool bEachOp(eCK eOp, eCK eSub);
     bool bEachOp(eCK eOp, eCK eSub, Stz* szSubFacet);
@@ -252,6 +259,7 @@ namespace STORE
     void vSnap_arriving(Card_Emit* p_emit, Card_StreamKey * pStreamKey);
     void vSnapIf_arriving(Card_Emit* p_emit, Card_StreamKey * pStreamKey);
     void vSnapIf_arriving(bool bSub_emit=true);
+    Card_Emit* pCalled_emit(Card* p_call);
     void vSnapIf_arriving_till(eCK eTill);
 
     i8   i_Target(void);

@@ -28,6 +28,7 @@
 #include "CmdLineArgs.hpp"
 #include "AttachMap.hpp"
 #include "MetaDataTables.hpp"
+#include "ViewCatalog.hpp"
 
 extern CmdLineArgs  gxCmdLineArgs;
 extern AttachMap*   gpAttachMap;
@@ -51,6 +52,9 @@ void Step::vAddSteps_MetaDataTable(void)
 
   vAddStep("MetaDataTable[].insertSchema"_Stz,  &Step::vMetaDataTableSchemaInsert);
   vAddStep("MetaDataTable[].deleteSchema"_Stz,  &Step::vMetaDataTableSchemaDelete);
+
+  vAddStep("MetaDataTable[].insertView"_Stz,  &Step::vMetaDataTableViewInsert);
+  vAddStep("MetaDataTable[].deleteView"_Stz,  &Step::vMetaDataTableViewDelete);
 
   vAddStep("MetaDataTable[].init"_Stz,  &Step::vMetaDataTableInit);
   vAddStep("MetaDataTable[].setAM"_Stz,  &Step::vMetaDataTableSetAM);
@@ -754,6 +758,75 @@ void Step::vMetaDataTableSchemaDelete(void)
     return;
   }
   MetaDataTables::vDeleteRowFromTable(pTable, 0, szCatalogNm);
+
+  EXIT();
+}
+
+/*----------------------------------------------------------------------------*/
+/* MetaDataTable[].insertView -- ( viewDef viewCols viewNm -- )               */
+/* Records a view on this node, replacing any view of the same name.          */
+/* viewCols is the view's column list, or "-" if it has none. viewCols and    */
+/* viewDef are encoded (see ViewCatalog::sEncodeText).                        */
+/*----------------------------------------------------------------------------*/
+void Step::vMetaDataTableViewInsert(void)
+{
+  ENTRY();
+
+  s256 sViewNm;
+  m_oDataStack.vPopStr(sViewNm, __func__);
+
+  s16KB sEncodedCols;
+  m_oDataStack.vPopStr(sEncodedCols, __func__);
+
+  s16KB sEncodedDef;
+  m_oDataStack.vPopStr(sEncodedDef, __func__);
+
+  // Only CommandParser::visitCreateViewCmd produces these parameters. Anything
+  // else (the createView operator used by hand, say) is not a view definition.
+  if (sEncodedDef.szStz()->azChar()[0] != 'V') {
+    EXIT();
+    return;
+  }
+
+  std::string colsText;
+  if (!sEncodedCols.szStz()->bSame("-"_Stz)) {
+    colsText = ViewCatalog::sDecodeText((const char*) sEncodedCols.szStz()->azChar());
+  }
+  std::string defText = ViewCatalog::sDecodeText((const char*) sEncodedDef.szStz()->azChar());
+
+  s4K sViewCols((Stz*) colsText.c_str());
+  s4K sViewDef((Stz*) defText.c_str());
+
+  // CREATE OR REPLACE VIEW: remove the definition being replaced.
+  s256 sStoredNm;
+  s4K  sOldCols;
+  s4K  sOldDef;
+  if (ViewCatalog::bFind(sViewNm.szStz(), sStoredNm, sOldCols, sOldDef)) {
+    ViewCatalog::vDelete(sStoredNm.szStz());
+  }
+
+  ViewCatalog::vInsert(sViewNm.szStz(), sViewCols.szStz(), sViewDef.szStz());
+
+  EXIT();
+}
+
+/*----------------------------------------------------------------------------*/
+/* MetaDataTable[].deleteView -- ( viewNm -- )                                */
+/* Removes a view from this node.                                             */
+/*----------------------------------------------------------------------------*/
+void Step::vMetaDataTableViewDelete(void)
+{
+  ENTRY();
+
+  s256 sViewNm;
+  m_oDataStack.vPopStr(sViewNm, __func__);
+
+  s256 sStoredNm;
+  s4K  sCols;
+  s4K  sDef;
+  if (ViewCatalog::bFind(sViewNm.szStz(), sStoredNm, sCols, sDef)) {
+    ViewCatalog::vDelete(sStoredNm.szStz());
+  }
 
   EXIT();
 }

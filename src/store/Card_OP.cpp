@@ -338,7 +338,6 @@ void Card_OP::vRestate_emit(CardIter* pCI)
 
       // -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
     case CK_o_AGGREG:
-    case CK_o_CROSSJOIN:
     case CK_o_GBYAGG:
     case CK_o_ORDAGG:
       pCI->E.p_emit = pCI->E.p_Op->pSub_emit(C_NOT_NULL);
@@ -371,6 +370,10 @@ void Card_OP::vRestate_emit(CardIter* pCI)
       if (pCI->E.p_Op->pSub_keyExists() || pCI->E.p_Op->pSub_keyNotExists() )
         goto L_o_KEYEXISTS;
       [[clang::fallthrough]];
+    // A <crossJoin> is woven as an indexJoin (see Weaver), which emits the
+    // arriving columns followed by the columns of its table, as an
+    // <indexJoin> does.
+    case CK_o_CROSSJOIN:
     case CK_o_INDEXJOIN:
     case CK_o_INDEXSCAN:
     case CK_o_SCAN:
