@@ -40,6 +40,10 @@ namespace Parser
     QueryNodeList*  m_pExprStack;
     QueryNodeList*  m_pSelectItems;
     QueryNodeList*  m_pOrderItems;
+
+    // State for expanding the views that a statement refers to. See vExpandViews().
+    void*           m_pViewExpansion;
+
     Footer m_xFooter;
 
     // A context for saving/restoring important member variables
@@ -62,6 +66,17 @@ namespace Parser
     SqlPlanner(void);
     
     PlanNode* plan(Stz* pStr, const PlanNode* pTemplate);
+
+    // Call before plan() when checking the definition of a view. See vExpandViews().
+    void vSetViewBeingDefined(Stz* szViewNm);
+
+  private:
+    // Views (CREATE VIEW). A statement that refers to a view is planned as if
+    // the view had been written as a WITH query at the start of the statement.
+    void vExpandViews(antlr4::tree::ParseTree* pOutermostQuery);
+    void vExpandViewsIn(antlr4::tree::ParseTree* pTree, const std::vector<std::string>& shadowedNames);
+
+  public:
 
     ~SqlPlanner(void) noexcept;
   

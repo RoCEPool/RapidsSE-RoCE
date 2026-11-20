@@ -1,0 +1,28 @@
+/*============================================================================*/
+/* md_views.sen -- Define md__views table                                     */
+/*============================================================================*/
+
+" md_views.sen" .verbose
+
+: start::md_views
+
+  // C_TDEF_VIEWS
+  //
+  // One row per view. columnList is empty, or the parenthesised column list
+  // given in CREATE VIEW. definition is the text of the view's query.
+  STD_BOOTFORK_TAG
+  "
+  define metadata table views (
+    catalogName   VARCHAR NOT NULL ,
+    schemaName    VARCHAR NOT NULL ,
+    viewName      VARCHAR NOT NULL ,
+    columnList    VARCHAR NOT NULL ,
+    definition    VARCHAR NOT NULL
+  ) < metaData > = 1 ;
+  "
+  nullptr api::forkChild  api:executeCheck
+;
+
+/*============================================================================*/
+/* end                                                                        */
+/*============================================================================*/

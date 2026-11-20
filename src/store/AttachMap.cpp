@@ -120,6 +120,7 @@ AttachMap::AttachMap(bool bNoFree)
   m_mdSchema        = nullptr;
   m_mdSessions      = nullptr;
   m_mdTables        = nullptr;
+  m_mdViews         = nullptr;
 
   // Ugly fix for a memory allocation chicken and egg problem.
   // The m_xSysArgs is allocated automatically when AttachMap is created. This occurs

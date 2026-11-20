@@ -50,6 +50,68 @@
 )
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+// BCD helpers: exact arithmetic in 128 bits, then fit into the 56-bit
+// mantissa by dropping fractional digits (rounding half away from zero)
+// only when the exact result does not fit.
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+// the scale is an 8-bit signed field
+#define C_BCD_SCALE_MAX_SYNTH 127
+
+static inline __int128 xBcd_dropDigit(__int128 x)
+{
+  __int128 q = x / 10;
+  int r = (int)(x % 10);
+  if (r >= 5) q++;
+  else if (r <= -5) q--;
+  return q;
+}
+
+// fit mantissa x at scale *piScale into a Bcd; returns false on overflow
+static inline bool bBcd_fit(__int128 x, i8 iScale, union Bcd_T* pResult)
+{
+  while ((x > C_BCD_MAX || x < C_BCD_MIN) && iScale > 0) {
+    x = xBcd_dropDigit(x);
+    iScale--;
+  }
+  if (x > C_BCD_MAX || x < C_BCD_MIN)
+    return false;
+  pResult->m_iMantissa = (i8)x;
+  pResult->m_iScale = iScale;
+  return true;
+}
+
+// a + iSign * b, exact; returns false on overflow
+static inline bool bBcd_add(union Bcd_T a, union Bcd_T b, int iSign, union Bcd_T* pResult)
+{
+  __int128 xA = a.m_iMantissa;
+  __int128 xB = b.m_iMantissa;
+  i8 iScaleA = a.m_iScale;
+  i8 iScaleB = b.m_iScale;
+
+  // keep the scale gap small enough for 128 bits (|mantissa| < 2^55)
+  while (iScaleA > iScaleB + 20) { xA = xBcd_dropDigit(xA); iScaleA--; }
+  while (iScaleB > iScaleA + 20) { xB = xBcd_dropDigit(xB); iScaleB--; }
+
+  while (iScaleA < iScaleB) { xA *= 10; iScaleA++; }
+  while (iScaleB < iScaleA) { xB *= 10; iScaleB++; }
+
+  return bBcd_fit(iSign > 0 ? xA + xB : xA - xB, iScaleA, pResult);
+}
+
+// a * b, exact (scale s1 + s2); returns false on overflow
+static inline bool bBcd_mul(union Bcd_T a, union Bcd_T b, union Bcd_T* pResult)
+{
+  i8 iScale = a.m_iScale + b.m_iScale;
+  __int128 x = (__int128)a.m_iMantissa * (__int128)b.m_iMantissa;
+  while (iScale > C_BCD_SCALE_MAX_SYNTH) {
+    x = xBcd_dropDigit(x);
+    iScale--;
+  }
+  return bBcd_fit(x, iScale, pResult);
+}
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 // Overflow detection i8
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
@@ -96,35 +158,17 @@
   {                                                                        \
     bcdArg2.m_iAsI8 = *(--paW);                                            \
     bcdArg1.m_iAsI8 = *(--paW);                                            \
-                                                                           \
     if (eErrorCode != EC_NONE ||                                           \
-      bcdArg1.m_iAsI8 == C_DATUM_NULL ||                                   \
-      bcdArg2.m_iAsI8 == C_DATUM_NULL) {                                   \
+        bcdArg1.m_iAsI8 == C_DATUM_NULL ||                                 \
+        bcdArg2.m_iAsI8 == C_DATUM_NULL) {                                 \
+      *paW++ = C_DATUM_NULL;                                               \
+    }                                                                      \
+    else if (! bBcd_add(bcdArg1, bcdArg2, 1, &bcdArg3)) {                  \
+      eErrorCode = EC_ARITHMETIC_OVERFLOW;                                 \
       *paW++ = C_DATUM_NULL;                                               \
     }                                                                      \
     else {                                                                 \
-                                                                           \
-        if (bcdArg1.m_iScale != bcdArg2.m_iScale) {                        \
-          *paW++ = bcdArg1.m_iAsI8;                                        \
-          *paW++ = bcdArg2.m_iAsI8;                                        \
-          _RESCALE_BCD_MAX_OF_TWO(eErrorCode)                              \
-          bcdArg2.m_iAsI8 = *(--paW);                                      \
-          bcdArg1.m_iAsI8 = *(--paW);                                      \
-        }                                                                  \
-                                                                           \
-        if(eErrorCode != EC_NONE) {                                        \
-          *paW++ = C_DATUM_NULL;                                           \
-        }                                                                  \
-        else {                                                             \
-        eErrorCode = _OF_BCDADD;                                           \
-        if(eErrorCode != EC_NONE) {                                        \
-          *paW++ = C_DATUM_NULL;                                           \
-        }                                                                  \
-        else {                                                             \
-          bcdArg1.m_iMantissa = bcdArg1.m_iMantissa + bcdArg2.m_iMantissa; \
-          *paW++ = bcdArg1.m_iAsI8;                                        \
-        }                                                                  \
-      }                                                                    \
+      *paW++ = bcdArg3.m_iAsI8;                                            \
     }                                                                      \
   }
 
@@ -170,38 +214,23 @@
    }                                                                     \
  }
 
-#define _MUL_BCDBCD(eErrorCode)                                          \
-{                                                                        \
-  bcdArg2.m_iAsI8 = *(--paW);                                            \
-  bcdArg1.m_iAsI8 = *(--paW);                                            \
-  if (eErrorCode != EC_NONE ||                                           \
-      bcdArg1.m_iAsI8 == C_DATUM_NULL ||                                 \
-      bcdArg2.m_iAsI8 == C_DATUM_NULL) {                                 \
-    *paW++ = C_DATUM_NULL;                                               \
-  }                                                                      \
-  else {                                                                 \
-    eErrorCode = _OF_BCDMUL;                                             \
-    if (eErrorCode != EC_NONE) {                                         \
-      *paW++ = C_DATUM_NULL;                                             \
-    }                                                                    \
-    else {                                                               \
-      i8 iScaleNew = bcdArg1.m_iScale > bcdArg2.m_iScale ? bcdArg1.m_iScale : bcdArg2.m_iScale;  \
-      i8 iResult = bcdArg1.m_iMantissa * bcdArg2.m_iMantissa;            \
-      iScale = bcdArg1.m_iScale + bcdArg2.m_iScale;                      \
-      if (iScale != iScaleNew) {                                         \
-        bcdArg1.m_iMantissa = iResult / aDynamicT->m_iaPow10[iScale - iScaleNew - 1]; \
-        bcdArg1.m_iScale = iScaleNew + 1;                                \
-        *paW++ = bcdArg1.m_iAsI8;                                        \
-        _ROUND_BCD(eErrorCode)                                           \
-      }                                                                  \
-      else {                                                             \
-        bcdArg1.m_iMantissa = iResult;                                   \
-        bcdArg1.m_iScale = iScaleNew;                                    \
-       *paW++ = bcdArg1.m_iAsI8;                                         \
-       }                                                                 \
-    }                                                                    \
-  }                                                                      \
-}
+#define _MUL_BCDBCD(eErrorCode)                                            \
+  {                                                                        \
+    bcdArg2.m_iAsI8 = *(--paW);                                            \
+    bcdArg1.m_iAsI8 = *(--paW);                                            \
+    if (eErrorCode != EC_NONE ||                                           \
+        bcdArg1.m_iAsI8 == C_DATUM_NULL ||                                 \
+        bcdArg2.m_iAsI8 == C_DATUM_NULL) {                                 \
+      *paW++ = C_DATUM_NULL;                                               \
+    }                                                                      \
+    else if (! bBcd_mul(bcdArg1, bcdArg2, &bcdArg3)) {                     \
+      eErrorCode = EC_ARITHMETIC_OVERFLOW;                                 \
+      *paW++ = C_DATUM_NULL;                                               \
+    }                                                                      \
+    else {                                                                 \
+      *paW++ = bcdArg3.m_iAsI8;                                            \
+    }                                                                      \
+  }
 
 #define _NEG_BCD(eErrorCode)                                               \
   {                                                                        \
@@ -225,28 +254,12 @@
         bcdArg2.m_iAsI8 == C_DATUM_NULL) {                                 \
       *paW++ = C_DATUM_NULL;                                               \
     }                                                                      \
+    else if (! bBcd_add(bcdArg1, bcdArg2, -1, &bcdArg3)) {                 \
+      eErrorCode = EC_ARITHMETIC_OVERFLOW;                                 \
+      *paW++ = C_DATUM_NULL;                                               \
+    }                                                                      \
     else {                                                                 \
-        if (bcdArg1.m_iScale != bcdArg2.m_iScale) {                        \
-          *paW++ = bcdArg1.m_iAsI8;                                        \
-          *paW++ = bcdArg2.m_iAsI8;                                       \
-          _RESCALE_BCD_MAX_OF_TWO(eErrorCode)                              \
-          bcdArg2.m_iAsI8 = *(--paW);                                      \
-          bcdArg1.m_iAsI8 = *(--paW);                                      \
-        }                                                                  \
-                                                                           \
-        if(eErrorCode != EC_NONE) {                                        \
-          *paW++ = C_DATUM_NULL;                                           \
-        }                                                                  \
-        else {                                                             \
-        eErrorCode = _OF_BCDSUB;                                           \
-        if(eErrorCode != EC_NONE) {                                        \
-          *paW++ = C_DATUM_NULL;                                           \
-        }                                                                  \
-        else {                                                             \
-          bcdArg1.m_iMantissa = bcdArg1.m_iMantissa - bcdArg2.m_iMantissa; \
-          *paW++ = bcdArg1.m_iAsI8;                                        \
-        }                                                                  \
-      }                                                                    \
+      *paW++ = bcdArg3.m_iAsI8;                                            \
     }                                                                      \
   }
 
@@ -263,30 +276,14 @@
     else if (bcdArg2.m_iAsI8 == C_DATUM_NULL) {                            \
       *paW++ = bcdArg1.m_iAsI8;                                            \
     }                                                                      \
+    else if (! bBcd_add(bcdArg1, bcdArg2, 1, &bcdArg3)) {                  \
+      eErrorCode = EC_ARITHMETIC_OVERFLOW;                                 \
+      *paW++ = C_DATUM_NULL;                                               \
+    }                                                                      \
     else {                                                                 \
-       if (bcdArg1.m_iScale != bcdArg2.m_iScale) {                         \
-          *paW++ = bcdArg1.m_iAsI8;                                        \
-          *paW++ = bcdArg2.m_iAsI8;                                        \
-          _RESCALE_BCD_MAX_OF_TWO(eErrorCode)                              \
-          bcdArg2.m_iAsI8 = *(--paW);                                      \
-          bcdArg1.m_iAsI8 = *(--paW);                                      \
-        }                                                                  \
-        if(eErrorCode != EC_NONE) {                                        \
-        *paW++ = C_DATUM_NULL;                                             \
-      }                                                                    \
-      else {                                                               \
-        eErrorCode = _OF_BCDADD;                                           \
-        if(eErrorCode != EC_NONE) {                                        \
-          *paW++ = C_DATUM_NULL;                                           \
-        }                                                                  \
-        else {                                                             \
-          bcdArg1.m_iMantissa = bcdArg1.m_iMantissa + bcdArg2.m_iMantissa; \
-          *paW++ = bcdArg1.m_iAsI8;                                        \
-        }                                                                  \
-      }                                                                    \
+      *paW++ = bcdArg3.m_iAsI8;                                            \
     }                                                                      \
   }
-
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 // DATE
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -1919,7 +1916,7 @@
       xTsp2.m_uMinute    = xDateTime.tm_min;                               \
       xTsp2.m_uSecond    = xDateTime.tm_sec;                               \
       xTsp2.m_uMicro     = iMicroSecs;                                     \
-      xTsp2.m_uLocal     = _C_TSP_LOCAL;                                   \
+      xTsp2.m_uLocal     = _C_TSP_UTC;                                     \
                                                                            \
       *paW++ = xTsp2.m_iAsI8;                                              \
   }                                                                        \

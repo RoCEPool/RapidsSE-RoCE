@@ -1044,6 +1044,9 @@ void Engine::vMetaDataTables(void)
 
   pStreamDef = AM::pStreamDefFind(C_TDEF_TABLES);
   gpAttachMap->m_pMetaDataTables->vStreamDef(MD_TABLES,pStreamDef);
+
+  pStreamDef = AM::pStreamDefFind(C_TDEF_VIEWS);
+  gpAttachMap->m_pMetaDataTables->vStreamDef(MD_VIEWS,pStreamDef);
 }
 
 /*----------------------------------------------------------------------------*/

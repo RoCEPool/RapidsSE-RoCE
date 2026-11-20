@@ -3,3 +3,4 @@
 //schema.test   // Not supported with the ANTLR command parser
 table.test
 //tenant.test   // Not supported with the ANTLR command parser
+view.test

@@ -155,7 +155,7 @@ bpaCmd            : BPA type=(POOL | REGIONS | OBJECTS | ALL)?;
 // C
 compactIdxCmd     : (COMPACTIDX | (COMPACT INDEX)) tableName indexName ;
 countCmd          : COUNT tableName ;
-createCmd         : createTableCmd | createIndexCmd ;
+createCmd         : createTableCmd | createIndexCmd | createViewCmd ;
 createTableCmd    : CREATE /*reference = REFERENCE?*/ TABLE /*(IF NOT EXISTS)?*/ /*ref = tableReference*/ tableName
                     (
                         tableDefinition
@@ -167,6 +167,12 @@ createIndexCmd    : CREATE UNIQUE? INDEX /*(INDEX | KEY) (IF NOT EXISTS)?*/ idxN
                     /*( USING method = indexMethod )?*/
                     '(' expr (',' expr)* ')'
                     ;
+// A view is a named query. The optional column list renames the columns of
+// the query, exactly as it does for a WITH query.
+createViewCmd     : CREATE (OR replace = REPLACE)? VIEW name = tableName
+                    colAliases?
+                    AS viewQuery = query
+                    ;
 
 // D
 deleteCmd         : (WITH withQuery (',' withQuery)*)?
@@ -175,12 +181,13 @@ deleteCmd         : (WITH withQuery (',' withQuery)*)?
 disconnectCmd     : DISCONNECT | BYE | EXIT_TOKEN ;   // TODO: add an optional session ID
 dloadCmd          : DLOAD tableName PATHS stringLiteral+  ( loadOption (','? loadOption)* )? ;
 docolCmd          : DOCOL identifier ;
-dropCmd           : dropTableCmd | dropIndexCmd ;
+dropCmd           : dropTableCmd | dropIndexCmd | dropViewCmd ;
 dropTableCmd      : DROP TABLE /*(IF EXISTS)?*/ name = tableName /*tableReference*/ ;
 dropIndexCmd      : DROP INDEX /*(IF EXISTS)?*/ (
                       (idxName = indexName ON tblName = tableName /*tableReference*/)
                     | (tblName = tableName idxName = indexName)
                     );
+dropViewCmd       : DROP VIEW (IF ifExists = EXISTS)? name = tableName ;
 
 // E
 emptyCmd          : ;
@@ -631,12 +638,12 @@ nonReservedWord   :
                   | OBJECTS | OFF | OFFSET | ORIGIN
                   | PARTITIONS | PATHS | PIPELINE | PLACING | POOL | PRETTY
                   | QUARTER| QUARTERS
-                  | RECORD_ENDS | RECORD_TERMINATOR | REFERENCE | REGIONS | REPLICATED | ROWSIZE
+                  | RECORD_ENDS | RECORD_TERMINATOR | REFERENCE | REGIONS | REPLACE | REPLICATED | ROWSIZE
                   | S_ONLY | SCHEMA | SEC | SECONDS | SKIPLIST | SLEEP | SPACE | STAGE | STATS
                   | STATISTICS | STATUS | SUBSTR | SZIDX | SZTBL
                   | TABLESIZE | TEXT | THREADS | TOP | TRACE | TRACKMEMORY | TREE | TRUNCATE | TYPE | TYPEOF
                   | UNLOAD
-                  | VALUE
+                  | VALUE | VIEW
                   | WEEK | WEEKS | WITH_NAMES | WITH_TYPES
                   | XOR
                   | YEARS
@@ -815,6 +822,7 @@ RECORD_TERMINATOR     : R E C O R D '_' T E R M I N A T O R;
 RECURSIVE             : R E C U R S I V E;
 REFERENCE             : R E F E R E N C E;
 REGIONS               : R E G I O N S;
+REPLACE               : R E P L A C E;
 REPLICATED            : R E P L I C A T E D;
 RIGHT                 : R I G H T;
 ROW                   : R O W;
@@ -867,6 +875,7 @@ VALUE                 : V A L U E;  // Note: SQL says this should be a reserved 
 VALUES                : V A L U E S ;
 VARBINARY             : V A R B I N A R Y;
 VARCHAR               : V A R C H A R;
+VIEW                  : V I E W;
 VARYING               : V A R Y I N G;
 WEEK                  : W E E K;
 WEEKS                 : W E E K S;

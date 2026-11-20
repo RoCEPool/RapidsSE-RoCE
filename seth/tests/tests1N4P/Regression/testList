@@ -1,2 +1,5 @@
 regLoop.test
 cyclicJoinPredicate.test
+decimalArithmetic.test
+timestampCompare.test
+subqueryFold.test

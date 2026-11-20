@@ -5,6 +5,7 @@
 #include "Card_Index.hpp"
 
 #include "Table.hpp"
+#include "Index.hpp"
 #include "Card_IndexNm.hpp"
 #include "Card_IdxColList.hpp"
 #include "Card_IdxCol.hpp"
@@ -101,6 +102,9 @@ Card_Index* Card_Index::pDerive(Index* pIndex)
 
   Card_Index* p_index = new Card_Index;
   IndexDef* pIndexDef = pIndex->pIndexDef();
+
+  // rows per key, used by join ordering to cost probes of this index
+  p_index->pSymbol()->Y_vSet(P_FanOut, pIndex->nEstKeyFanOut());
 
   Card_IndexNm* p_indexNm = new Card_IndexNm;
   p_indexNm->SYM(SF_IDX_NM,pIndex->szIndexNm());

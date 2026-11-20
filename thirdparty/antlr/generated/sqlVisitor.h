@@ -92,6 +92,8 @@ public:
 
     virtual std::any visitCreateIndexCmd(sqlParser::CreateIndexCmdContext *context) = 0;
 
+    virtual std::any visitCreateViewCmd(sqlParser::CreateViewCmdContext *context) = 0;
+
     virtual std::any visitDeleteCmd(sqlParser::DeleteCmdContext *context) = 0;
 
     virtual std::any visitDisconnectCmd(sqlParser::DisconnectCmdContext *context) = 0;
@@ -105,6 +107,8 @@ public:
     virtual std::any visitDropTableCmd(sqlParser::DropTableCmdContext *context) = 0;
 
     virtual std::any visitDropIndexCmd(sqlParser::DropIndexCmdContext *context) = 0;
+
+    virtual std::any visitDropViewCmd(sqlParser::DropViewCmdContext *context) = 0;
 
     virtual std::any visitEmptyCmd(sqlParser::EmptyCmdContext *context) = 0;
 

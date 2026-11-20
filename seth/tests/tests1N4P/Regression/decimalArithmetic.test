@@ -1,0 +1,67 @@
+/*----------------------------------------------------------------------------*/
+/* decimalArithmetic.test -- scale and range of DECIMAL arithmetic            */
+/*----------------------------------------------------------------------------*/
+
+// A product keeps the sum of the operand scales (SQL standard), so it is
+// exact. A result is only rounded (half away from zero) when the exact value
+// does not fit the 56-bit mantissa, by dropping fractional digits; it is an
+// overflow error only when the integer part does not fit.
+// The expected values were computed with Python's decimal module.
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  Setup: a five-row table to select from
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+create table ${testName2}_region (
+  R_REGIONKEY INTEGER      NOT NULL,
+  R_NAME      VARCHAR(25)  NOT NULL,
+  R_COMMENT   VARCHAR(152) NOT NULL
+);
+success
+
+load ${testName2}_region "../DATA/TPCH/region.tbl" <field_delimiter> = "|";
+success
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  Products keep s1 + s2 fractional digits
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+select 0.06 * 0.01 from ${testName2}_region where r_regionkey = 0;
+rows:
+  (0.0006)
+
+select 24710.35 * 0.04 from ${testName2}_region where r_regionkey = 0;
+rows:
+  (988.4140)
+
+select 12345.6789 * -0.5 from ${testName2}_region where r_regionkey = 0;
+rows:
+  (-6172.83945)
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  Exact results too wide for the mantissa lose fractional digits only
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+select 99999999999.99 * 1.0001 * 1.0001 from ${testName2}_region where r_regionkey = 0;
+rows:
+  (100020000999.99000)
+
+// the dropped digits are zeros here, so the result does not depend on the
+// order in which partitions are added
+select sum(30000000000.100000) from ${testName2}_region;
+rows:
+  (150000000000.50000)
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  An integer part that cannot fit is an overflow
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+select 99999999999999.99 * 99999999999999.99 from ${testName2}_region where r_regionkey = 0;
+failure contains: 'overflow'
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  Cleanup
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+drop table ${testName2}_region;
+success

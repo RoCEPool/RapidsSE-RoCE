@@ -1,0 +1,64 @@
+--------------------------------------------------------------------------------
+-- fanoutJoin.test : join ordering avoids a join that multiplies the stream
+--------------------------------------------------------------------------------
+-- A and B have 2000 rows each and their column K has only two values, so a
+-- join on A.K = B.K returns 2 million rows. L links A and B one to one
+-- (L.L_A = A.ID, L.L_B = B.ID). Joining A to B first explodes the stream
+-- (at TPC-H SF1 the same pattern in Q5 exhausted the node's heap), so the
+-- optimiser must join through L and check A.K = B.K on rows already matched.
+-- Data: DATA/JoinOrder/fanout_ab.tbl (ID, ID % 2, ID % 7) for ID 1..2000 and
+-- DATA/JoinOrder/fanout_link.tbl (ID, ID) for ID 1..2000.
+--------------------------------------------------------------------------------
+trackmemory force;
+success
+
+create table ${testName2}_A(ID integer, K integer, M integer);
+success
+create table ${testName2}_B(ID integer, K integer, M integer);
+success
+create table ${testName2}_L(L_A integer, L_B integer);
+success
+
+create index A_ID on ${testName2}_A (ID);
+success
+create index A_K  on ${testName2}_A (K);
+success
+create index B_ID on ${testName2}_B (ID);
+success
+create index B_K  on ${testName2}_B (K);
+success
+create index L_A  on ${testName2}_L (L_A);
+success
+create index L_B  on ${testName2}_L (L_B);
+success
+
+load ${testName2}_A "../DATA/JoinOrder/fanout_ab.tbl" <field_delimiter> = "|";
+success
+load ${testName2}_B "../DATA/JoinOrder/fanout_ab.tbl" <field_delimiter> = "|";
+success
+load ${testName2}_L "../DATA/JoinOrder/fanout_link.tbl" <field_delimiter> = "|";
+success
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  The join order must not start with A and B joined on K. (Previously the
+//  optimiser did, and that order also lost the L.L_B = B.ID predicate,
+//  returning 2,000,000 rows.)
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+// every link row matches (A.ID = B.ID, so A.K = B.K)
+select count(*)
+  from ${testName2}_A, ${testName2}_B, ${testName2}_L
+ where ${testName2}_A.K = ${testName2}_B.K
+   and ${testName2}_L.L_A = ${testName2}_A.ID
+   and ${testName2}_L.L_B = ${testName2}_B.ID;
+rows: (2000)
+
+drop table ${testName2}_A;
+success
+drop table ${testName2}_B;
+success
+drop table ${testName2}_L;
+success
+
+MemoryLeaks;
+rows: 0
