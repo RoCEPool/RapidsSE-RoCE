@@ -1,0 +1,112 @@
+/*----------------------------------------------------------------------------*/
+/* timestampCompare.test -- DATE values converted to TIMESTAMP at run time    */
+/*----------------------------------------------------------------------------*/
+
+// A TIMESTAMP made at run time from a DATE (CAST, DATE - INTERVAL, or
+// TIMESTAMP - INTERVAL) used to carry a different flag bit from TIMESTAMP
+// literals and stored values, so the same instant compared as unequal:
+// "=" found nothing and "<=" dropped the boundary rows (TPC-H Q1).
+// The expected counts were computed from DATA/TPCH/lineitem1k.csv
+// independently of RapidsSE; 1995-11-16 is the ship date of 4 rows.
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  Setup
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+create table ${testName2}_lineitem (
+  L_ORDERKEY      INTEGER       NOT NULL,
+  L_PARTKEY       INTEGER       NOT NULL,
+  L_SUPPKEY       INTEGER       NOT NULL,
+  L_LINENUMBER    INTEGER       NOT NULL,
+  L_QUANTITY      DECIMAL(15,2) NOT NULL,
+  L_EXTENDEDPRICE DECIMAL(15,2) NOT NULL,
+  L_DISCOUNT      DECIMAL(15,2) NOT NULL,
+  L_TAX           DECIMAL(15,2) NOT NULL,
+  L_RETURNFLAG    CHAR(1)       NOT NULL,
+  L_LINESTATUS    CHAR(1)       NOT NULL,
+  L_SHIPDATE      DATE          NOT NULL,
+  L_COMMITDATE    DATE          NOT NULL,
+  L_RECEIPTDATE   DATE          NOT NULL,
+  L_SHIPINSTRUCT  CHAR(25)      NOT NULL,
+  L_SHIPMODE      CHAR(10)      NOT NULL,
+  L_COMMENT       VARCHAR(44)   NOT NULL
+);
+success
+
+load ${testName2}_lineitem "../DATA/TPCH/lineitem1k.csv";
+success
+
+select count(*) from ${testName2}_lineitem;
+rows:
+  (1000)
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  DATE column against a DATE literal (control)
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+select count(*) from ${testName2}_lineitem where l_shipdate <= date '1995-11-16';
+rows:
+  (622)
+
+select count(*) from ${testName2}_lineitem where l_shipdate < date '1995-11-16';
+rows:
+  (618)
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  DATE column against DATE - INTERVAL (TPC-H Q1 form)
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+select count(*) from ${testName2}_lineitem
+  where l_shipdate <= date '1995-11-26' - interval '10' day (3);
+rows:
+  (622)
+
+select count(*) from ${testName2}_lineitem
+  where l_shipdate >= date '1995-11-26' - interval '10' day;
+rows:
+  (382)
+
+select count(*) from ${testName2}_lineitem
+  where l_shipdate = date '1995-11-26' - interval '10' day;
+rows:
+  (4)
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  CAST(DATE column AS TIMESTAMP) against a TIMESTAMP literal
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+select count(*) from ${testName2}_lineitem
+  where cast(l_shipdate as timestamp) = timestamp '1995-11-16 00:00:00';
+rows:
+  (4)
+
+select count(*) from ${testName2}_lineitem
+  where l_shipdate <= timestamp '1995-11-16 00:00:00';
+rows:
+  (622)
+
+select count(*) from ${testName2}_lineitem
+  where l_shipdate > timestamp '1995-11-16 00:00:00';
+rows:
+  (378)
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  TIMESTAMP - INTERVAL computed at run time
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+select count(*) from ${testName2}_lineitem
+  where cast(l_shipdate as timestamp) - interval '1' day = timestamp '1995-11-15 00:00:00';
+rows:
+  (4)
+
+select count(*) from ${testName2}_lineitem
+  where l_shipdate + interval '1' day = date '1995-11-17';
+rows:
+  (4)
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  Cleanup
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+drop table ${testName2}_lineitem;
+success
