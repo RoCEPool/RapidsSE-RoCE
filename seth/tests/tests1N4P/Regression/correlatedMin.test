@@ -1,0 +1,150 @@
+/*----------------------------------------------------------------------------*/
+/* correlatedMin.test -- correlated "= (select min(...))" sub-query           */
+/*----------------------------------------------------------------------------*/
+
+// The supplier(s) with the lowest account balance of each nation: the shape
+// of TPC-H Q2. This failed with "EC_NONE; none" for two reasons:
+//  - removing a comparison already applied by an index bound could leave an
+//    AND with no children (conjunctions are n-ary and may have one child);
+//  - the correlation parameter "%1 $1" was matched to the arriving columns by
+//    symbol, which fails when the sub-query is a bare aggregate (no
+//    <project>) and its key column is emitted as a key reference.
+// The expected rows were computed from DATA/TPCH/supplier_2k.tbl and
+// DATA/TPCH/nation.tbl independently of RapidsSE.
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  Setup
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+create table ${testName2}_supplier (
+  S_SUPPKEY   INTEGER       NOT NULL,
+  S_NAME      VARCHAR(25)   NOT NULL,
+  S_ADDRESS   VARCHAR(40)   NOT NULL,
+  S_NATIONKEY INTEGER       NOT NULL,
+  S_PHONE     VARCHAR(15)   NOT NULL,
+  S_ACCTBAL   DECIMAL(15,2) NOT NULL,
+  S_COMMENT   VARCHAR(101)  NOT NULL
+);
+success
+create index ${testName2}_IxS_SUPPKEY on ${testName2}_supplier (S_SUPPKEY);
+affected: 0
+create index ${testName2}_IxS_NATIONKEY on ${testName2}_supplier (S_NATIONKEY);
+affected: 0
+load ${testName2}_supplier "../DATA/TPCH/supplier_2k.tbl" <field_delimiter> = "|";
+success
+
+create table ${testName2}_nation (
+  N_NATIONKEY INTEGER      NOT NULL,
+  N_NAME      VARCHAR(25)  NOT NULL,
+  N_REGIONKEY INTEGER      NOT NULL,
+  N_COMMENT   VARCHAR(152) NOT NULL
+);
+success
+create index ${testName2}_IxN_NATIONKEY on ${testName2}_nation (N_NATIONKEY);
+affected: 0
+load ${testName2}_nation "../DATA/TPCH/nation.tbl" <field_delimiter> = "|";
+success
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  Outer column first in the correlation predicate (as in TPC-H Q2)
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+select n_name, s_name, s_acctbal
+  from ${testName2}_supplier, ${testName2}_nation
+ where s_nationkey = n_nationkey
+   and s_acctbal = (select min(s2.s_acctbal)
+                      from ${testName2}_supplier s2
+                     where n_nationkey = s2.s_nationkey)
+ order by n_name, s_name;
+ordered rows:
+  ('ALGERIA', 'Supplier#000001859', -937.11)
+  ('ARGENTINA', 'Supplier#000000873', -951.70)
+  ('BRAZIL', 'Supplier#000001654', -988.37)
+  ('CANADA', 'Supplier#000000157', -963.19)
+  ('CHINA', 'Supplier#000001763', -882.19)
+  ('EGYPT', 'Supplier#000000022', -966.20)
+  ('ETHIOPIA', 'Supplier#000000132', -812.17)
+  ('FRANCE', 'Supplier#000001845', -971.99)
+  ('GERMANY', 'Supplier#000001664', -954.24)
+  ('INDIA', 'Supplier#000000124', -941.38)
+  ('INDONESIA', 'Supplier#000001260', -550.54)
+  ('IRAN', 'Supplier#000001634', -760.03)
+  ('IRAQ', 'Supplier#000001093', -935.13)
+  ('JAPAN', 'Supplier#000001870', -989.05)
+  ('JORDAN', 'Supplier#000000169', -927.50)
+  ('KENYA', 'Supplier#000001553', -450.51)
+  ('MOROCCO', 'Supplier#000001443', -787.56)
+  ('MOZAMBIQUE', 'Supplier#000001519', -888.32)
+  ('PERU', 'Supplier#000001764', -990.13)
+  ('ROMANIA', 'Supplier#000001008', -858.86)
+  ('RUSSIA', 'Supplier#000000065', -963.79)
+  ('SAUDI ARABIA', 'Supplier#000001907', -987.45)
+  ('UNITED KINGDOM', 'Supplier#000001482', -746.35)
+  ('UNITED STATES', 'Supplier#000001458', -980.21)
+  ('VIETNAM', 'Supplier#000000453', -905.25)
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  Inner column first
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+select n_name, s_name, s_acctbal
+  from ${testName2}_supplier, ${testName2}_nation
+ where s_nationkey = n_nationkey
+   and s_acctbal = (select min(s2.s_acctbal)
+                      from ${testName2}_supplier s2
+                     where s2.s_nationkey = n_nationkey)
+ order by n_name, s_name;
+ordered rows:
+  ('ALGERIA', 'Supplier#000001859', -937.11)
+  ('ARGENTINA', 'Supplier#000000873', -951.70)
+  ('BRAZIL', 'Supplier#000001654', -988.37)
+  ('CANADA', 'Supplier#000000157', -963.19)
+  ('CHINA', 'Supplier#000001763', -882.19)
+  ('EGYPT', 'Supplier#000000022', -966.20)
+  ('ETHIOPIA', 'Supplier#000000132', -812.17)
+  ('FRANCE', 'Supplier#000001845', -971.99)
+  ('GERMANY', 'Supplier#000001664', -954.24)
+  ('INDIA', 'Supplier#000000124', -941.38)
+  ('INDONESIA', 'Supplier#000001260', -550.54)
+  ('IRAN', 'Supplier#000001634', -760.03)
+  ('IRAQ', 'Supplier#000001093', -935.13)
+  ('JAPAN', 'Supplier#000001870', -989.05)
+  ('JORDAN', 'Supplier#000000169', -927.50)
+  ('KENYA', 'Supplier#000001553', -450.51)
+  ('MOROCCO', 'Supplier#000001443', -787.56)
+  ('MOZAMBIQUE', 'Supplier#000001519', -888.32)
+  ('PERU', 'Supplier#000001764', -990.13)
+  ('ROMANIA', 'Supplier#000001008', -858.86)
+  ('RUSSIA', 'Supplier#000000065', -963.79)
+  ('SAUDI ARABIA', 'Supplier#000001907', -987.45)
+  ('UNITED KINGDOM', 'Supplier#000001482', -746.35)
+  ('UNITED STATES', 'Supplier#000001458', -980.21)
+  ('VIETNAM', 'Supplier#000000453', -905.25)
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  With a filter on the outer query
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+select n_name, s_name, s_acctbal
+  from ${testName2}_supplier, ${testName2}_nation
+ where s_nationkey = n_nationkey
+   and n_regionkey = 3
+   and s_acctbal = (select min(s2.s_acctbal)
+                      from ${testName2}_supplier s2
+                     where n_nationkey = s2.s_nationkey)
+ order by n_name, s_name;
+ordered rows:
+  ('FRANCE', 'Supplier#000001845', -971.99)
+  ('GERMANY', 'Supplier#000001664', -954.24)
+  ('ROMANIA', 'Supplier#000001008', -858.86)
+  ('RUSSIA', 'Supplier#000000065', -963.79)
+  ('UNITED KINGDOM', 'Supplier#000001482', -746.35)
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  Cleanup
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+drop table ${testName2}_supplier;
+success
+drop table ${testName2}_nation;
+success

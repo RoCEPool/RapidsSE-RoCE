@@ -389,6 +389,11 @@ bool Card_Predicate::bCullMarked_rlnConj(Card_CONJ* p_conj, Stz* szWithMark)
 
   RASSERT (CK_ANDCONJ == eCard_conj || CK_ORCONJ == eCard_conj || CK_NOTCONJ == eCard_conj);
 
+  // only comparisons ANDed with the rest of the predicate are implied by an
+  // index bound; removing one under OR or NOT would change the predicate
+  if (CK_ANDCONJ != eCard_conj)
+    return false;
+
   i8 nChildren = p_conj->nChildCards();
   for (i8 i_Child = 0; i_Child < nChildren; i_Child++) {
     Card_CONJ* pCard_conj_child = static_cast<Card_CONJ*>(p_conj->pGetChild(i_Child));
@@ -709,26 +714,33 @@ void Card_Predicate::vRemove_rlnConj(Card_RlnConj *p_rlnConj)
 {
   _precondition_(_ADDRESS_,_MAGIC_,CN_CARD,_FOOTER_);
 
-  //vDump(__func__,"BEFORE"_Stz);
-  //p_rlnConj->vDump(__func__,"REMOVE"_Stz);
-  Card* p_rlnConj_parent = pFindParentRecursive(p_rlnConj);
+  Card* p_parent = pFindParentRecursive(p_rlnConj);
 
-  p_rlnConj_parent->vRemoveChild(p_rlnConj);
+  p_parent->vRemoveChild(p_rlnConj);
 
-  if (CK_ANDCONJ == p_rlnConj_parent->eCard() ||
-      CK_ORCONJ  == p_rlnConj_parent->eCard()) {
+  // Tidy up upwards. Conjunctions can have any number of children (and can
+  // have just one), so a parent left with no child is removed as well, and
+  // one left with a single child is replaced by that child.
+  while (p_parent != this &&
+         (CK_ANDCONJ == p_parent->eCard() || CK_ORCONJ == p_parent->eCard())) {
 
-    if (1 == p_rlnConj_parent->nChildCards()) {
-      Card* p_rlnConj_sibling = p_rlnConj_parent->pPopChild();
-      Card* p_rlnConj_grand = this->pFindParentRecursive((p_rlnConj_parent));
-      p_rlnConj_grand->vReplaceChild(p_rlnConj_parent,p_rlnConj_sibling);
-      delete p_rlnConj_parent;
+    Card* p_grand = this->pFindParentRecursive(p_parent);
+
+    if (0 == p_parent->nChildCards()) {
+      p_grand->vRemoveChild(p_parent);
+      delete p_parent;
+      p_parent = p_grand;
+      continue;
     }
 
-    //vDump(__func__,"AFTER"_Stz);
-    vDebugPoint();
-  }
+    if (1 == p_parent->nChildCards()) {
+      Card* p_sibling = p_parent->pPopChild();
+      p_grand->vReplaceChild(p_parent, p_sibling);
+      delete p_parent;
+    }
 
+    break;
+  }
 }
 
 /*----------------------------------------------------------------------------*/
