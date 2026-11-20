@@ -57,7 +57,7 @@ rows:
 /pipelineName = "AGGS_COUNT_05"
 select count(ucolvc) * max(cole9) from ${testName2}_table9 where ucolvc <> 'kkk' or ucolvc <> 'ttt';
 rows:
-  (74615.00)
+  (74615.0000)
 
 
 // Source file: ../queries/aggs/count/rcount10.sql
