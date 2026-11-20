@@ -1,2 +1,4 @@
 regLoop.test
 decimalArithmetic.test
+timestampCompare.test
+subqueryFold.test

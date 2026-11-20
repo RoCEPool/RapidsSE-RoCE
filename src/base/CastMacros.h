@@ -536,7 +536,7 @@
       xTsp1.m_uMinute    = 0;                                              \
       xTsp1.m_uSecond    = 0;                                              \
       xTsp1.m_uMicro     = 0;                                              \
-      xTsp1.m_uLocal     = _C_TSP_LOCAL;                                   \
+      xTsp1.m_uLocal     = _C_TSP_UTC;                                     \
       *paW++ = xTsp1.m_iAsI8;                                              \
     }                                                                      \
   }
@@ -562,7 +562,7 @@
       xTsp1.m_uSecond = xTme1.m_uSecond;                                   \
       xTsp1.m_uMinute = xTme1.m_uMinute;                                   \
       xTsp1.m_uHour = xTme1.m_uHour;                                       \
-      xTsp1.m_uLocal = _C_TSP_LOCAL;                                       \
+      xTsp1.m_uLocal = _C_TSP_UTC;                                        \
                                                                            \
       *paW++ = xTsp1.m_iAsI8;                                              \
     }                                                                      \

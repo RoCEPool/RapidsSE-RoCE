@@ -1916,7 +1916,7 @@ static inline bool bBcd_mul(union Bcd_T a, union Bcd_T b, union Bcd_T* pResult)
       xTsp2.m_uMinute    = xDateTime.tm_min;                               \
       xTsp2.m_uSecond    = xDateTime.tm_sec;                               \
       xTsp2.m_uMicro     = iMicroSecs;                                     \
-      xTsp2.m_uLocal     = _C_TSP_LOCAL;                                   \
+      xTsp2.m_uLocal     = _C_TSP_UTC;                                     \
                                                                            \
       *paW++ = xTsp2.m_iAsI8;                                              \
   }                                                                        \

@@ -41,9 +41,11 @@ statementChoice   ::= (
                         countStmt
                       | createIndexStmt
                       | createTableStmt
+                      | createViewStmt
                       | dloadStmt
                       | dropIndexStmt
                       | dropTableStmt
+                      | dropViewStmt
                       | explainStmt
                       | loadStmt
                       | logStmt
@@ -250,6 +252,8 @@ createTableStmt   ::= 'CREATE' 'TABLE' tableName
                       ( 'PARTITION' 'BY' '(' identifierList ')' /* | 'REPLICATED' */ )?
 columnDefinition  ::= columnName dataType ('NOT' 'NULL')?
 
+createViewStmt    ::= 'CREATE' ( 'OR' 'REPLACE' )? 'VIEW' tableName colAliases? 'AS' selectQuery
+
 dloadStmt         ::= 'DLOAD' tableName
                       'PATHS' ( '"' filePath '"' )+
                       ( loadOption '=' '"' loadValue '"' )*
@@ -257,6 +261,8 @@ dloadStmt         ::= 'DLOAD' tableName
 dropIndexStmt     ::= 'DROP' 'INDEX' tableName indexName
 
 dropTableStmt     ::= 'DROP' 'TABLE' tableName
+
+dropViewStmt      ::= 'DROP' 'VIEW' ( 'IF' 'EXISTS' )? tableName
 
 loadStmt          ::= 'LOAD' tableName '"' filePath '"'
                        ( loadOption '=' '"' loadValue '"' )*

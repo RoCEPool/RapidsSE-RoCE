@@ -5,6 +5,7 @@
 #include "Card_CrossJoin.hpp"
 #include "CardIter.hpp"
 #include "Board.hpp"
+#include "Error.hpp"
 #include "XF_Optimise_Early_projection.hpp"
 
 /*----------------------------------------------------------------------------*/
@@ -50,6 +51,19 @@ void Card_CrossJoin::vMorph_table_To_crossJoin(STORE::CardIter *pCI)
     //Board::vChoose_index_For_crossJoin(pCI);
 
   pCI->E.p_indexList = pCI->E.p_table->pSub_indexList();
+
+  // A <crossJoin> is woven as an indexJoin over one of the table's indexes
+  // (see Weaver), so the table must have one. As for an <indexJoin>, report
+  // the missing index to the user (refer: EC_MISSING_JOIN_INDEX in the
+  // user guide).
+  if (! pCI->E.p_indexList || ! pCI->E.p_indexList->nChildCards(CK_INDEX)) {
+    s256 sErrorMsg;
+    sErrorMsg.vSprint("No index for table(%c) %s"_Stz,
+                      pCI->E.p_table->pSymbol()->cTblSyn(),
+                      pCI->E.p_table->pSub_tableNm()->szFacet(SF_TBL_NM));
+    Error xError(EC_MISSING_JOIN_INDEX,sErrorMsg,(Stz*)__FILE__,__LINE__);
+    throw xError;
+  }
 
 //  pCI->vNewMember(CK_o_CROSSJOIN);
 //  pCI->G.p_table->vRelegate_table(pCI, pCI->G.p_crossJoin);

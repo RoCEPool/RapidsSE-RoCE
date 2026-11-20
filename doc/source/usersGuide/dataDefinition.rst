@@ -196,6 +196,84 @@ or alter column constraints.
 
 
 .. index::
+   single: RapidsSE; views
+   single: DDL; views
+   single: views; overview
+
+.. _views:
+
+Views
+-----
+A view is a query with a name. Once a view has been created with the
+``CREATE VIEW`` command its name can be used in the ``FROM`` clause of a query
+wherever the name of a table can be used. A view holds no data of its own: each
+query that uses a view reads the tables that the view is defined on.
+
+.. code:: sql
+
+   CREATE VIEW revenue0 (supplier_no, total_revenue) AS
+     SELECT l_suppkey, SUM(l_extendedprice * (1 - l_discount))
+       FROM lineitem
+      WHERE l_shipdate >= DATE '1996-01-01'
+        AND l_shipdate <  DATE '1996-01-01' + INTERVAL '3' MONTH
+      GROUP BY l_suppkey
+   ;
+
+   SELECT s_suppkey, s_name, s_address, s_phone, total_revenue
+     FROM supplier, revenue0
+    WHERE s_suppkey = supplier_no
+      AND total_revenue = ( SELECT MAX(total_revenue) FROM revenue0 )
+    ORDER BY s_suppkey
+   ;
+
+   DROP VIEW revenue0;
+
+RapidsSE compiles a query that uses a view exactly as if the view had been
+written as a ``WITH`` query at the start of that query. The query above is
+therefore compiled as:
+
+.. code:: sql
+
+   WITH revenue0 (supplier_no, total_revenue) AS (
+     SELECT l_suppkey, SUM(l_extendedprice * (1 - l_discount))
+       FROM lineitem
+      WHERE l_shipdate >= DATE '1996-01-01'
+        AND l_shipdate <  DATE '1996-01-01' + INTERVAL '3' MONTH
+      GROUP BY l_suppkey
+   )
+   SELECT s_suppkey, s_name, s_address, s_phone, total_revenue
+     FROM supplier, revenue0
+    WHERE s_suppkey = supplier_no
+      AND total_revenue = ( SELECT MAX(total_revenue) FROM revenue0 )
+    ORDER BY s_suppkey
+   ;
+
+The following rules apply to views:
+
+* A view and a table cannot have the same name. View names, like table names,
+  are not case sensitive.
+* The query of a view is checked when the view is created. A view cannot be
+  created on a table or column that does not exist.
+* A view may be defined on other views, but not on itself, either directly or
+  through other views.
+* A name that a query defines with ``WITH`` refers to that ``WITH`` query, even
+  if a view of the same name exists.
+* A view is used by its name alone. It cannot be qualified with a catalog or
+  schema name.
+* Dropping a table does not drop the views defined on it. Using such a view
+  afterwards is an error.
+* The definition of each view can be seen in the ``views`` metadata table.
+* ``CREATE VIEW`` and ``DROP VIEW`` are available to JDBC clients and SE Shell.
+  They are not available from the SE Prompt.
+
+.. seealso::
+
+  :ref:`createViewCmd`
+
+  :ref:`dropViewCmd`
+
+
+.. index::
    single: RapidsSE; indexes
    single: DDL; indexes
    single: indexes; overview

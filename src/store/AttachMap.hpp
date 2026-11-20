@@ -122,6 +122,7 @@ namespace STORE
     Table*        m_mdSchema;
     Table*        m_mdSessions;
     Table*        m_mdTables;
+    Table*        m_mdViews;
 
     // must be last
     Footer m_xFooter;
