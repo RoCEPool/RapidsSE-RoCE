@@ -7,6 +7,10 @@
     "fix": "PR #9",
     "source_files": "src/store/Card_Predicate.cpp, src/store/Card_Term.cpp"
   },
+  "16": {
+    "fix": "PR #20",
+    "source_files": "src/store/sqlCompiler/shadowNodes/expressions/operators/aggregates/AggregateExpr.cpp, src/store/sqlCompiler/shadowNodes/expressions/operators/aggregates/AggregateExpr.hpp, src/store/sqlCompiler/shadowNodes/planObjects/ProjectOp.cpp, src/store/sqlCompiler/stages/translator/AggregateSplit.cpp, src/store/sqlCompiler/stages/translator/AggregateSplit.hpp, src/store/stepsSet/Steps_SqlCompiler.cpp"
+  },
   "18": {
     "fix": "PR #18",
     "source_files": "src/store/XF_FLATTEN.cpp"

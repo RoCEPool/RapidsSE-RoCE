@@ -4,6 +4,7 @@
 
 #include "BASE.h"
 #include "ProjectOp.hpp"
+#include "AggregateOp.hpp"
 
 #include "PlanNode.hpp"
 #include "QueryNode.hpp"
@@ -721,9 +722,26 @@ b1 ProjectOp::bIsPartitionable(QueryNode* pNode, PlanNode* pRootNode)
     return false;
   }
 
-  // Default implementation: ask the child.
   ASSERT(pNode->nChildren() > 0);
   QueryNode* pChild = _pQueryNode(pNode->pFirstChild());
+
+  // An aggregation over the rows of another aggregation (the upper half of a
+  // DISTINCT aggregate, see AggregateSplit::vSplitDistinctAggregates) needs the
+  // merged groups of the lower one: it cannot run per partition.
+  // "Aggregates" here means: after the columns of the child are substituted.
+  // SUM(x) + COUNT(x) over an AggregateOp that projects SUM(x) and COUNT(x) is
+  // a plain projection of its columns.
+  if (AggregateOp::bIsOfType(pChild)) {
+    QueryNode* pOrdProjCols = ProjectOp::pOrdinalProjectedColumns(pNode, pRootNode);
+    ASSERT(ProjectedColumns::bIsOfType(pOrdProjCols));
+    b1 bAggregates = ProjectedColumns::bContainsAnAggregate(pOrdProjCols);
+    delete pOrdProjCols;
+    if (bAggregates) {
+      return false;
+    }
+  }
+
+  // Default implementation: ask the child.
   return PlanObject::bIsPartitionable(pChild, pRootNode);
 }
 

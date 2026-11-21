@@ -11,3 +11,4 @@ inWithJoin.test
 partitionedLookup.test
 existsCorrelated.test
 subqueryOrderBy.test
+aggregateDistinct.test
