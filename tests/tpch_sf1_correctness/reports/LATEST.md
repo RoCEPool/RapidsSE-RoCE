@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Commit | `46c05bf9e505bd0d268ed53bd991e63798c30720 + uncommitted changes in src/` |
+| Commit | `46c05bf9e505bd0d268ed53bd991e63798c30720 + the source change of pull request #19` |
 | Run | 2026-11-21 21:37:38 JST, 1 round(s) |
 | Engine | RapidsSE `bin/rapidsse`, 1 node, 2 partitions, 2 threads |
 | Data | TPC-H scale factor 1, dbgen 2.17.0 (dbgen/ of this repository), checksums pinned in `reference/dataset.json` |
@@ -12,7 +12,7 @@
 
 | Query | Parser | Binder | Logical plan | Optimizer | Physical plan | Runtime | Result | Time ms | Failure class | Final status | Fixed by |
 |---|---|---|---|---|---|---|---|---:|---|---|---|
-| Q01 | PASS | PASS | PASS | PASS | PASS | PASS | PASS | 6657 |  | **PASS** |  |
+| Q01 | PASS | PASS | PASS | PASS | PASS | PASS | PASS | 6657 |  | **PASS** | PR #19 |
 | Q02 | PASS | PASS | PASS | PASS | PASS | PASS | PASS | 7585 |  | **PASS** | PR #9 |
 | Q03 | PASS | PASS | PASS | NOT_RUN | NOT_RUN | PASS | PASS | 3325 |  | **PASS** |  |
 | Q04 | PASS | PASS | PASS | PASS | PASS | PASS | PASS | 2022 |  | **PASS** |  |
