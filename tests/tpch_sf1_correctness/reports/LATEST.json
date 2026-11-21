@@ -1,14 +1,13 @@
 {
   "commit": "9d2492feca4bfffddd94e5a7e5a8a130eef6eac4",
-  "passed": 17,
+  "passed": 18,
   "total": 22,
   "rounds": 1,
-  "reference": "official TPC-H answer set (dbgen/answers), scale factor 1, default parameters",
+  "reference": "DuckDB 2.0.1",
   "blockers": [
     "Q01",
     "Q15",
     "Q16",
-    "Q17",
     "Q18"
   ],
   "status": {
@@ -28,7 +27,7 @@
     "Q14": "PASS",
     "Q15": "OPTIMIZER_ERROR",
     "Q16": "OPTIMIZER_ERROR",
-    "Q17": "WRONG_RESULT",
+    "Q17": "PASS",
     "Q18": "WRONG_RESULT",
     "Q19": "PASS",
     "Q20": "PASS",

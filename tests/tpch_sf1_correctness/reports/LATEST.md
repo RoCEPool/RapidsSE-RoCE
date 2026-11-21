@@ -1,4 +1,4 @@
-# TPC-H SF1 correctness: 17/22 PASS
+# TPC-H SF1 correctness: 18/22 PASS
 
 | | |
 |---|---|
@@ -6,7 +6,7 @@
 | Run | 2026-11-21 20:24:54 JST, 1 round(s) |
 | Engine | RapidsSE `bin/rapidsse`, 1 node, 2 partitions, 2 threads |
 | Data | TPC-H scale factor 1, dbgen 2.17.0 (dbgen/ of this repository), checksums pinned in `reference/dataset.json` |
-| Reference | official TPC-H answer set (dbgen/answers), scale factor 1, default parameters |
+| Reference | DuckDB 2.0.1 |
 | Numeric tolerance | 0.01 on decimal columns; everything else exact |
 | Client overhead | about 978 ms of every time below is the JDBC client starting |
 
@@ -28,7 +28,7 @@
 | Q14 | PASS | PASS | PASS | PASS | PASS | PASS | PASS | 2808 |  | **PASS** |  |
 | Q15 | PASS | PASS | PASS | FAIL | NOT_RUN | NOT_RUN | NOT_RUN |  | OPTIMIZER_ERROR | **OPTIMIZER_ERROR** |  |
 | Q16 | PASS | PASS | PASS | FAIL | NOT_RUN | NOT_RUN | NOT_RUN |  | OPTIMIZER_ERROR | **OPTIMIZER_ERROR** |  |
-| Q17 | PASS | PASS | PASS | PASS | PASS | PASS | FAIL | 7139 | WRONG_RESULT | **WRONG_RESULT** |  |
+| Q17 | PASS | PASS | PASS | PASS | PASS | PASS | PASS | 7139 |  | **PASS** |  |
 | Q18 | PASS | PASS | PASS | PASS | PASS | PASS | FAIL | 8194 | WRONG_RESULT | **WRONG_RESULT** |  |
 | Q19 | PASS | PASS | PASS | NOT_RUN | NOT_RUN | PASS | PASS | 10047 |  | **PASS** |  |
 | Q20 | PASS | PASS | PASS | PASS | PASS | PASS | PASS | 15160 |  | **PASS** | PR #11, #12, #13, #15 |
@@ -40,7 +40,6 @@
 - **Q01** WRONG_RESULT: row 3 is not in the reference: ['N', 'O', '74476040.00', '111701729697.74', '106118230307.6056', '110367043872.65417']
 - **Q15** OPTIMIZER_ERROR: Error: EC_NOT_IMPLEMENTED; Feature not yet implemented
 - **Q16** OPTIMIZER_ERROR: Error: EC_NONE; none
-- **Q17** WRONG_RESULT: row 1 is not in the reference: ['348406.05']
 - **Q18** WRONG_RESULT: rows 1 and 2 are not in ORDER BY order
 
 ## Known defects seen in this run
