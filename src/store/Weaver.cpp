@@ -638,7 +638,10 @@ void Weaver::vArg_keyExists(String* psOpArgs, Card_KeyExists* pCard_KeyExists)
   _precondition_(_ADDRESS_, _MAGIC_, CN_WEAVER, _FOOTER_);
 
   Card_TableNm* p_tableNm = pCard_KeyExists->pSub_tableNm();
-  Card_IndexNm* p_indexNm = pCard_KeyExists->pSub_indexNm();
+  // name the index that was chosen for the lookup, as vArg_indexJoin does;
+  // the first index of the table is not always the one
+  Card_Index*   p_index_chosen = _pCard_Index(pCard_KeyExists->pFindPpyRecursive(P_ChosenIndex, CK_INDEX));
+  Card_IndexNm* p_indexNm = p_index_chosen ? p_index_chosen->pSub_indexNm() : pCard_KeyExists->pSub_indexNm();
 
   s4K sRpnExpr;
   pCard_KeyExists->vRpn_keyExists(m_pCI, sRpnExpr, pCard_KeyExists);
@@ -664,7 +667,10 @@ void Weaver::vArg_keyNotExists(String* psOpArgs, Card_KeyNotExists* pCard_KeyNot
   _precondition_(_ADDRESS_, _MAGIC_, CN_WEAVER, _FOOTER_);
 
   Card_TableNm* p_tableNm = pCard_KeyNotExists->pSub_tableNm();
-  Card_IndexNm* p_indexNm = pCard_KeyNotExists->pSub_indexNm();
+  // name the index that was chosen for the lookup, as vArg_indexJoin does;
+  // the first index of the table is not always the one
+  Card_Index*   p_index_chosen = _pCard_Index(pCard_KeyNotExists->pFindPpyRecursive(P_ChosenIndex, CK_INDEX));
+  Card_IndexNm* p_indexNm = p_index_chosen ? p_index_chosen->pSub_indexNm() : pCard_KeyNotExists->pSub_indexNm();
 
   s4K sRpnExpr;
   pCard_KeyNotExists->vRpn_keyNotExists(m_pCI, sRpnExpr, pCard_KeyNotExists);
