@@ -1,0 +1,158 @@
+/*----------------------------------------------------------------------------*/
+/* inSubquery.test -- "x IN (query)" and SELECT DISTINCT                       */
+/*----------------------------------------------------------------------------*/
+
+// "x IN (query)" must give each outer row once, however many rows of the
+// query match it.
+//  - A query over one table is run as a key lookup on that table. Join
+//    ordering did not see the <keyExists> marker (it is on the <from>, the
+//    table list looked on the <table>) and could put the looked-up table
+//    first, which ended in a segfault.
+//  - A query that joins tables, or that has an IN sub-query of its own, is
+//    joined to the outer query and returned one row per match (84 instead
+//    of 21 below). Such a query is now planned as SELECT DISTINCT.
+// SELECT DISTINCT itself was not implemented; it is planned as GROUP BY over
+// the select list.
+// The expected rows were computed from DATA/TPCH/part_100.tbl,
+// partsupp_2k.tbl and supplier_2k.tbl independently of RapidsSE.
+
+create table ${testName2}_part (
+  P_PARTKEY     INTEGER       NOT NULL,
+  P_NAME        VARCHAR(55)   NOT NULL,
+  P_MFGR        VARCHAR(25)   NOT NULL,
+  P_BRAND       VARCHAR(10)   NOT NULL,
+  P_TYPE        VARCHAR(25)   NOT NULL,
+  P_SIZE        INTEGER       NOT NULL,
+  P_CONTAINER   VARCHAR(10)   NOT NULL,
+  P_RETAILPRICE DECIMAL(15,2) NOT NULL,
+  P_COMMENT     VARCHAR(23)   NOT NULL
+);
+success
+create index ${testName2}_IxP_PARTKEY on ${testName2}_part (P_PARTKEY);
+affected: 0
+load ${testName2}_part "../DATA/TPCH/part_100.tbl" <field_delimiter> = "|";
+success
+
+create table ${testName2}_partsupp (
+  PS_PARTKEY    INTEGER       NOT NULL,
+  PS_SUPPKEY    INTEGER       NOT NULL,
+  PS_AVAILQTY   INTEGER       NOT NULL,
+  PS_SUPPLYCOST DECIMAL(15,2) NOT NULL,
+  PS_COMMENT    VARCHAR(199)  NOT NULL
+);
+success
+create index ${testName2}_IxPS_PARTKEY on ${testName2}_partsupp (PS_PARTKEY);
+affected: 0
+create index ${testName2}_IxPS_SUPPKEY on ${testName2}_partsupp (PS_SUPPKEY);
+affected: 0
+load ${testName2}_partsupp "../DATA/TPCH/partsupp_2k.tbl" <field_delimiter> = "|";
+success
+
+create table ${testName2}_supplier (
+  S_SUPPKEY   INTEGER       NOT NULL,
+  S_NAME      VARCHAR(25)   NOT NULL,
+  S_ADDRESS   VARCHAR(40)   NOT NULL,
+  S_NATIONKEY INTEGER       NOT NULL,
+  S_PHONE     VARCHAR(15)   NOT NULL,
+  S_ACCTBAL   DECIMAL(15,2) NOT NULL,
+  S_COMMENT   VARCHAR(101)  NOT NULL
+);
+success
+create index ${testName2}_IxS_SUPPKEY on ${testName2}_supplier (S_SUPPKEY);
+affected: 0
+load ${testName2}_supplier "../DATA/TPCH/supplier_2k.tbl" <field_delimiter> = "|";
+success
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  IN over one table with a filter on a column that has no index (segfault)
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+select count(*) from ${testName2}_partsupp where ps_partkey in (select p_partkey from ${testName2}_part where p_size < 10);
+rows:
+  (84)
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  The same with LIKE, another predicate on the outer table and ORDER BY
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+select ps_partkey, ps_suppkey from ${testName2}_partsupp where ps_partkey in (select p_partkey from ${testName2}_part where p_name like '%green%') and ps_suppkey < 300 order by ps_partkey, ps_suppkey;
+ordered rows:
+  (3, 4)
+  (4, 5)
+  (7, 8)
+  (35, 36)
+  (83, 84)
+  (86, 87)
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  IN over a join: 84 rows join, 21 suppliers match
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+select count(*) from ${testName2}_supplier where s_suppkey in (select ps_suppkey from ${testName2}_partsupp, ${testName2}_part where ps_partkey = p_partkey and p_size < 10);
+rows:
+  (21)
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  The same with names
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+select s_name from ${testName2}_supplier where s_suppkey in (select ps_suppkey from ${testName2}_partsupp, ${testName2}_part where ps_partkey = p_partkey and p_size = 1) order by s_name;
+ordered rows:
+  ('Supplier#000000003')
+  ('Supplier#000000014')
+  ('Supplier#000000065')
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  IN over a query that has an IN sub-query of its own
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+select count(*) from ${testName2}_supplier where s_suppkey in (select ps_suppkey from ${testName2}_partsupp where ps_partkey in (select p_partkey from ${testName2}_part where p_size < 10));
+rows:
+  (21)
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  SELECT DISTINCT, one column
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+select distinct p_size from ${testName2}_part where p_size < 8 order by p_size;
+ordered rows:
+  (1)
+  (2)
+  (3)
+  (4)
+  (5)
+  (7)
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  SELECT DISTINCT, two columns
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+select distinct p_mfgr, p_container from ${testName2}_part where p_size < 6 order by p_mfgr, p_container;
+ordered rows:
+  ('Manufacturer#1', 'LG CASE')
+  ('Manufacturer#2', 'JUMBO CAN')
+  ('Manufacturer#2', 'MED BAG')
+  ('Manufacturer#2', 'WRAP DRUM')
+  ('Manufacturer#3', 'LG BAG')
+  ('Manufacturer#3', 'MED PACK')
+  ('Manufacturer#4', 'WRAP CASE')
+  ('Manufacturer#5', 'JUMBO BAG')
+  ('Manufacturer#5', 'JUMBO PACK')
+  ('Manufacturer#5', 'LG BAG')
+  ('Manufacturer#5', 'MED CAN')
+  ('Manufacturer#5', 'SM BOX')
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  SELECT DISTINCT in a FROM sub-query
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+select count(*) from (select distinct ps_suppkey from ${testName2}_partsupp where ps_partkey < 50) as t;
+rows:
+  (196)
+
+drop table ${testName2}_part;
+success
+drop table ${testName2}_partsupp;
+success
+drop table ${testName2}_supplier;
+success
