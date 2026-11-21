@@ -60,6 +60,30 @@ select 99999999999999.99 * 99999999999999.99 from ${testName2}_region where r_re
 failure contains: 'overflow'
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  A digit that does not fit is rounded half to even
+//  (4234567890.12345 * 10.5 = 44462962846.296225 has 17 digits; 16 fit.)
+//  Rounding half away from zero here biased long sums: once a SUM has
+//  outgrown the mantissa it drops a digit on every row, and every dropped 5
+//  went up (TPC-H Q1 at SF1: sum_charge +0.157 over 2.9 million rows).
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+select 4234567890.12345 * 10.5 from ${testName2}_region where r_regionkey = 0;
+rows:
+  (44462962846.29622)
+
+select 0 - 4234567890.12345 * 10.5 from ${testName2}_region where r_regionkey = 0;
+rows:
+  (-44462962846.29622)
+
+select 4234567890.12345 * 10.7 from ${testName2}_region where r_regionkey = 0;
+rows:
+  (45309876424.32092)
+
+select 4234567890.12355 * 10.5 from ${testName2}_region where r_regionkey = 0;
+rows:
+  (44462962846.29728)
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 //  Cleanup
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
