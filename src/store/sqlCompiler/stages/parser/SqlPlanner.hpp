@@ -44,6 +44,10 @@ namespace Parser
     // State for expanding the views that a statement refers to. See vExpandViews().
     void*           m_pViewExpansion;
 
+    // Set while planning "x IN (query)" to make the next SELECT that is
+    // planned return distinct rows. See visitSubqueryInOp().
+    b1              m_bDistinctNextSelect;
+
     Footer m_xFooter;
 
     // A context for saving/restoring important member variables

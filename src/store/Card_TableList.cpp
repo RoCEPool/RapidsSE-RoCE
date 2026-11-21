@@ -99,12 +99,23 @@ Card_TableList* Card_TableList::pExtractList(Card_Deck* p_deck)
       p_table_dup->vAppendChild(p_rowCount);
     }
 
-    if (Card_KeyExists* p_keyExists = p_table->pSub_keyExists()) {
+    // XF_FLATTEN::vInto_KEYnotEXISTS puts the <keyExists>/<keyNotExists> on
+    // the <from>, not on its <table>. Look there, or join ordering does not
+    // know that this table is only probed and may put it first.
+    Card* p_from = xDeck.pChild();
+    Card_KeyExists*    p_keyExists    = p_table->pSub_keyExists();
+    Card_KeyNotExists* p_keyNotExists = p_table->pSub_keyNotExists();
+    if (! p_keyExists && ! p_keyNotExists && p_from) {
+      p_keyExists    = p_from->pSub_keyExists();
+      p_keyNotExists = p_from->pSub_keyNotExists();
+    }
+
+    if (p_keyExists) {
       p_keyExists = _pCard_KeyExists(p_keyExists->pDupCard());
       p_table_dup->vAppendChild(p_keyExists);
     }
     else
-    if (Card_KeyNotExists* p_keyNotExists = p_table->pSub_keyNotExists()) {
+    if (p_keyNotExists) {
       p_keyNotExists = _pCard_KeyNotExists(p_keyNotExists->pDupCard());
       p_table_dup->vAppendChild(p_keyNotExists);
     }
