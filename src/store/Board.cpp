@@ -124,9 +124,17 @@ bool Board::bMark_sqyCall(CardIter* pCI)
         p_conj->pSymbol()->bHasFacet("notExists"_Stz)) {
 
       RASSERT(p_conj->bIsSqyOp());
-
+      // the call is preceded by its arguments, one per parameter
+      // (m_p_term_sqyCall is the call: set above)
+      pCI->Flat.m_n_sqyArg = 0;
+      for (i8 i_Term = 0; i_Term < p_conj->nChildCards(); i_Term++) {
+        Card_Term* p_term_arg = p_conj->pGetTerm(i_Term);
+        if (p_term_arg == pCI->Flat.m_p_term_sqyCall)
+          break;
+        RASSERT(pCI->Flat.m_n_sqyArg < 8);
+        pCI->Flat.m_ap_term_sqyArg[pCI->Flat.m_n_sqyArg++] = p_term_arg;
+      }
       pCI->Flat.m_p_term_crlKey = p_conj->pGetTerm(0);
-      pCI->Flat.m_p_term_sqyCall = p_conj->pGetTerm(1);
       return C_TERMINATE_RECURSION;
     }
 

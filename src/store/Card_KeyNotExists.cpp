@@ -3,6 +3,7 @@
 /*============================================================================*/
 
 #include "Card_KeyNotExists.hpp"
+#include "Card_KeyExists.hpp"
 
 #include "CardIter.hpp"
 #include "XF_Optimise_Early_projection.hpp"
@@ -116,6 +117,8 @@ void Card_KeyNotExists::vAdd_transients(CardIter* pCI)
 
     vDebugPoint();
   }
+
+  Card_KeyExists::vAdd_transients_Of_constraint(pCI, this);
 
   vDebugPoint();
 }

@@ -72,6 +72,53 @@ void Card_KeyExists::vMorph_from_To_keyExists(CardIter *pCI)
 /*----------------------------------------------------------------------------*/
 
 /*----------------------------------------------------------------------------*/
+/* the arriving columns that the constraint of a key lookup reads             */
+/*----------------------------------------------------------------------------*/
+// A correlated sub-query can compare a column of the looked-up table with an
+// outer column in another way than "==" (TPC-H Q21: l2.l_suppkey <>
+// l1.l_suppkey). That comparison is a constraint of the lookup, and the outer
+// column has to arrive: without this the early project dropped it unless the
+// query selected it, and the lookup compared with another column.
+void Card_KeyExists::vAdd_transients_Of_constraint(CardIter* pCI, Card* p_Op)
+{
+  _static_
+
+  Card* p_constraint = p_Op->pSub_constraint();
+  if (! p_constraint)
+    p_constraint = p_Op->pSub_filter();
+  if (! p_constraint)
+    return;
+  Card_Predicate* p_predicate = p_constraint->pSub_predicate();
+  if (! p_predicate)
+    return;
+
+  char cTblSyn_lookup = p_Op->pSub_table()->pSymbol()->cTblSyn();
+
+  auto bfNeed = [pCI,cTblSyn_lookup](Card_Term* p_term)
+  {
+    Symbol* pSymbol = p_term->pSymbol();
+    if (! pSymbol->bHasFacet(SF_TBL_COL) || pSymbol->cTblSyn() == cTblSyn_lookup)
+      return C_CONTINUE_RECURSION;
+
+    Symbol xSym_tblCol;
+    xSym_tblCol.vApplyFacet(SF_TBL_COL, pSymbol->szFacet(SF_TBL_COL));
+    if (pCI->Early.m_pNeeded_later->pFind_expr(&xSym_tblCol))
+      return C_CONTINUE_RECURSION;
+
+    if (Card_Expr* p_expr_defn = pCI->pPrior_expr(&xSym_tblCol)) {
+      Card_Expr* p_expr_clone = p_expr_defn->pClone();
+      p_expr_clone->pGet_Symbol(0)->vDeleteFacet(SF_EXP_COL);
+      pCI->Early.m_pNeeded_later->vAppendChild(p_expr_clone);
+      pCI->Early.m_pNeeded_later->vRenumberAll_expr();
+    }
+
+    return C_CONTINUE_RECURSION;
+  };
+
+  (void) p_predicate->bLambdaWalk_term(bfNeed);
+}
+
+/*----------------------------------------------------------------------------*/
 /*                                                                            */
 /*----------------------------------------------------------------------------*/
 void Card_KeyExists::vAdd_transients(CardIter* pCI)
@@ -117,6 +164,8 @@ void Card_KeyExists::vAdd_transients(CardIter* pCI)
 
     vDebugPoint();
   }
+
+  vAdd_transients_Of_constraint(pCI, this);
 
   vDebugPoint();
 

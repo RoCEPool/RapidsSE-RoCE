@@ -381,9 +381,19 @@ void Card_Term::vX_tblCol_To_expCol(CardIter* pCI)
   }
 
   // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+  // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
   // additionally use nmdCol as basis for determining expCol
 
   if (! pSymbol_this->bHasFacet(SF_NMD_COL))
+    return;
+
+  // Not for a key lookup. Its emit holds the arriving columns only, so a
+  // column that was not found there by its table column is a column of the
+  // table that is looked up, and has to stay one. With a self-join
+  // ("lineitem l1 ... exists (select ... from lineitem l2 ...)") the arriving
+  // row has a column of the same name, and the constraint on l2 was applied
+  // to l1 instead.
+  if (CK_o_KEYEXISTS == pCI->E.e_Op || CK_o_KEYNOTEXISTS == pCI->E.e_Op)
     return;
 
   Symbol xSym_nmdCol;

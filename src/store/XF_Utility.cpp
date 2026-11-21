@@ -578,6 +578,14 @@ void XF_Utility::vVerify_dic_OP(void)
       if (pCI->E.p_injectable->pFind_expr(p_term->pSymbol()))
         return C_CONTINUE_RECURSION;
 
+      // The constraint of a key lookup may also read the arriving row: the
+      // outer column of a correlated sub-query (TPC-H Q21: l2.l_suppkey <>
+      // l1.l_suppkey).
+      if ((pCI->E.p_Op->bIsCard(CK_o_KEYEXISTS) || pCI->E.p_Op->bIsCard(CK_o_KEYNOTEXISTS)) &&
+          pCI->Arriving.m_pEmitted_prior &&
+          pCI->Arriving.m_pEmitted_prior->pFind_expr(p_term->pSymbol()))
+        return C_CONTINUE_RECURSION;
+
       pCI->E.p_predicate->vDump(__func__);
       pCI->E.p_term->vDump(__func__);
       NEVER_REACH
@@ -1023,6 +1031,14 @@ void XF_Utility::vVerify_dic_OP(void)
       if (Card_Expr* p_expr_f = pCI->E.p_injectable->pFind_expr(p_term->pSymbol()))
         if (p_expr_f->pSymbol()->bSameCast(p_term->pSymbol()))
           return C_CONTINUE_RECURSION;
+
+      // a column of the arriving row in the constraint of a key lookup (see
+      // "dictionaries 3 constraint" above)
+      if ((pCI->E.p_Op->bIsCard(CK_o_KEYEXISTS) || pCI->E.p_Op->bIsCard(CK_o_KEYNOTEXISTS)) &&
+          pCI->Arriving.m_pEmitted_prior)
+        if (Card_Expr* p_expr_a = pCI->Arriving.m_pEmitted_prior->pFind_expr(p_term->pSymbol()))
+          if (p_expr_a->pSymbol()->bSameCast(p_term->pSymbol()))
+            return C_CONTINUE_RECURSION;
 
       pCI->E.p_predicate->vDump(__func__);
       pCI->E.p_term->vDump(__func__);

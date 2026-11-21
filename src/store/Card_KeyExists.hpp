@@ -17,6 +17,7 @@ namespace STORE
    ~Card_KeyExists(void) noexcept(false);
 
     void vAdd_transients(CardIter* pCI);
+    static void vAdd_transients_Of_constraint(CardIter* pCI, Card* p_Op);
 
     static void vMorph_from_To_keyExists(CardIter *pCI);
 

@@ -179,10 +179,72 @@ bool XF_Optimise_Cull_bound::bXF_Cull_Used_bound(void)
   while (m_pCI->bEachOp()) {
     if ((m_pCI->E.p_filter = m_pCI->E.p_Op->pSub_filter()))
       nCulled += m_pCI->E.p_filter->nCullMarked_rlnConj(MARK_AT);
-    if ((m_pCI->E.p_constraint = m_pCI->E.p_Op->pSub_constraint()))
-      nCulled += m_pCI->E.p_constraint->nCullMarked_rlnConj(MARK_AT);
-  }
+    if ((m_pCI->E.p_constraint = m_pCI->E.p_Op->pSub_constraint())) {
 
+      // A key lookup keeps a comparison in its constraint. When every
+      // comparison is also a bound (a sub-query whose only predicate is its
+      // correlation: "exists (select * from orders where o_custkey =
+      // c_custkey)", or IN without a predicate), culling them all left an
+      // empty predicate, which crashed XF_Epilog_Type_Cast. Keep one, and
+      // restate it from the chosen bound: <index column> == <bound value>.
+      // The lookup then checks again what the bound already selected. The
+      // comparison itself cannot be kept as it is: one that was morphed
+      // from IN or NOT IN names its outer side by a position ($1) that is
+      // not that of the outer column.
+      if (m_pCI->E.p_Op->bIsCard(CK_o_KEYEXISTS) || m_pCI->E.p_Op->bIsCard(CK_o_KEYNOTEXISTS)) {
+        i8 nRlnConj = 0;
+        i8 nMarked  = 0;
+        Card* p_conj_keep = nullptr;
+        auto bfCount = [&nRlnConj, &nMarked, &p_conj_keep](Card* p_card) {
+          nRlnConj++;
+          if (p_card->bMark1(MARK_AT)) {
+            nMarked++;
+            if (! p_conj_keep)
+              p_conj_keep = p_card;
+          }
+          return C_CONTINUE_RECURSION;
+        };
+        m_pCI->E.p_constraint->bLambdaWalk(CK_RLNCONJ, bfCount, m_pCI);
+
+        Card_IndexList* p_indexList = m_pCI->E.p_Op->pSub_indexList();
+        Card_Index*     p_index     = p_indexList ? p_indexList->pFindChosenIndex() : nullptr;
+        Card_Bound*     p_bound     = p_index && p_index->pSub_bounds()
+                                        ? p_index->pSub_bounds()->pFindChosenBound() : nullptr;
+
+        if (nRlnConj && nRlnConj == nMarked && p_bound && p_bound->bIsEBound() &&
+            p_bound->pGet_idxCol() && p_bound->pGet_IfNot_idxCol()) {
+
+          Card_IdxCol* p_idxCol = p_index->pSub_idxColList()->pGetIdxCol_byIdxCol(
+                                    p_bound->pGet_idxCol()->szFacet(SF_IDX_COL));
+          RASSERT(p_idxCol);
+
+          while (p_conj_keep->nChildCards()) {
+            Card* p_child = p_conj_keep->pGetChild(0);
+            p_conj_keep->vRemoveChild(p_child);
+            DELETE_CARD(p_child);
+          }
+          Card_Term* p_term_idxCol = _pCard_Term((new Card_Term)->SYMPPY(p_idxCol->pSymbol()));
+          Card_EXPRLIST* p_injectable = m_pCI->E.p_Op->pSub_injectable();
+          Card_Expr* p_expr_tblCol = p_injectable ? p_injectable->pFind_expr(p_idxCol->pSymbol()) : nullptr;
+          if (p_expr_tblCol)
+            p_term_idxCol->vApplyCast_x(p_expr_tblCol->xCast());
+          else
+            p_term_idxCol->vApplyCast_p(p_bound->pGet_IfNot_idxCol());
+          p_conj_keep->vAppendChild(p_term_idxCol);
+          p_conj_keep->vAppendChild(p_bound->pGet_IfNot_idxCol()->pClone());
+
+          if (p_conj_keep->pSymbol()->bHasFacet(SF_SQY_OP))
+            p_conj_keep->pSymbol()->vDeleteFacet(SF_SQY_OP);
+          if (! p_conj_keep->pSymbol()->bHasFacet(SF_RLN_OP))
+            p_conj_keep->pSymbol()->vApplyFacet(SF_RLN_OP, "=="_Stz);
+          p_conj_keep->vMark1(MARK_BLANK);
+        }
+      }
+
+      nCulled += m_pCI->E.p_constraint->nCullMarked_rlnConj(MARK_AT);
+    }
+  }
+  // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
   if (nCulled)
     bOptRun = true;
 
