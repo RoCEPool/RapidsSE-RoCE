@@ -103,22 +103,30 @@ def run_query(q, sql, out_dir, timeout, data_dir, node_log):
     c.write(os.path.join(out_dir, 'plans', 'q%s.explain.txt' % q), out + '\n')
 
     # -- run-time optimiser and plan: a run with the optimiser trace on
-    n0 = sum(1 for _ in open(ENGINE_LOG, errors='replace')) if os.path.exists(ENGINE_LOG) else 0
-    rc, out, _ = shell('/optimiser_trace\n' + stmt + ';', timeout)
-    log.append('--- RUN WITH OPTIMISER TRACE\n' + out)
-    trace = []
-    if os.path.exists(ENGINE_LOG):
-        with open(ENGINE_LOG, errors='replace') as f:
-            # the log stamps the time into the text wherever a write starts, also inside a line
-            trace = [re.sub(r'\[\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\] ?', '', l.rstrip('\n'))
-                     for i, l in enumerate(f) if i >= n0]
-    try:
-        a = next(i for i, l in enumerate(trace) if 'Optimised pipeline' in l)
-        b = next(i for i, l in enumerate(trace) if i > a and 'End of optimised pipeline' in l)
-        c.write(os.path.join(out_dir, 'plans', 'q%s.pipeline.txt' % q), '\n'.join(trace[a:b + 1]) + '\n')
-        r.update(optimizer='PASS', physical_plan='PASS')
-    except StopIteration:
-        pass
+    # The engine starts its log file anew from time to time, so the trace is not found by an
+    # offset: it is the pipeline that follows the last "<stmt> = ..." line of this statement.
+    # When the log was restarted during the run, the traced run is repeated once.
+    first_line = stmt.split('\n')[0].strip()
+    for attempt in (1, 2):
+        rc, out, _ = shell('/optimiser_trace\n' + stmt + ';', timeout)
+        log.append('--- RUN WITH OPTIMISER TRACE\n' + out)
+        trace = []
+        if os.path.exists(ENGINE_LOG):
+            with open(ENGINE_LOG, errors='replace') as f:
+                # the log stamps the time into the text wherever a write starts, also inside a line
+                trace = [re.sub(r'\[\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\] ?', '', l.rstrip('\n')) for l in f]
+        try:
+            s0 = max(i for i, l in enumerate(trace) if '<stmt> = ' in l and first_line in l)
+            a = next(i for i, l in enumerate(trace) if i > s0 and 'Optimised pipeline' in l)
+            b = next(i for i, l in enumerate(trace) if i > a and 'End of optimised pipeline' in l)
+            if any('<stmt> = ' in l for l in trace[s0 + 1:a]):
+                raise StopIteration          # that pipeline belongs to a later statement
+            c.write(os.path.join(out_dir, 'plans', 'q%s.pipeline.txt' % q), '\n'.join(trace[a:b + 1]) + '\n')
+            r.update(optimizer='PASS', physical_plan='PASS')
+            break
+        except (StopIteration, ValueError):
+            if error_of(out) or not alive() or rc == 124:
+                break
     crashed = not alive()
     err = error_of(out)
     if r['optimizer'] != 'PASS' and (err or crashed or rc == 124):

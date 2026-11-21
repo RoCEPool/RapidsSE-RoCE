@@ -1,0 +1,114 @@
+/*----------------------------------------------------------------------------*/
+/* derivedTableSubquery.test -- scalar sub-query compared with a column of a  */
+/*                              derived table that aggregates (TPC-H Q15)     */
+/*----------------------------------------------------------------------------*/
+
+//   select ... from t, (select k, sum(x) as total from u group by k) r
+//    where t.k = r.k and total = (select max(total) from ...)
+// The comparison is on a column that the derived table aggregates. It was
+// folded into the WHERE of the outer query, which lies behind the aggregation
+// of the derived table, and the result of the sub-query never got there:
+// "Feature not yet implemented". The comparison is now made a HAVING on the
+// rows of the derived table.
+// Three more faults showed on the way to Q15 and are covered here:
+//  - a derived table with such a HAVING could not be joined (the projection
+//    that drops the carried sub-query value renamed the columns);
+//  - a projection fused into an index join named table columns by position
+//    only, and the generated code could not place them;
+//  - the same with a WITH query, whose columns arrive under default names.
+// The expected rows were computed from DATA/TPCH/orders10k.csv and
+// lineitem10k.csv independently of RapidsSE.
+
+create table ${testName2}_orders (
+  O_ORDERKEY      INTEGER       NOT NULL,
+  O_CUSTKEY       INTEGER       NOT NULL,
+  O_ORDERSTATUS   CHAR(1)       NOT NULL,
+  O_TOTALPRICE    DECIMAL(15,2) NOT NULL,
+  O_ORDERDATE     DATE          NOT NULL,
+  O_ORDERPRIORITY CHAR(15)      NOT NULL,
+  O_CLERK         CHAR(15)      NOT NULL,
+  O_SHIPPRIORITY  INTEGER       NOT NULL,
+  O_COMMENT       VARCHAR(79)   NOT NULL
+);
+success
+create index ${testName2}_IxO_ORDERKEY on ${testName2}_orders (O_ORDERKEY);
+affected: 0
+load ${testName2}_orders "../DATA/TPCH/orders10k.csv";
+success
+
+create table ${testName2}_lineitem (
+  L_ORDERKEY      INTEGER       NOT NULL,
+  L_PARTKEY       INTEGER       NOT NULL,
+  L_SUPPKEY       INTEGER       NOT NULL,
+  L_LINENUMBER    INTEGER       NOT NULL,
+  L_QUANTITY      DECIMAL(15,2) NOT NULL,
+  L_EXTENDEDPRICE DECIMAL(15,2) NOT NULL,
+  L_DISCOUNT      DECIMAL(15,2) NOT NULL,
+  L_TAX           DECIMAL(15,2) NOT NULL,
+  L_RETURNFLAG    CHAR(1)       NOT NULL,
+  L_LINESTATUS    CHAR(1)       NOT NULL,
+  L_SHIPDATE      DATE          NOT NULL,
+  L_COMMITDATE    DATE          NOT NULL,
+  L_RECEIPTDATE   DATE          NOT NULL,
+  L_SHIPINSTRUCT  CHAR(25)      NOT NULL,
+  L_SHIPMODE      CHAR(10)      NOT NULL,
+  L_COMMENT       VARCHAR(44)   NOT NULL
+);
+success
+create index ${testName2}_IxL_ORDERKEY on ${testName2}_lineitem (L_ORDERKEY);
+affected: 0
+load ${testName2}_lineitem "../DATA/TPCH/lineitem10k.csv";
+success
+
+// the derived table alone
+select k, total
+  from (select l_orderkey as k, sum(l_quantity) as total from ${testName2}_lineitem group by l_orderkey) as r
+ where total = (select max(total2) from (select l_orderkey as k2, sum(l_quantity) as total2 from ${testName2}_lineitem group by l_orderkey) as r2)
+ order by k;
+ordered rows:
+  (6882, 303)
+
+// a range instead of an equality
+select k, total
+  from (select l_orderkey as k, sum(l_quantity) as total from ${testName2}_lineitem group by l_orderkey) as r
+ where total > (select max(total2) - 30 from (select l_orderkey as k2, sum(l_quantity) as total2 from ${testName2}_lineitem group by l_orderkey) as r2)
+ order by k;
+ordered rows:
+  (6882, 303)
+
+// joined to a table, with columns of that table that are in no predicate
+select o_orderkey, o_orderstatus, o_clerk, o_totalprice, total
+  from ${testName2}_orders, (select l_orderkey as k, sum(l_quantity) as total from ${testName2}_lineitem group by l_orderkey) as r
+ where o_orderkey = k
+   and total = (select max(total2) from (select l_orderkey as k2, sum(l_quantity) as total2 from ${testName2}_lineitem group by l_orderkey) as r2)
+ order by o_orderkey;
+ordered rows:
+  (6882, 'O', 'Clerk#000000974', 408446.93, 303)
+
+// the same as a WITH query that is read twice (the Q15 text)
+with r0 (k, total) as (
+  select l_orderkey, sum(l_quantity) from ${testName2}_lineitem group by l_orderkey )
+select o_orderkey, o_orderstatus, o_clerk, o_totalprice, total
+  from ${testName2}_orders, r0
+ where o_orderkey = k
+   and total = (select max(total) from r0)
+ order by o_orderkey;
+ordered rows:
+  (6882, 'O', 'Clerk#000000974', 408446.93, 303)
+
+// the comparison written as HAVING inside the derived table, joined
+select o_orderkey, o_orderstatus, o_clerk, o_totalprice, total
+  from ${testName2}_orders,
+       (select l_orderkey as k, sum(l_quantity) as total
+          from ${testName2}_lineitem
+         group by l_orderkey
+        having sum(l_quantity) = (select max(total2) from (select l_orderkey as k2, sum(l_quantity) as total2 from ${testName2}_lineitem group by l_orderkey) as r2)) as r
+ where o_orderkey = k
+ order by o_orderkey;
+ordered rows:
+  (6882, 'O', 'Clerk#000000974', 408446.93, 303)
+
+drop table ${testName2}_orders;
+success
+drop table ${testName2}_lineitem;
+success

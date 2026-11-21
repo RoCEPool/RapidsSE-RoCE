@@ -40,6 +40,7 @@ Stz* aXF[XF_ENUMS]
   /* */ "XF_FLATTEN_PREDICATE_PULLUP"_Stz,
   /* */ "XF_FLATTEN_PREDICATE_REPOSITION"_Stz,
   /* */ "XF_FLATTEN_PURGE_WHERE"_Stz,
+  /* */ "XF_FLATTEN_PUSH_SQYFILTER"_Stz,
   /* */ "XF_FLATTEN_X_EXPCOL_TO_TBLCOL"_Stz,
 
   /* */ "XF_OPTIMISE_AGGREG_TO_SORT_ORDAGG"_Stz,
@@ -125,6 +126,7 @@ Stz* aXF_desc[XF_ENUMS]
   /* XF_FLATTEN_PREDICATE_PULLUP     */ "pull <where>/<filter> predicates up into <from>/<filter>"_Stz,
   /* XF_FLATTEN_PREDICATE_REPOSITION */ "reposition predicates"_Stz,
   /* XF_FLATTEN_PURGE_WHERE          */ "delete empty <where>"_Stz,
+  /* XF_FLATTEN_PUSH_SQYFILTER       */ "push a sub-query filter on a derived table into it"_Stz,
   /* XF_FLATTEN_X_EXPCOL_TO_TBLCOL   */ "ExpCol $n to TblCol $$c.n"_Stz,
 
   /* XF_OPTIMISE_AGGREG_TO_SORT_ORDAGG */ "<to be supplied>"_Stz,

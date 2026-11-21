@@ -122,14 +122,15 @@ failure contains: 'missing suitable index for join'
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 //  (5) a sub-query in the FROM clause that is also read by a scalar
-//      sub-query (the shape of TPC-H Q15 written with a view): not
-//      supported, and must fail rather than hang the node
+//      sub-query (the shape of TPC-H Q15 written with a view). This used
+//      to hang the node, then was refused; it is now flattened (see
+//      derivedTableSubquery.test).
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 with r (k, t) as (select s_nationkey, sum(s_acctbal) from ${testName2}_supplier group by s_nationkey)
 select n_nationkey, n_name, t from ${testName2}_nation, r
  where n_nationkey = k and t = (select max(t) from r) order by n_nationkey;
-failure contains: 'Feature not yet implemented'
+rows: (9, 'INDONESIA', 434427.01)
 
 // the node still answers
 select count(*) from ${testName2}_nation;
