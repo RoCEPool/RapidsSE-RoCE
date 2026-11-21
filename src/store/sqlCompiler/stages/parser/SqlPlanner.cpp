@@ -1782,8 +1782,16 @@ static void vCollect(antlr4::tree::ParseTree* pTree, std::vector<T*>& rFound)
 // or unknown name, an expression, a table partitioned on several columns).
 static b1 bSelectsItsPartitionColumn(antlr4::tree::ParseTree* pQuery)
 {
+  // a SELECT in parentheses is a SelectExpr around the SELECT itself: count
+  // the ones that have a select list
+  std::vector<sqlParser::SelectExprContext*> xAllSelects;
+  vCollect<sqlParser::SelectExprContext>(pQuery, xAllSelects);
   std::vector<sqlParser::SelectExprContext*> xSelects;
-  vCollect<sqlParser::SelectExprContext>(pQuery, xSelects);
+  for (sqlParser::SelectExprContext* pSelect : xAllSelects) {
+    if (pSelect->selectList()) {
+      xSelects.push_back(pSelect);
+    }
+  }
   std::vector<sqlParser::TableReferenceContext*> xTables;
   vCollect<sqlParser::TableReferenceContext>(pQuery, xTables);
   if (xSelects.size() != 1 || xTables.size() != 1) {
