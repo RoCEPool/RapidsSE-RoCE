@@ -1,0 +1,341 @@
+/*----------------------------------------------------------------------------*/
+/* orderByMixed.test -- ORDER BY with three or more keys and mixed directions */
+/*----------------------------------------------------------------------------*/
+
+// A sort key with a descending column is compared element by element.
+// EntWrk::ayEachElm did not move its cursor, so the third and later elements
+// were all read at the position of the second one: rows equal on the first
+// two keys came out in an arbitrary order. All-ascending keys are compared
+// as one block of memory and were not affected, nor were two-key sorts.
+// The expected order was computed from DATA/TPCH/lineitem1k.csv independently
+// of RapidsSE; every ORDER BY below is a total order on the selected rows.
+
+create table ${testName2}_lineitem (
+  L_ORDERKEY      INTEGER       NOT NULL,
+  L_PARTKEY       INTEGER       NOT NULL,
+  L_SUPPKEY       INTEGER       NOT NULL,
+  L_LINENUMBER    INTEGER       NOT NULL,
+  L_QUANTITY      DECIMAL(15,2) NOT NULL,
+  L_EXTENDEDPRICE DECIMAL(15,2) NOT NULL,
+  L_DISCOUNT      DECIMAL(15,2) NOT NULL,
+  L_TAX           DECIMAL(15,2) NOT NULL,
+  L_RETURNFLAG    CHAR(1)       NOT NULL,
+  L_LINESTATUS    CHAR(1)       NOT NULL,
+  L_SHIPDATE      DATE          NOT NULL,
+  L_COMMITDATE    DATE          NOT NULL,
+  L_RECEIPTDATE   DATE          NOT NULL,
+  L_SHIPINSTRUCT  CHAR(25)      NOT NULL,
+  L_SHIPMODE      CHAR(10)      NOT NULL,
+  L_COMMENT       VARCHAR(44)   NOT NULL
+);
+success
+
+load ${testName2}_lineitem "../DATA/TPCH/lineitem1k.csv";
+success
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  DESC, ASC, ASC: integer keys
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+select l_linenumber, l_suppkey, l_orderkey
+  from ${testName2}_lineitem
+ where l_quantity < 4
+ order by l_linenumber desc, l_suppkey, l_orderkey;
+ordered rows:
+  (7, 32689, 512)
+  (7, 35717, 129)
+  (6, 8821, 197)
+  (6, 58004, 935)
+  (6, 59283, 519)
+  (6, 83105, 322)
+  (6, 98127, 774)
+  (5, 2375, 612)
+  (5, 10406, 903)
+  (5, 54592, 226)
+  (5, 55990, 486)
+  (5, 74084, 998)
+  (5, 80481, 450)
+  (4, 10863, 417)
+  (4, 18800, 3)
+  (4, 19510, 229)
+  (4, 25025, 69)
+  (4, 28407, 259)
+  (4, 39051, 192)
+  (4, 51422, 677)
+  (4, 61840, 897)
+  (3, 48667, 230)
+  (3, 61355, 451)
+  (3, 63482, 547)
+  (3, 66609, 32)
+  (3, 73140, 70)
+  (3, 73293, 418)
+  (3, 75176, 613)
+  (3, 96489, 962)
+  (3, 99816, 449)
+  (2, 6760, 611)
+  (2, 10382, 774)
+  (2, 14239, 290)
+  (2, 19771, 641)
+  (2, 20988, 487)
+  (2, 22306, 964)
+  (2, 34170, 71)
+  (2, 35613, 418)
+  (2, 41880, 865)
+  (2, 52219, 901)
+  (2, 58801, 804)
+  (2, 60246, 194)
+  (2, 67229, 646)
+  (2, 72458, 98)
+  (2, 78621, 768)
+  (2, 80686, 225)
+  (2, 88854, 482)
+  (1, 5087, 902)
+  (1, 13081, 708)
+  (1, 14915, 576)
+  (1, 16692, 387)
+  (1, 17964, 389)
+  (1, 22547, 806)
+  (1, 30696, 421)
+  (1, 35559, 833)
+  (1, 39595, 675)
+  (1, 39728, 519)
+  (1, 42916, 162)
+  (1, 43638, 583)
+  (1, 46382, 452)
+  (1, 65385, 228)
+  (1, 65495, 548)
+  (1, 81751, 165)
+  (1, 82683, 711)
+  (1, 94992, 960)
+  (1, 95672, 68)
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  ASC, ASC, DESC: the last key is the descending one
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+select l_returnflag, l_linestatus, l_orderkey, l_linenumber
+  from ${testName2}_lineitem
+ where l_quantity < 4
+ order by l_returnflag, l_linestatus, l_orderkey desc, l_linenumber;
+ordered rows:
+  ('A', 'F', 962, 3)
+  ('A', 'F', 960, 1)
+  ('A', 'F', 865, 2)
+  ('A', 'F', 804, 2)
+  ('A', 'F', 646, 2)
+  ('A', 'F', 548, 1)
+  ('A', 'F', 450, 5)
+  ('A', 'F', 322, 6)
+  ('A', 'F', 290, 2)
+  ('A', 'F', 228, 1)
+  ('A', 'F', 98, 2)
+  ('A', 'F', 3, 4)
+  ('N', 'O', 964, 2)
+  ('N', 'O', 935, 6)
+  ('N', 'O', 903, 5)
+  ('N', 'O', 901, 2)
+  ('N', 'O', 806, 1)
+  ('N', 'O', 774, 2)
+  ('N', 'O', 774, 6)
+  ('N', 'O', 768, 2)
+  ('N', 'O', 708, 1)
+  ('N', 'O', 675, 1)
+  ('N', 'O', 613, 3)
+  ('N', 'O', 583, 1)
+  ('N', 'O', 576, 1)
+  ('N', 'O', 547, 3)
+  ('N', 'O', 519, 1)
+  ('N', 'O', 519, 6)
+  ('N', 'O', 512, 7)
+  ('N', 'O', 486, 5)
+  ('N', 'O', 482, 2)
+  ('N', 'O', 452, 1)
+  ('N', 'O', 451, 3)
+  ('N', 'O', 449, 3)
+  ('N', 'O', 418, 2)
+  ('N', 'O', 418, 3)
+  ('N', 'O', 387, 1)
+  ('N', 'O', 225, 2)
+  ('N', 'O', 197, 6)
+  ('N', 'O', 192, 4)
+  ('N', 'O', 162, 1)
+  ('N', 'O', 71, 2)
+  ('N', 'O', 68, 1)
+  ('N', 'O', 32, 3)
+  ('R', 'F', 998, 5)
+  ('R', 'F', 902, 1)
+  ('R', 'F', 897, 4)
+  ('R', 'F', 833, 1)
+  ('R', 'F', 711, 1)
+  ('R', 'F', 677, 4)
+  ('R', 'F', 641, 2)
+  ('R', 'F', 612, 5)
+  ('R', 'F', 611, 2)
+  ('R', 'F', 487, 2)
+  ('R', 'F', 421, 1)
+  ('R', 'F', 417, 4)
+  ('R', 'F', 389, 1)
+  ('R', 'F', 259, 4)
+  ('R', 'F', 230, 3)
+  ('R', 'F', 229, 4)
+  ('R', 'F', 226, 5)
+  ('R', 'F', 194, 2)
+  ('R', 'F', 165, 1)
+  ('R', 'F', 129, 7)
+  ('R', 'F', 70, 3)
+  ('R', 'F', 69, 4)
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  DESC, ASC, ASC, ASC with string keys (the order of TPC-H Q2)
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+select l_returnflag, l_shipinstruct, l_shipmode, l_orderkey, l_linenumber
+  from ${testName2}_lineitem
+ where l_quantity < 4
+ order by l_returnflag desc, l_shipinstruct, l_shipmode, l_orderkey, l_linenumber;
+ordered rows:
+  ('R', 'COLLECT COD', 'MAIL', 833, 1)
+  ('R', 'COLLECT COD', 'MAIL', 902, 1)
+  ('R', 'COLLECT COD', 'RAIL', 897, 4)
+  ('R', 'COLLECT COD', 'TRUCK', 487, 2)
+  ('R', 'DELIVER IN PERSON', 'FOB', 129, 7)
+  ('R', 'DELIVER IN PERSON', 'MAIL', 611, 2)
+  ('R', 'DELIVER IN PERSON', 'MAIL', 677, 4)
+  ('R', 'DELIVER IN PERSON', 'REG AIR', 165, 1)
+  ('R', 'DELIVER IN PERSON', 'REG AIR', 229, 4)
+  ('R', 'DELIVER IN PERSON', 'REG AIR', 711, 1)
+  ('R', 'DELIVER IN PERSON', 'SHIP', 417, 4)
+  ('R', 'NONE', 'MAIL', 69, 4)
+  ('R', 'NONE', 'REG AIR', 194, 2)
+  ('R', 'NONE', 'SHIP', 998, 5)
+  ('R', 'NONE', 'TRUCK', 421, 1)
+  ('R', 'TAKE BACK RETURN', 'FOB', 612, 5)
+  ('R', 'TAKE BACK RETURN', 'RAIL', 70, 3)
+  ('R', 'TAKE BACK RETURN', 'RAIL', 230, 3)
+  ('R', 'TAKE BACK RETURN', 'RAIL', 389, 1)
+  ('R', 'TAKE BACK RETURN', 'RAIL', 641, 2)
+  ('R', 'TAKE BACK RETURN', 'SHIP', 226, 5)
+  ('R', 'TAKE BACK RETURN', 'SHIP', 259, 4)
+  ('N', 'COLLECT COD', 'AIR', 418, 3)
+  ('N', 'COLLECT COD', 'AIR', 482, 2)
+  ('N', 'COLLECT COD', 'FOB', 162, 1)
+  ('N', 'COLLECT COD', 'FOB', 452, 1)
+  ('N', 'COLLECT COD', 'FOB', 708, 1)
+  ('N', 'COLLECT COD', 'FOB', 774, 2)
+  ('N', 'COLLECT COD', 'RAIL', 197, 6)
+  ('N', 'COLLECT COD', 'RAIL', 806, 1)
+  ('N', 'COLLECT COD', 'REG AIR', 519, 1)
+  ('N', 'COLLECT COD', 'SHIP', 71, 2)
+  ('N', 'COLLECT COD', 'SHIP', 192, 4)
+  ('N', 'COLLECT COD', 'SHIP', 547, 3)
+  ('N', 'DELIVER IN PERSON', 'AIR', 32, 3)
+  ('N', 'DELIVER IN PERSON', 'AIR', 418, 2)
+  ('N', 'DELIVER IN PERSON', 'AIR', 451, 3)
+  ('N', 'DELIVER IN PERSON', 'AIR', 901, 2)
+  ('N', 'DELIVER IN PERSON', 'RAIL', 486, 5)
+  ('N', 'DELIVER IN PERSON', 'REG AIR', 225, 2)
+  ('N', 'DELIVER IN PERSON', 'REG AIR', 675, 1)
+  ('N', 'DELIVER IN PERSON', 'REG AIR', 964, 2)
+  ('N', 'DELIVER IN PERSON', 'SHIP', 768, 2)
+  ('N', 'DELIVER IN PERSON', 'TRUCK', 935, 6)
+  ('N', 'NONE', 'AIR', 903, 5)
+  ('N', 'NONE', 'RAIL', 68, 1)
+  ('N', 'NONE', 'RAIL', 449, 3)
+  ('N', 'NONE', 'RAIL', 576, 1)
+  ('N', 'NONE', 'SHIP', 387, 1)
+  ('N', 'NONE', 'TRUCK', 512, 7)
+  ('N', 'NONE', 'TRUCK', 583, 1)
+  ('N', 'NONE', 'TRUCK', 613, 3)
+  ('N', 'TAKE BACK RETURN', 'FOB', 519, 6)
+  ('N', 'TAKE BACK RETURN', 'SHIP', 774, 6)
+  ('A', 'COLLECT COD', 'AIR', 450, 5)
+  ('A', 'COLLECT COD', 'MAIL', 548, 1)
+  ('A', 'DELIVER IN PERSON', 'AIR', 960, 1)
+  ('A', 'DELIVER IN PERSON', 'FOB', 962, 3)
+  ('A', 'DELIVER IN PERSON', 'SHIP', 228, 1)
+  ('A', 'DELIVER IN PERSON', 'TRUCK', 98, 2)
+  ('A', 'NONE', 'AIR', 322, 6)
+  ('A', 'NONE', 'MAIL', 865, 2)
+  ('A', 'NONE', 'TRUCK', 3, 4)
+  ('A', 'NONE', 'TRUCK', 804, 2)
+  ('A', 'TAKE BACK RETURN', 'MAIL', 646, 2)
+  ('A', 'TAKE BACK RETURN', 'TRUCK', 290, 2)
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  ASC, DESC, ASC, DESC
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+select l_shipmode, l_returnflag, l_linenumber, l_orderkey
+  from ${testName2}_lineitem
+ where l_quantity < 4
+ order by l_shipmode, l_returnflag desc, l_linenumber, l_orderkey desc;
+ordered rows:
+  ('AIR', 'N', 2, 901)
+  ('AIR', 'N', 2, 482)
+  ('AIR', 'N', 2, 418)
+  ('AIR', 'N', 3, 451)
+  ('AIR', 'N', 3, 418)
+  ('AIR', 'N', 3, 32)
+  ('AIR', 'N', 5, 903)
+  ('AIR', 'A', 1, 960)
+  ('AIR', 'A', 5, 450)
+  ('AIR', 'A', 6, 322)
+  ('FOB', 'R', 5, 612)
+  ('FOB', 'R', 7, 129)
+  ('FOB', 'N', 1, 708)
+  ('FOB', 'N', 1, 452)
+  ('FOB', 'N', 1, 162)
+  ('FOB', 'N', 2, 774)
+  ('FOB', 'N', 6, 519)
+  ('FOB', 'A', 3, 962)
+  ('MAIL', 'R', 1, 902)
+  ('MAIL', 'R', 1, 833)
+  ('MAIL', 'R', 2, 611)
+  ('MAIL', 'R', 4, 677)
+  ('MAIL', 'R', 4, 69)
+  ('MAIL', 'A', 1, 548)
+  ('MAIL', 'A', 2, 865)
+  ('MAIL', 'A', 2, 646)
+  ('RAIL', 'R', 1, 389)
+  ('RAIL', 'R', 2, 641)
+  ('RAIL', 'R', 3, 230)
+  ('RAIL', 'R', 3, 70)
+  ('RAIL', 'R', 4, 897)
+  ('RAIL', 'N', 1, 806)
+  ('RAIL', 'N', 1, 576)
+  ('RAIL', 'N', 1, 68)
+  ('RAIL', 'N', 3, 449)
+  ('RAIL', 'N', 5, 486)
+  ('RAIL', 'N', 6, 197)
+  ('REG AIR', 'R', 1, 711)
+  ('REG AIR', 'R', 1, 165)
+  ('REG AIR', 'R', 2, 194)
+  ('REG AIR', 'R', 4, 229)
+  ('REG AIR', 'N', 1, 675)
+  ('REG AIR', 'N', 1, 519)
+  ('REG AIR', 'N', 2, 964)
+  ('REG AIR', 'N', 2, 225)
+  ('SHIP', 'R', 4, 417)
+  ('SHIP', 'R', 4, 259)
+  ('SHIP', 'R', 5, 998)
+  ('SHIP', 'R', 5, 226)
+  ('SHIP', 'N', 1, 387)
+  ('SHIP', 'N', 2, 768)
+  ('SHIP', 'N', 2, 71)
+  ('SHIP', 'N', 3, 547)
+  ('SHIP', 'N', 4, 192)
+  ('SHIP', 'N', 6, 774)
+  ('SHIP', 'A', 1, 228)
+  ('TRUCK', 'R', 1, 421)
+  ('TRUCK', 'R', 2, 487)
+  ('TRUCK', 'N', 1, 583)
+  ('TRUCK', 'N', 3, 613)
+  ('TRUCK', 'N', 6, 935)
+  ('TRUCK', 'N', 7, 512)
+  ('TRUCK', 'A', 2, 804)
+  ('TRUCK', 'A', 2, 290)
+  ('TRUCK', 'A', 2, 98)
+  ('TRUCK', 'A', 4, 3)
+
+drop table ${testName2}_lineitem;
+success

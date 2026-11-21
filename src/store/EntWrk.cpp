@@ -291,7 +291,11 @@ byte* EntWrk::ayEachElm(Column* pColumn, i8& nBytes, byte** aayCursor)
 
   //byte* ayElm = pColumn->ayValue(nBytes,aayCursor);
 
+  // The cursor is on the previous element and nBytes is that element's size
+  // (0 before the first one). Step onto this element; without moving the
+  // cursor, the third and later elements were all read at the second one.
   byte* ayElm = aAdd<byte*>(*aayCursor,nBytes);
+  *aayCursor = ayElm;
   nBytes = sizeof(i8);
 
   return ayElm;

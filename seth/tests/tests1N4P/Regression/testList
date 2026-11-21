@@ -5,3 +5,4 @@ timestampCompare.test
 subqueryFold.test
 correlatedMin.test
 inSubquery.test
+orderByMixed.test
