@@ -22,7 +22,8 @@ jobs:
     timeout-minutes: 30
     env:
       GIT_LFS_SKIP_SMUDGE: "1"
-      TPCH_SF1_DATA: ${{ runner.temp }}/tpch_sf1
+      TPCH_SF1_DATA: /tmp/tpch_sf1
+      OUT: /tmp/tpch_reference
     steps:
       - uses: actions/checkout@v4
       - name: Data set (generate, row counts, checksums)
@@ -30,14 +31,14 @@ jobs:
       - name: DuckDB
         run: pip install --break-system-packages duckdb
       - name: Reference results from DuckDB
-        run: python3 tests/tpch_sf1_correctness/scripts/run_reference.py --engine duckdb --out "$RUNNER_TEMP/duckdb"
+        run: python3 tests/tpch_sf1_correctness/scripts/run_reference.py --engine duckdb --out "$OUT/duckdb"
       - name: Reference results from the official answer set
-        run: python3 tests/tpch_sf1_correctness/scripts/run_reference.py --engine official --out "$RUNNER_TEMP/official"
+        run: python3 tests/tpch_sf1_correctness/scripts/run_reference.py --engine official --out "$OUT/official"
       - name: Where DuckDB and the official answer set differ (reported, not fatal)
         continue-on-error: true
-        run: python3 tests/tpch_sf1_correctness/scripts/check_reference.py "$RUNNER_TEMP/duckdb" "$RUNNER_TEMP/official"
+        run: python3 tests/tpch_sf1_correctness/scripts/check_reference.py "$OUT/duckdb" "$OUT/official"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: tpch-sf1-duckdb-reference
-          path: ${{ runner.temp }}/duckdb
+          path: /tmp/tpch_reference/duckdb
