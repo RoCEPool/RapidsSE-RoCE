@@ -1,0 +1,58 @@
+# Independent reference for the TPC-H SF1 correctness test.
+#
+# Generates the SF1 data set with the DBGEN of this repository, checks it against the pinned
+# checksums, runs the 22 queries of tests/tpch_sf1_correctness/queries in DuckDB and reports where
+# DuckDB and the official TPC-H answer set differ. The DuckDB results are kept as an artifact
+# and, when they changed, committed to tests/tpch_sf1_correctness/reference/expected_results
+# of the branch that was built.
+# RapidsSE itself is not run here.
+name: tpch-reference
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "tests/tpch_sf1_correctness/**"
+      - ".github/workflows/tpch-reference.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  duckdb:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GIT_LFS_SKIP_SMUDGE: "1"
+      TPCH_SF1_DATA: /tmp/tpch_sf1
+      OUT: /tmp/tpch_reference
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
+      - name: Data set (generate, row counts, checksums)
+        run: python3 tests/tpch_sf1_correctness/scripts/prepare_sf1.py
+      - name: DuckDB
+        run: pip install --break-system-packages duckdb
+      - name: Reference results from DuckDB
+        run: python3 tests/tpch_sf1_correctness/scripts/run_reference.py --engine duckdb --out "$OUT/duckdb"
+      - name: Reference results from the official answer set
+        run: python3 tests/tpch_sf1_correctness/scripts/run_reference.py --engine official --out "$OUT/official"
+      - name: Where DuckDB and the official answer set differ (reported, not fatal)
+        continue-on-error: true
+        run: python3 tests/tpch_sf1_correctness/scripts/check_reference.py "$OUT/duckdb" "$OUT/official"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tpch-sf1-duckdb-reference
+          path: /tmp/tpch_reference/duckdb
+      - name: Commit the DuckDB reference when it changed
+        run: |
+          dir=tests/tpch_sf1_correctness/reference/expected_results
+          mkdir -p "$dir" && cp "$OUT"/duckdb/* "$dir"/
+          git add "$dir"
+          if ! git diff --cached --quiet; then
+            git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -m "Update the DuckDB reference results of the TPC-H SF1 correctness test"
+            git push
+          fi
