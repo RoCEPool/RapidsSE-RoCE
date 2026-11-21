@@ -8,3 +8,4 @@ correlatedMultiKey.test
 inSubquery.test
 orderByMixed.test
 inWithJoin.test
+partitionedLookup.test
