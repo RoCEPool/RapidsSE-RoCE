@@ -234,6 +234,15 @@ bool Card_RlnConj::bIsIndexBound(Card_Index* p_index)
   if (2 != nChildren)
     return false;
 
+  // only these comparisons bound an index (Card_Bound::pBound_New); "<>" on
+  // an indexed column does not
+  Stz* szRelnOp = this->szFacet(SF_RLN_OP);
+  if (! szRelnOp ||
+      ! (szRelnOp->bSame("=="_Stz) ||
+         szRelnOp->bSame("<"_Stz)  || szRelnOp->bSame("<="_Stz) ||
+         szRelnOp->bSame(">"_Stz)  || szRelnOp->bSame(">="_Stz)))
+    return false;
+
   Card_Term* pTerm_0 = _pCard_Term(this->pGetChild(0));
   Card_Term* pTerm_1 = _pCard_Term(this->pGetChild(1));
 
@@ -242,6 +251,13 @@ bool Card_RlnConj::bIsIndexBound(Card_Index* p_index)
 
     if (pTerm_1->pSymbol()->bHasFacet(SF_TBL_COL)) {
       // + both are term:$c.n
+
+      // Two columns of one table ("l_receiptdate > l_commitdate") compare
+      // values of the same row: that is a filter on the row, not a bound of
+      // an index. Taken as a bound it became an index scan whose bound value
+      // is a column, and code generation crashed.
+      if (pTerm_0->pSymbol()->cTblSyn() == pTerm_1->pSymbol()->cTblSyn())
+        return false;
 
       // ? is either term_0:$c.n or term_1:$c.n an index column
       if (p_index->bTblCol_IsKeyIn_index(pTerm_0->szFacet(SF_TBL_COL)) ||

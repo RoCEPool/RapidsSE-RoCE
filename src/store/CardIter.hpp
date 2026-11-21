@@ -58,6 +58,11 @@ namespace STORE
       };
       Card_Term* m_p_term_sqyCall;
 
+      // The arguments of an EXISTS / NOT EXISTS call, one per parameter of the
+      // sub-query: entry i is the outer column that %(i+1) stands for.
+      i8         m_n_sqyArg;
+      Card_Term* m_ap_term_sqyArg[8];
+
       Card_CONJ* m_p_conj_crlKey;
       Card_Term* m_p_term_crlKey;
       Card_Expr* m_p_expr_crlKey;

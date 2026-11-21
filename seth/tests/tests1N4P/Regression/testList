@@ -9,3 +9,4 @@ inSubquery.test
 orderByMixed.test
 inWithJoin.test
 partitionedLookup.test
+existsCorrelated.test

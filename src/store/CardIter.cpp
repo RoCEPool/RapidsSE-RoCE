@@ -46,6 +46,7 @@ CardIter::CardIter(Bench* pBench)
   Flat.m_p_conj_crlKey  = nullptr;
   Flat.m_p_term_crlKey  = nullptr;
   Flat.m_n_crlKey       = 0;
+  Flat.m_n_sqyArg       = 0;
 
   Flat.m_pCorrelation   = nullptr;
 

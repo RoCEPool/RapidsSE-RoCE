@@ -72,7 +72,7 @@ void XF_Flatten_Fold_subquery::vDecisionTree(CardIter* pCI, Symbol* pSym_sqyNo)
     } else {
       if (pInner->bIsCorrelated()) {     /* 40_ */
         if (pInner->bByExists())         /* W_L_C_E     Q4 */ pFoldBy->v40_W_L_C_E();
-        else if (pInner->bByNotExists()) /* W_L_C_NE       */ NEVER_REACH
+        else if (pInner->bByNotExists()) /* W_L_C_NE   Q21 */ pFoldBy->v40_W_L_C_E();
         else if (pInner->bByIn())        /* W_L_C_I        */ NEVER_REACH
         else if (pInner->bByNotIn())     /* W_L_C_NI       */ NEVER_REACH
         else                             /* W_L_C_ro       */ NEVER_REACH

@@ -324,27 +324,33 @@ void XF_FLATTEN::vInto_KEYnotEXISTS(CardIter* pCI)
     return;
   }
 
-  // todo: the %1 needs to be decoded... its a parameter
-  Card* p_parent;
-  Symbol xPrmOrd(SF_SQY_PRM, 1);
-  Card_Term* p_term_sqyarg = _pCard_Term(p_from_exists->pFindSymbolRecursive(CK_TERM,&xPrmOrd,p_parent));
+  // Each parameter %n of the sub-query stands for an outer column: the n-th
+  // argument of the EXISTS / NOT EXISTS call (IN has the one). Put the outer
+  // column in its place. The parameter that is compared with "==" becomes
+  // the bound of the lookup; any other use (TPC-H Q21: l2.l_suppkey <>
+  // l1.l_suppkey) stays in the filter of the looked-up table and becomes a
+  // constraint of the lookup that reads the arriving row.
+  i8 nArgs = pCI->Flat.m_n_sqyArg > 0 ? pCI->Flat.m_n_sqyArg : 1;
+  for (i8 i_arg = 0; i_arg < nArgs; i_arg++) {
 
-  Card_Expr* p_expr_found =
-      p_emitted_table->pGet_expr(p_term_sqyarg->pSymbol()->iTo_ordinal(SF_SQY_PRM) - 1);
+    Card* p_parent;
+    Symbol xPrmOrd(SF_SQY_PRM, i_arg + 1);
+    Card_Term* p_term_prm = _pCard_Term(p_from_exists->pFindSymbolRecursive(CK_TERM,&xPrmOrd,p_parent));
+    if (! p_term_prm)
+      continue;
 
-  //p_expr_found->vDump();
-  Card_Term* p_term_found = p_expr_found->pGet_term(0);
+    Card_Term* p_term_outer = pCI->Flat.m_n_sqyArg > 0 ? pCI->Flat.m_ap_term_sqyArg[i_arg]
+                                                       : pCI->Flat.m_p_term_crlKey;
+    Card_Term* p_term_sqyArg = p_term_outer->pClone();
 
+    // the cast of the outer column, where the table that was snapped has it
+    if (Card_Expr* p_expr_found = p_emitted_table->pFind_expr(p_term_outer->pSymbol()))
+      p_term_sqyArg->vApplyCast_p(p_expr_found->pGet_term(0));
 
-  Card_Term* p_term_sqyArg = pCI->Flat.m_p_term_crlKey->pClone();
-  p_term_sqyArg->vApplyCast_p(p_term_found);
-  //p_term_sqyArg->vDump();
-
-
-  Symbol xSymbol_prmCol(SF_SQY_PRM, 1);
-  p_from_exists->bUpdateSymbolRecursive(CK_TERM, &xSymbol_prmCol, p_term_sqyArg->pSymbol());
-
-  delete p_term_sqyArg;
+    Symbol xSymbol_prmCol(SF_SQY_PRM, i_arg + 1);
+    p_from_exists->bUpdateSymbolRecursive(CK_TERM, &xSymbol_prmCol, p_term_sqyArg->pSymbol());
+    delete p_term_sqyArg;
+  }
 
   // pCI->PRINTBOARD_dbg();
 

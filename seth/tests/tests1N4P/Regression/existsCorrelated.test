@@ -1,0 +1,198 @@
+/*----------------------------------------------------------------------------*/
+/* existsCorrelated.test -- correlated EXISTS / NOT EXISTS (TPC-H Q21, Q22)   */
+/*----------------------------------------------------------------------------*/
+
+// What did not work:
+//  - NOT EXISTS with a correlated sub-query had no fold strategy.
+//  - A sub-query correlated on a second column in another way than "=="
+//    (l2.l_suppkey <> l1.l_suppkey) failed: only one argument of the call was
+//    handled, "<>" on an indexed column was taken for an index bound, and the
+//    outer column was not kept for the lookup unless the query selected it.
+//  - With a self-join the predicates on the inner table were applied to the
+//    outer row, which has columns of the same names (wrong result).
+//  - A sub-query whose only predicate is the correlation, and IN / NOT IN
+//    without a predicate, crashed: culling the comparison that is also the
+//    bound left the lookup with an empty constraint.
+//  - A comparison of two columns of one table, one of them indexed
+//    (l_receiptdate > l_commitdate), was taken for an index bound and crashed.
+// The lookups are on L_ORDERKEY and S_SUPPKEY, the columns the tables are
+// partitioned on (see partitionedLookup.test).
+// The expected rows were computed from DATA/TPCH/lineitem10k.csv and
+// supplier_2k.tbl independently of RapidsSE.
+
+create table ${testName2}_lineitem (
+  L_ORDERKEY      INTEGER       NOT NULL,
+  L_PARTKEY       INTEGER       NOT NULL,
+  L_SUPPKEY       INTEGER       NOT NULL,
+  L_LINENUMBER    INTEGER       NOT NULL,
+  L_QUANTITY      DECIMAL(15,2) NOT NULL,
+  L_EXTENDEDPRICE DECIMAL(15,2) NOT NULL,
+  L_DISCOUNT      DECIMAL(15,2) NOT NULL,
+  L_TAX           DECIMAL(15,2) NOT NULL,
+  L_RETURNFLAG    CHAR(1)       NOT NULL,
+  L_LINESTATUS    CHAR(1)       NOT NULL,
+  L_SHIPDATE      DATE          NOT NULL,
+  L_COMMITDATE    DATE          NOT NULL,
+  L_RECEIPTDATE   DATE          NOT NULL,
+  L_SHIPINSTRUCT  CHAR(25)      NOT NULL,
+  L_SHIPMODE      CHAR(10)      NOT NULL,
+  L_COMMENT       VARCHAR(44)   NOT NULL
+);
+success
+create index ${testName2}_IxL_ORDERKEY on ${testName2}_lineitem (L_ORDERKEY);
+affected: 0
+create index ${testName2}_IxL_SUPPKEY on ${testName2}_lineitem (L_SUPPKEY);
+affected: 0
+create index ${testName2}_IxL_RECEIPTDATE on ${testName2}_lineitem (L_RECEIPTDATE);
+affected: 0
+load ${testName2}_lineitem "../DATA/TPCH/lineitem10k.csv";
+success
+
+create table ${testName2}_supplier (
+  S_SUPPKEY   INTEGER       NOT NULL,
+  S_NAME      VARCHAR(25)   NOT NULL,
+  S_ADDRESS   VARCHAR(40)   NOT NULL,
+  S_NATIONKEY INTEGER       NOT NULL,
+  S_PHONE     VARCHAR(15)   NOT NULL,
+  S_ACCTBAL   DECIMAL(15,2) NOT NULL,
+  S_COMMENT   VARCHAR(101)  NOT NULL
+);
+success
+create index ${testName2}_IxS_SUPPKEY on ${testName2}_supplier (S_SUPPKEY);
+affected: 0
+load ${testName2}_supplier "../DATA/TPCH/supplier_2k.tbl" <field_delimiter> = "|";
+success
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  Comparisons that are not index bounds
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+select count(*) from ${testName2}_lineitem where l_suppkey <> 6104;
+rows:
+  (9992)
+
+select count(*) from ${testName2}_lineitem where l_receiptdate > l_commitdate;
+rows:
+  (6238)
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  Self-join: the predicate is on l2 (215 rows have it themselves)
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+select count(*)
+  from ${testName2}_lineitem l1
+ where exists (select * from ${testName2}_lineitem l2
+                where l2.l_orderkey = l1.l_orderkey and l2.l_quantity > 49);
+rows:
+  (979)
+
+select count(*)
+  from ${testName2}_lineitem l1
+ where not exists (select * from ${testName2}_lineitem l2
+                    where l2.l_orderkey = l1.l_orderkey and l2.l_quantity > 49);
+rows:
+  (9021)
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  The correlation is the only predicate
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+select count(*)
+  from ${testName2}_lineitem l1
+ where exists (select * from ${testName2}_supplier where s_suppkey = l1.l_suppkey);
+rows:
+  (1965)
+
+select count(*)
+  from ${testName2}_lineitem l1
+ where not exists (select * from ${testName2}_supplier where s_suppkey = l1.l_suppkey);
+rows:
+  (8035)
+
+select count(*) from ${testName2}_lineitem where l_suppkey in (select s_suppkey from ${testName2}_supplier);
+rows:
+  (1965)
+
+select count(*) from ${testName2}_lineitem where l_suppkey not in (select s_suppkey from ${testName2}_supplier);
+rows:
+  (8035)
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  Correlated on a second column with "<>". The query does not select
+//  l_suppkey: the lookup still has to get it.
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+select count(*)
+  from ${testName2}_lineitem l1
+ where exists (select * from ${testName2}_lineitem l2
+                where l2.l_orderkey = l1.l_orderkey
+                  and l2.l_suppkey <> l1.l_suppkey);
+rows:
+  (9654)
+
+select l1.l_orderkey, l1.l_linenumber
+  from ${testName2}_lineitem l1
+ where l1.l_orderkey < 40
+   and not exists (select * from ${testName2}_lineitem l2
+                where l2.l_orderkey = l1.l_orderkey
+                  and l2.l_suppkey <> l1.l_suppkey)
+ order by l1.l_orderkey, l1.l_linenumber;
+ordered rows:
+  (2, 1)
+  (4, 1)
+  (6, 1)
+  (36, 1)
+  (38, 1)
+
+select count(*)
+  from ${testName2}_lineitem l1
+ where not exists (select * from ${testName2}_lineitem l3
+                    where l3.l_orderkey = l1.l_orderkey
+                      and l3.l_suppkey <> l1.l_suppkey
+                      and l3.l_receiptdate > l3.l_commitdate);
+rows:
+  (944)
+
+select count(*)
+  from ${testName2}_lineitem l1
+ where l1.l_receiptdate > l1.l_commitdate
+   and exists (select * from ${testName2}_lineitem l2
+                where l2.l_orderkey = l1.l_orderkey
+                  and l2.l_suppkey <> l1.l_suppkey)
+   and not exists (select * from ${testName2}_lineitem l3
+                    where l3.l_orderkey = l1.l_orderkey
+                      and l3.l_suppkey <> l1.l_suppkey
+                      and l3.l_receiptdate > l3.l_commitdate);
+rows:
+  (382)
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  The shape of TPC-H Q21
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+select s_name, count(*) as numwait
+  from ${testName2}_supplier, ${testName2}_lineitem l1
+ where s_suppkey = l1.l_suppkey
+   and l1.l_receiptdate > l1.l_commitdate
+   and exists (select * from ${testName2}_lineitem l2
+                where l2.l_orderkey = l1.l_orderkey
+                  and l2.l_suppkey <> l1.l_suppkey)
+   and not exists (select * from ${testName2}_lineitem l3
+                    where l3.l_orderkey = l1.l_orderkey
+                      and l3.l_suppkey <> l1.l_suppkey
+                      and l3.l_receiptdate > l3.l_commitdate)
+ group by s_name
+ order by numwait desc, s_name
+ limit 6;
+ordered rows:
+  ('Supplier#000001798', 2)
+  ('Supplier#000000001', 1)
+  ('Supplier#000000034', 1)
+  ('Supplier#000000046', 1)
+  ('Supplier#000000051', 1)
+  ('Supplier#000000073', 1)
+
+drop table ${testName2}_lineitem;
+success
+drop table ${testName2}_supplier;
+success

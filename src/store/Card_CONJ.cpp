@@ -316,13 +316,15 @@ void Card_CONJ::vMorph_sqlOp_To_EQ(CardIter* pCI, Card_Term* p_term)
 {
   _precondition_(_ADDRESS_,_MAGIC_,CN_CARD,_FOOTER_);
 
-  if (pSymbol()->bHasFacet("exists"_Stz)) {
+  if (pSymbol()->bHasFacet("exists"_Stz) || pSymbol()->bHasFacet("notExists"_Stz)) {
 
    // pCI->PRINTBOARD_dbg();
 
     SYM(SF_RLN_OP,"=="_Stz);
 
-    Card_Term* p_term1 = _pCard_Term(pGetChild(1));
+    // the call follows its arguments, of which there can be several
+    Card_Term* p_term1 = pGetTerm_sqyNo(pCI);
+    RASSERT(p_term1);
     RASSERT(pCI->m_pBench->bKnown_sqy(p_term1->pSymbol())); //temp
 
     Symbol x_Symbol_expCol1;
