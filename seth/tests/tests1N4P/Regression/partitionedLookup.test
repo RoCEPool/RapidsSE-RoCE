@@ -9,10 +9,12 @@
 //   IN, EXISTS       one result row per partition that has a match
 //   NOT IN           one result row per partition that has no match
 //   LEFT OUTER JOIN  one null-extended row per partition that has no match
-// These wrong results are now refused with EC_NOT_IMPLEMENTED. With the table
-// partitioned on the column (the first column, or PARTITION BY) one partition
-// holds all matches, the row is sent to that partition only, and the result
-// is right.
+// With the table partitioned on the column (the first column, or PARTITION BY)
+// one partition holds all matches, the row is sent to that partition only,
+// and the result is right. Otherwise:
+//   IN               the planner makes the sub-query SELECT DISTINCT, which
+//                    is joined to the outer query instead of looked up
+//   the others       are refused with EC_NOT_IMPLEMENTED
 // The expected counts were computed from DATA/TPCH/part_100.tbl and
 // partsupp_2k.tbl independently of RapidsSE: 94 of the 100 parts have a
 // match, a part has up to 4 matches.
@@ -91,13 +93,53 @@ rows:
   (205)
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-//  Not partitioned on the looked-up column: refused
+//  IN on a column the table is not partitioned on: the sub-query is planned
+//  as SELECT DISTINCT and joined, instead of being looked up
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 select count(*)
   from ${testName2}_part
  where p_partkey in (select ps_partkey from ${testName2}_psOther where ps_availqty < 5000);
-failure contains: 'EC_NOT_IMPLEMENTED'
+rows:
+  (94)
+
+select p_partkey
+  from ${testName2}_part
+ where p_partkey in (select ps_partkey from ${testName2}_psOther where ps_availqty < 600)
+ order by p_partkey;
+ordered rows:
+  (8)
+  (21)
+  (28)
+  (30)
+  (31)
+  (32)
+  (35)
+  (36)
+  (41)
+  (44)
+  (49)
+  (50)
+  (51)
+  (54)
+  (56)
+  (59)
+  (60)
+  (66)
+  (71)
+  (77)
+  (79)
+  (81)
+  (84)
+  (85)
+  (88)
+  (91)
+  (95)
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  Not partitioned on the looked-up column: EXISTS, NOT IN and
+//  outer join are refused
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 select count(*)
   from ${testName2}_part

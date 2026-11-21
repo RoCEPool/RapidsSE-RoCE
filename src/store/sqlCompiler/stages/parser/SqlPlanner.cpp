@@ -10,6 +10,9 @@
 #include "sqlBaseVisitor.h"
 
 #include "QueryNode.hpp"
+#include "SeApi.hpp"
+#include "TableMetadata.hpp"
+#include "PartitionKeyMetadata.hpp"
 #include "QueryNodeStack.hpp"
 #include "QueryNodeList.hpp"
 
@@ -1756,6 +1759,77 @@ static b1 bContains(antlr4::tree::ParseTree* pTree)
   return nCount<T>(pTree) > 0;
 }
 
+template <class T>
+static void vCollect(antlr4::tree::ParseTree* pTree, std::vector<T*>& rFound)
+{
+  if (!pTree) {
+    return;
+  }
+
+  if (T* pFound = dynamic_cast<T*>(pTree)) {
+    rFound.push_back(pFound);
+  }
+  for (antlr4::tree::ParseTree* pChild : pTree->children) {
+    vCollect<T>(pChild, rFound);
+  }
+}
+
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -*/
+/* Is this query "SELECT <column> FROM <table> ..." with <column> the column  */
+/* that the base table <table> is partitioned on?                             */
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -*/
+// Answers false whenever that cannot be established here (a view, a quoted
+// or unknown name, an expression, a table partitioned on several columns).
+static b1 bSelectsItsPartitionColumn(antlr4::tree::ParseTree* pQuery)
+{
+  std::vector<sqlParser::SelectExprContext*> xSelects;
+  vCollect<sqlParser::SelectExprContext>(pQuery, xSelects);
+  std::vector<sqlParser::TableReferenceContext*> xTables;
+  vCollect<sqlParser::TableReferenceContext>(pQuery, xTables);
+  if (xSelects.size() != 1 || xTables.size() != 1) {
+    return false;
+  }
+
+  // one select item, which is nothing but a column
+  std::vector<sqlParser::SelectListItemContext*> xItems = xSelects[0]->selectList()->selectListItem();
+  if (xItems.size() != 1) {
+    return false;
+  }
+  std::vector<sqlParser::ColumnRefContext*> xColumns;
+  vCollect<sqlParser::ColumnRefContext>(xItems[0], xColumns);
+  if (xColumns.size() != 1 || !xItems[0]->expr() ||
+      xItems[0]->expr()->getText() != xColumns[0]->getText()) {
+    return false;
+  }
+
+  std::string sColumn  = xColumns[0]->columnName()->getText();
+  std::string sTable   = xTables[0]->table->getText();
+  std::string sSchema  = xTables[0]->schema  ? xTables[0]->schema->getText()  : "";
+  std::string sCatalog = xTables[0]->catalog ? xTables[0]->catalog->getText() : "";
+
+  b1 bIsPartitionColumn = false;
+
+  STORE::SeApi* pSeApi = new STORE::SeApi();
+  Pds* pTables = pSeApi->pSearchTables(sCatalog.empty() ? nullptr : (Stz*) sCatalog.c_str(),
+                                       sSchema.empty()  ? nullptr : (Stz*) sSchema.c_str(),
+                                       (Stz*) sTable.c_str());
+  if (pTables && pTables->nItems() == 1) {
+    TableMetadata* pTableMeta = static_cast<TableMetadata*>(pTables->pFirstRow());
+
+    Pds* pKey = pSeApi->pPartitionKey(pTableMeta->szCatalogName(), pTableMeta->szSchemaName(),
+                                      pTableMeta->szTableName());
+    if (pKey && pKey->nItems() == 1) {
+      PartitionKeyMetadata* pKeyMeta = static_cast<PartitionKeyMetadata*>(pKey->pFirstRow());
+      bIsPartitionColumn = 0 == strcasecmp((const char*) pKeyMeta->szColumnName(), sColumn.c_str());
+    }
+    delete pKey;
+  }
+  delete pTables;
+  delete pSeApi;
+
+  return bIsPartitionColumn;
+}
+
 /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -*/
 /* Select Expression node (for each select of each query/subquery)            */
 /* Contains select list / FROM / WHERE / GROUP BY / HAVING                    */
@@ -2612,12 +2686,20 @@ antlrcpp::Any SqlPlanner::visitSubqueryInOp(sqlParser::SubqueryInOpContext *pCtx
   b1 bInvert = (pCtx->NOT() != nullptr);
 
   // "x IN (query)" is true once per row of x, however many rows of the query
-  // equal x. A query over one table is run as a key lookup, which has this
-  // property. A query that joins tables, or that has sub-queries of its own,
-  // is joined to the outer query instead and gave one result row per match:
-  // make such a query return distinct rows.
+  // equal x.
+  //  - A query that joins tables, or that has sub-queries of its own, is
+  //    joined to the outer query and gave one result row per match: make such
+  //    a query return distinct rows.
+  //  - A query over one table is run as a key lookup on that table. The
+  //    lookup is right, and the fastest plan, when the table is partitioned
+  //    on the selected column: one partition holds all matches. On any other
+  //    column the matches can be in several partitions, which each answer
+  //    for themselves (such a plan is refused in
+  //    Card_Deck::eAddStageCast_toPrev_cast): make the query return distinct
+  //    rows there as well, and it is joined instead.
   m_bDistinctNextSelect = !bInvert &&
-                          nCount<sqlParser::TableReferenceContext>(pCtx->query()) > 1;
+                          (nCount<sqlParser::TableReferenceContext>(pCtx->query()) > 1 ||
+                           !bSelectsItsPartitionColumn(pCtx->query()));
 
   // Visit the subquery. First we need to save and clear the member variables
   PlannerContext xContext = xSaveMemberContext();
