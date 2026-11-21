@@ -95,6 +95,15 @@ Times are wall-clock times of the JDBC client for one execution, including the s
 client (reported in every matrix as "client overhead"). They are for spotting regressions, not
 a benchmark.
 
+## Known limit: 16 significant digits
+
+A decimal value in RapidsSE has a 56-bit mantissa, about 16 significant digits. A result that
+needs more is rounded (half to even) to the digits that fit. `sum_charge` of Q1 needs 18 digits
+to be exact at six decimals; RapidsSE returns it with five decimals and, because a running SUM
+rounds on every row once it has outgrown the mantissa, with a random error of about 0.001 at
+SF1. That is inside the 0.01 tolerance, but it is not an exact sum. An exact one needs a wider
+accumulator for SUM, which is not implemented.
+
 ## Configuration that is run
 
 One node, two partitions, two threads; `orders` partitioned on `O_CUSTKEY`, `region` and

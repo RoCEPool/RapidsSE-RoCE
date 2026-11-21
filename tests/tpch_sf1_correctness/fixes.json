@@ -1,4 +1,8 @@
 {
+  "01": {
+    "fix": "PR #19",
+    "source_files": "src/base/MathMacros.h"
+  },
   "02": {
     "fix": "PR #9",
     "source_files": "src/store/Card_Predicate.cpp, src/store/Card_Term.cpp"

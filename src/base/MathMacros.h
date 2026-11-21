@@ -51,28 +51,47 @@
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 // BCD helpers: exact arithmetic in 128 bits, then fit into the 56-bit
-// mantissa by dropping fractional digits (rounding half away from zero)
-// only when the exact result does not fit.
+// mantissa by dropping fractional digits only when the exact result does
+// not fit. Dropped digits are rounded half to even: a running SUM drops a
+// digit on every row once it has outgrown the mantissa, and rounding half
+// away from zero there adds up to a visible bias (TPC-H Q1 at SF1:
+// +0.157 on sum_charge over 2.9 million rows).
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 // the scale is an 8-bit signed field
 #define C_BCD_SCALE_MAX_SYNTH 127
 
-static inline __int128 xBcd_dropDigit(__int128 x)
+// x / 10^nDigits, rounded half to even in one step
+static inline __int128 xBcd_dropDigits(__int128 x, int nDigits)
 {
-  __int128 q = x / 10;
-  int r = (int)(x % 10);
-  if (r >= 5) q++;
-  else if (r <= -5) q--;
+  __int128 p = 1;
+  for (int i = 0; i < nDigits; i++) p *= 10;
+  __int128 q = x / p;
+  __int128 r = x % p;
+  if (r < 0) r = -r;
+  if (2 * r > p || (2 * r == p && (q & 1)))
+    q += (x < 0) ? -1 : 1;
   return q;
 }
 
-// fit mantissa x at scale *piScale into a Bcd; returns false on overflow
+static inline __int128 xBcd_dropDigit(__int128 x)
+{
+  return xBcd_dropDigits(x, 1);
+}
+
+// fit mantissa x at scale iScale into a Bcd; returns false on overflow
 static inline bool bBcd_fit(__int128 x, i8 iScale, union Bcd_T* pResult)
 {
-  while ((x > C_BCD_MAX || x < C_BCD_MIN) && iScale > 0) {
-    x = xBcd_dropDigit(x);
-    iScale--;
+  if (x > C_BCD_MAX || x < C_BCD_MIN) {
+    // the number of digits that have to go, then one rounding of the exact value
+    int nDrop = 0;
+    for (__int128 y = x; (y > C_BCD_MAX || y < C_BCD_MIN) && nDrop < iScale; y /= 10)
+      nDrop++;
+    __int128 y = xBcd_dropDigits(x, nDrop);
+    if ((y > C_BCD_MAX || y < C_BCD_MIN) && nDrop < iScale)   // rounded up past the limit
+      y = xBcd_dropDigits(x, ++nDrop);
+    x = y;
+    iScale -= nDrop;
   }
   if (x > C_BCD_MAX || x < C_BCD_MIN)
     return false;
