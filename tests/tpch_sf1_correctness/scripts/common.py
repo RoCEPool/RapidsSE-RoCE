@@ -21,10 +21,12 @@ STATUSES = ['PASS', 'PARSE_ERROR', 'PLAN_ERROR', 'OPTIMIZER_ERROR', 'RUNTIME_ERR
 
 
 def git_commit():
-    r = subprocess.run(['git', '-C', REPO, 'rev-parse', 'HEAD'], capture_output=True, text=True)
-    d = subprocess.run(['git', '-C', REPO, 'status', '--porcelain', '--untracked-files=no', 'src'],
-                       capture_output=True, text=True)
-    return r.stdout.strip() + (' (with uncommitted changes in src)' if d.stdout.strip() else '')
+    """The commit that was built; marked when the source differs from it."""
+    def git(*a):
+        return subprocess.run(['git', '-C', REPO] + list(a), capture_output=True, text=True).stdout.strip()
+    head = git('rev-parse', 'HEAD') or 'unknown'
+    dirty = git('status', '--porcelain', '--untracked-files=no', '--', 'src')
+    return head + (' + uncommitted changes in src/' if dirty else '')
 
 
 def sha256(path):

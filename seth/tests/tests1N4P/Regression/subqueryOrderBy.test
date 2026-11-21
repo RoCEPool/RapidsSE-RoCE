@@ -1,0 +1,152 @@
+/*----------------------------------------------------------------------------*/
+/* subqueryOrderBy.test -- ORDER BY of a query that has a sub-query           */
+/*----------------------------------------------------------------------------*/
+
+// A sub-query that is folded into the query adds a column to the rows of the
+// operator it is folded into, and the keys of the ORDER BY are moved up by one
+// to follow. That was done for every folded sub-query. When the sub-query is
+// in the WHERE and the query aggregates, the aggregation restates the columns
+// and the added one never reaches the sort: the keys were moved to the wrong
+// column and the rows came back ordered by the next column (TPC-H Q18 was
+// ordered by sum(l_quantity) instead of o_totalprice, o_orderdate).
+// The expected rows were computed from DATA/TPCH/orders10k.csv and
+// lineitem10k.csv independently of RapidsSE.
+
+create table ${testName2}_orders (
+  O_ORDERKEY      INTEGER       NOT NULL,
+  O_CUSTKEY       INTEGER       NOT NULL,
+  O_ORDERSTATUS   CHAR(1)       NOT NULL,
+  O_TOTALPRICE    DECIMAL(15,2) NOT NULL,
+  O_ORDERDATE     DATE          NOT NULL,
+  O_ORDERPRIORITY CHAR(15)      NOT NULL,
+  O_CLERK         CHAR(15)      NOT NULL,
+  O_SHIPPRIORITY  INTEGER       NOT NULL,
+  O_COMMENT       VARCHAR(79)   NOT NULL
+);
+success
+create index ${testName2}_IxO_ORDERKEY on ${testName2}_orders (O_ORDERKEY);
+affected: 0
+load ${testName2}_orders "../DATA/TPCH/orders10k.csv";
+success
+
+create table ${testName2}_lineitem (
+  L_ORDERKEY      INTEGER       NOT NULL,
+  L_PARTKEY       INTEGER       NOT NULL,
+  L_SUPPKEY       INTEGER       NOT NULL,
+  L_LINENUMBER    INTEGER       NOT NULL,
+  L_QUANTITY      DECIMAL(15,2) NOT NULL,
+  L_EXTENDEDPRICE DECIMAL(15,2) NOT NULL,
+  L_DISCOUNT      DECIMAL(15,2) NOT NULL,
+  L_TAX           DECIMAL(15,2) NOT NULL,
+  L_RETURNFLAG    CHAR(1)       NOT NULL,
+  L_LINESTATUS    CHAR(1)       NOT NULL,
+  L_SHIPDATE      DATE          NOT NULL,
+  L_COMMITDATE    DATE          NOT NULL,
+  L_RECEIPTDATE   DATE          NOT NULL,
+  L_SHIPINSTRUCT  CHAR(25)      NOT NULL,
+  L_SHIPMODE      CHAR(10)      NOT NULL,
+  L_COMMENT       VARCHAR(44)   NOT NULL
+);
+success
+create index ${testName2}_IxL_ORDERKEY on ${testName2}_lineitem (L_ORDERKEY);
+affected: 0
+load ${testName2}_lineitem "../DATA/TPCH/lineitem10k.csv";
+success
+
+// IN sub-query in the WHERE, GROUP BY, ORDER BY on the third column (the Q18 shape)
+select o_orderkey, o_orderdate, o_totalprice, sum(l_quantity)
+  from ${testName2}_orders, ${testName2}_lineitem
+ where o_orderkey in (select l_orderkey from ${testName2}_lineitem group by l_orderkey having sum(l_quantity) > 250)
+   and o_orderkey = l_orderkey
+ group by o_orderkey, o_orderdate, o_totalprice
+ order by o_totalprice desc, o_orderdate;
+ordered rows:
+  (8516, '1996-04-08', 430322.22, 271)
+  (6882, '1997-04-09', 408446.93, 303)
+  (2567, '1998-02-27', 407282.71, 266)
+  (7523, '1997-04-08', 394545.56, 257)
+  (4421, '1997-04-04', 384354.79, 255)
+  (3460, '1995-10-03', 367924.77, 254)
+  (5989, '1995-10-15', 355633.39, 257)
+  (2208, '1995-05-01', 331019.93, 256)
+
+// the same sub-query without an aggregation: here the added column does reach the sort
+select o_orderkey, o_totalprice
+  from ${testName2}_orders
+ where o_orderkey in (select l_orderkey from ${testName2}_lineitem group by l_orderkey having sum(l_quantity) > 250)
+ order by o_totalprice desc, o_orderkey;
+ordered rows:
+  (8516, 430322.22)
+  (6882, 408446.93)
+  (2567, 407282.71)
+  (7523, 394545.56)
+  (4421, 384354.79)
+  (3460, 367924.77)
+  (5989, 355633.39)
+  (2208, 331019.93)
+
+// scalar sub-query in the WHERE, GROUP BY, ORDER BY on the second column
+select o_orderkey, o_totalprice, sum(l_quantity)
+  from ${testName2}_orders, ${testName2}_lineitem
+ where l_quantity > (select max(l_quantity) - 1 from ${testName2}_lineitem)
+   and o_totalprice > 300000
+   and o_orderkey = l_orderkey
+ group by o_orderkey, o_totalprice
+ order by o_totalprice desc, o_orderkey;
+ordered rows:
+  (8516, 430322.22, 50)
+  (2567, 407282.71, 100)
+  (2306, 398867.54, 50)
+  (5925, 389351.40, 50)
+  (7079, 386240.22, 100)
+  (3460, 367924.77, 50)
+  (6695, 365342.68, 100)
+  (4293, 364063.31, 50)
+  (6630, 362830.38, 50)
+  (1121, 350404.56, 50)
+  (6215, 346654.49, 50)
+  (9730, 345976.46, 50)
+  (5185, 344824.32, 50)
+  (4197, 343144.70, 50)
+  (8577, 341474.93, 50)
+  (1888, 337294.96, 50)
+  (5859, 335323.15, 50)
+  (6817, 332529.46, 50)
+  (2534, 332451.75, 50)
+  (928, 331325.36, 50)
+  (6020, 331130.00, 50)
+  (2208, 331019.93, 50)
+  (4484, 330068.07, 50)
+  (2690, 329934.42, 50)
+  (9859, 329057.18, 50)
+  (8070, 328337.05, 50)
+  (4230, 328130.28, 50)
+  (484, 327889.57, 50)
+  (8867, 324959.84, 50)
+  (5317, 323719.06, 50)
+  (5633, 322284.72, 50)
+  (1475, 322140.89, 50)
+  (5605, 320165.65, 50)
+  (1731, 317068.68, 50)
+  (8422, 316498.10, 50)
+  (1153, 313658.75, 50)
+  (8897, 306323.00, 50)
+  (6150, 304873.13, 50)
+  (4355, 303119.26, 50)
+  (7877, 300448.57, 50)
+
+// sub-query in the HAVING: it is injected into the aggregation and the keys do move
+select l_orderkey, sum(l_quantity) as q
+  from ${testName2}_lineitem
+ group by l_orderkey
+having sum(l_quantity) > (select max(l_quantity) * 5.2 from ${testName2}_lineitem)
+ order by q desc, l_orderkey;
+ordered rows:
+  (6882, 303)
+  (8516, 271)
+  (2567, 266)
+
+drop table ${testName2}_orders;
+success
+drop table ${testName2}_lineitem;
+success

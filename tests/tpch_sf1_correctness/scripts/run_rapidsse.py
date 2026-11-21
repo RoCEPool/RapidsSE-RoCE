@@ -109,7 +109,9 @@ def run_query(q, sql, out_dir, timeout, data_dir, node_log):
     trace = []
     if os.path.exists(ENGINE_LOG):
         with open(ENGINE_LOG, errors='replace') as f:
-            trace = [re.sub(r'^\[[0-9: -]+\] ?', '', l.rstrip('\n')) for i, l in enumerate(f) if i >= n0]
+            # the log stamps the time into the text wherever a write starts, also inside a line
+            trace = [re.sub(r'\[\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\] ?', '', l.rstrip('\n'))
+                     for i, l in enumerate(f) if i >= n0]
     try:
         a = next(i for i, l in enumerate(trace) if 'Optimised pipeline' in l)
         b = next(i for i, l in enumerate(trace) if i > a and 'End of optimised pipeline' in l)

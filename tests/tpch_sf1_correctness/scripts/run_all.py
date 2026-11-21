@@ -99,7 +99,7 @@ def main():
     print('2. reference results')
     src = run_reference.run(a.reference, a.data_dir)
     print('   ' + src['engine'])
-    out_dir = os.path.join(c.REPORTS, '%s_%s' % (time.strftime('%Y%m%d-%H%M%S'), c.git_commit()[:10]))
+    out_dir = os.path.join(c.REPORTS, '%s_%s' % (time.strftime('%Y%m%d-%H%M%S'), c.git_commit()[:10]))  # the directory name: the commit only
     rounds = []
     for i in range(1, a.rounds + 1):
         print('3. RapidsSE, round %d of %d' % (i, a.rounds))
