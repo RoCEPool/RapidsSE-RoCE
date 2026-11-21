@@ -64,18 +64,22 @@ void Card_Key::vAssemble_injCrlKey(CardIter* pCI)
   pCI->E.p_key = new Card_Key;
   //pCI->E.p_key->pSymbol()->Y_vSet(P_InjCrlKey);
 
+  // one key column per correlation key, in parameter order
   eAL e_Level = (eAL) pCI->E.p_level->pSymbol()->Y_iGet(P_Level);
-  if (AL_PARTITION == e_Level) {
-    pCI->E.p_expr = Card_Expr::pCraft_expr_Of_term(pCI->Flat.m_p_expr_crlKey->pGet_term0());
+  for (i8 i_key = 0; i_key < pCI->Flat.m_n_crlKey; i_key++) {
+    Card_Expr* p_expr_crlKey = pCI->Flat.m_ap_expr_crlKey[i_key];
+    if (AL_PARTITION == e_Level) {
+      pCI->E.p_expr = Card_Expr::pCraft_expr_Of_term(p_expr_crlKey->pGet_term0());
+    }
+    else {
+      Symbol xSymbol(SF_EXP_COL, i_key + 1, p_expr_crlKey->xCast());
+      pCI->E.p_expr = Card_Expr::pCraft_expr_Of_symbol(&xSymbol);
+    }
+    pCI->E.p_expr->pSymbol()->Y_vSet(P_InjCrlKey);
+    pCI->E.p_key->vAppendChild(pCI->E.p_expr);
   }
-  else {
-    Symbol xSymbol(SF_EXP_COL, "$1"_Stz, pCI->Flat.m_p_expr_crlKey->xCast());
-    pCI->E.p_expr = Card_Expr::pCraft_expr_Of_symbol(&xSymbol);
-  }
-  pCI->E.p_expr->pSymbol()->Y_vSet(P_InjCrlKey);
-  pCI->E.p_key->vAppendChild(pCI->E.p_expr);
 
-  pCI->E.p_key->vApplyCast_x(pCI->E.p_expr->xCast());
+  pCI->E.p_key->vApplyCast_x(pCI->Flat.m_ap_expr_crlKey[0]->xCast());
 
   pCI->E.p_key->vRenumberAll_expr(SF_KEY_COL);
 

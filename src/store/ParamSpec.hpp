@@ -9,7 +9,7 @@ namespace STORE
                   , public ListItem_t<ParamSpec>
   {
   private:
-    s32  m_sParamNm;  // parameter name
+    s256 m_sParamNm;  // parameter names: a comma separated list
 
 
     // must be last

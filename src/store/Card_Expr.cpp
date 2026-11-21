@@ -51,7 +51,7 @@ Card_Expr::~Card_Expr(void) noexcept(false)
 /*----------------------------------------------------------------------------*/
 /*                                                                            */
 /*----------------------------------------------------------------------------*/
-void Card_Expr::vAssemble_injCrlRsl(CardIter* pCI)
+void Card_Expr::vAssemble_injCrlRsl(CardIter* pCI, i8 i_key)
 {
   _static_
 
@@ -61,15 +61,19 @@ void Card_Expr::vAssemble_injCrlRsl(CardIter* pCI)
     pCI->E.p_expr = Card_Expr::pCraft_expr_keyCol_Of_term(pCI->E.p_expr->pGet_term0());
   }
   else {
-    Symbol xSymbol_KeyCol(SF_KEY_COL,1);
+    Symbol xSymbol_KeyCol(SF_KEY_COL,i_key + 1);
+    Cast xCast_key = pCI->Flat.m_ap_expr_crlKey[i_key]->xCast();
 
     pCI->vNewMember(CK_EXPR);
     i8 i_Board = pCI->Flat.m_pSqy_inner->pBoard()->i_Board();
-    pCI->E.p_expr->pSymbol()->vApplyFacet_varg(SF_NMD_COL, C_CRLKEY, i_Board);
+    if (0 == i_key)
+      pCI->E.p_expr->pSymbol()->vApplyFacet_varg(SF_NMD_COL, C_CRLKEY, i_Board);
+    else
+      pCI->E.p_expr->pSymbol()->vApplyFacet_varg(SF_NMD_COL, C_CRLKEY_N, i_Board, i_key + 1);
     pCI->vAppendNewChild(pCI->E.p_expr, CK_TERM, &xSymbol_KeyCol);
 
-    pCI->E.p_term->vApplyCast_x(pCI->E.p_key->xCast());
-    pCI->E.p_expr->vApplyCast_x(pCI->E.p_key->xCast());
+    pCI->E.p_term->vApplyCast_x(xCast_key);
+    pCI->E.p_expr->vApplyCast_x(xCast_key);
 
     pCI->E.p_emit->vBump_expCol(pCI);
   }

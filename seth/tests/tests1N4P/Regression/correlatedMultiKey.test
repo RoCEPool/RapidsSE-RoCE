@@ -1,0 +1,215 @@
+/*----------------------------------------------------------------------------*/
+/* correlatedMultiKey.test -- sub-query correlated on more than one column    */
+/*----------------------------------------------------------------------------*/
+
+// An aggregate sub-query that is correlated on two or more columns, as in
+// TPC-H Q20 (l_partkey = ps_partkey and l_suppkey = ps_suppkey), failed with
+// "EC_NONE; none": the optimiser created one correlation parameter for the
+// whole list of outer columns and folded the sub-query on a single key.
+// It is now folded as a GROUP BY over all correlation keys.
+// Names of more than about 30 characters in the list of outer columns were
+// cut off as well (the three-key case below).
+// The expected rows were computed from DATA/TPCH/lineitem10k.csv and
+// DATA/TPCH/partsupp_2k.tbl independently of RapidsSE.
+
+create table ${testName2}_lineitem (
+  L_ORDERKEY      INTEGER       NOT NULL,
+  L_PARTKEY       INTEGER       NOT NULL,
+  L_SUPPKEY       INTEGER       NOT NULL,
+  L_LINENUMBER    INTEGER       NOT NULL,
+  L_QUANTITY      DECIMAL(15,2) NOT NULL,
+  L_EXTENDEDPRICE DECIMAL(15,2) NOT NULL,
+  L_DISCOUNT      DECIMAL(15,2) NOT NULL,
+  L_TAX           DECIMAL(15,2) NOT NULL,
+  L_RETURNFLAG    CHAR(1)       NOT NULL,
+  L_LINESTATUS    CHAR(1)       NOT NULL,
+  L_SHIPDATE      DATE          NOT NULL,
+  L_COMMITDATE    DATE          NOT NULL,
+  L_RECEIPTDATE   DATE          NOT NULL,
+  L_SHIPINSTRUCT  CHAR(25)      NOT NULL,
+  L_SHIPMODE      CHAR(10)      NOT NULL,
+  L_COMMENT       VARCHAR(44)   NOT NULL
+);
+success
+create index ${testName2}_IxL_PARTKEY on ${testName2}_lineitem (L_PARTKEY);
+affected: 0
+load ${testName2}_lineitem "../DATA/TPCH/lineitem10k.csv";
+success
+
+create table ${testName2}_partsupp (
+  PS_PARTKEY    INTEGER       NOT NULL,
+  PS_SUPPKEY    INTEGER       NOT NULL,
+  PS_AVAILQTY   INTEGER       NOT NULL,
+  PS_SUPPLYCOST DECIMAL(15,2) NOT NULL,
+  PS_COMMENT    VARCHAR(199)  NOT NULL
+);
+success
+create index ${testName2}_IxPS_PARTKEY on ${testName2}_partsupp (PS_PARTKEY);
+affected: 0
+create index ${testName2}_IxPS_SUPPKEY on ${testName2}_partsupp (PS_SUPPKEY);
+affected: 0
+load ${testName2}_partsupp "../DATA/TPCH/partsupp_2k.tbl" <field_delimiter> = "|";
+success
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  One key and one other predicate in the sub-query. This failed too:
+//  taking the correlation out left an AND with one child, which the
+//  predicate writer rejects. (163 rows; with two keys there are 39.)
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+select count(*)
+  from ${testName2}_partsupp
+ where ps_availqty > (select 100 * sum(l_quantity)
+                        from ${testName2}_lineitem
+                       where l_partkey = ps_partkey
+                         and l_shipdate >= date '1995-01-01');
+rows:
+  (163)
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  Two keys, the shape of TPC-H Q20
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+select ps_partkey, ps_suppkey
+  from ${testName2}_partsupp
+ where ps_availqty > (select 100 * sum(l_quantity)
+                        from ${testName2}_lineitem
+                       where l_partkey = ps_partkey
+                         and l_suppkey = ps_suppkey
+                         and l_shipdate >= date '1995-01-01')
+ order by ps_partkey, ps_suppkey;
+ordered rows:
+  (51, 2552)
+  (53, 7554)
+  (175, 5176)
+  (182, 7683)
+  (221, 2722)
+  (222, 7723)
+  (245, 246)
+  (309, 310)
+  (449, 5450)
+  (450, 2951)
+  (484, 2985)
+  (567, 8068)
+  (580, 581)
+  (738, 739)
+  (741, 5742)
+  (875, 3376)
+  (942, 5943)
+  (945, 8446)
+  (957, 5958)
+  (1009, 6010)
+  (1062, 3563)
+  (1079, 3580)
+  (1101, 6102)
+  (1107, 3608)
+  (1127, 6128)
+  (1169, 1170)
+  (1269, 3770)
+  (1388, 3889)
+  (1426, 6427)
+  (1537, 9038)
+  (1622, 4123)
+  (1635, 6636)
+  (1652, 9153)
+  (1722, 4223)
+  (1804, 9305)
+  (1887, 4388)
+  (1923, 9424)
+  (1933, 6934)
+  (1947, 1948)
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  Keys in the other order, outer column first, no <project> in the sub-query
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+select count(*)
+  from ${testName2}_partsupp
+ where ps_availqty > (select sum(l_quantity)
+                        from ${testName2}_lineitem
+                       where ps_suppkey = l_suppkey
+                         and ps_partkey = l_partkey
+                         and l_shipdate >= date '1995-01-01');
+rows:
+  (54)
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  Two keys, one of them a string, on a self-join
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+select l1.l_shipmode, l1.l_linenumber, l1.l_orderkey
+  from ${testName2}_lineitem l1
+ where l1.l_extendedprice = (select max(l2.l_extendedprice)
+                               from ${testName2}_lineitem l2
+                              where l2.l_shipmode = l1.l_shipmode
+                                and l2.l_linenumber = l1.l_linenumber)
+ order by l1.l_shipmode, l1.l_linenumber, l1.l_orderkey;
+ordered rows:
+  ('AIR', 1, 5952)
+  ('AIR', 2, 1863)
+  ('AIR', 3, 7591)
+  ('AIR', 4, 1475)
+  ('AIR', 5, 2628)
+  ('AIR', 6, 9794)
+  ('AIR', 7, 1281)
+  ('FOB', 1, 7270)
+  ('FOB', 2, 8256)
+  ('FOB', 3, 6817)
+  ('FOB', 4, 8581)
+  ('FOB', 5, 6439)
+  ('FOB', 6, 1477)
+  ('FOB', 7, 2023)
+  ('MAIL', 1, 5859)
+  ('MAIL', 2, 2214)
+  ('MAIL', 3, 9159)
+  ('MAIL', 4, 518)
+  ('MAIL', 5, 1607)
+  ('MAIL', 6, 4293)
+  ('MAIL', 7, 3778)
+  ('RAIL', 1, 9895)
+  ('RAIL', 2, 2790)
+  ('RAIL', 3, 3776)
+  ('RAIL', 4, 8805)
+  ('RAIL', 5, 2950)
+  ('RAIL', 6, 742)
+  ('RAIL', 7, 4355)
+  ('REG AIR', 1, 8775)
+  ('REG AIR', 2, 1153)
+  ('REG AIR', 3, 6403)
+  ('REG AIR', 4, 3430)
+  ('REG AIR', 5, 4069)
+  ('REG AIR', 6, 6373)
+  ('REG AIR', 7, 358)
+  ('SHIP', 1, 4643)
+  ('SHIP', 2, 7558)
+  ('SHIP', 3, 1667)
+  ('SHIP', 4, 2886)
+  ('SHIP', 5, 5505)
+  ('SHIP', 6, 3457)
+  ('SHIP', 7, 1762)
+  ('TRUCK', 1, 6754)
+  ('TRUCK', 2, 1700)
+  ('TRUCK', 3, 3201)
+  ('TRUCK', 4, 9730)
+  ('TRUCK', 5, 6051)
+  ('TRUCK', 6, 1923)
+  ('TRUCK', 7, 1575)
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  Three keys
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+select count(*)
+  from ${testName2}_lineitem l1
+ where l1.l_quantity = (select min(l2.l_quantity)
+                          from ${testName2}_lineitem l2
+                         where l2.l_returnflag = l1.l_returnflag
+                           and l2.l_linestatus = l1.l_linestatus
+                           and l2.l_shipmode = l1.l_shipmode);
+rows:
+  (208)
+
+drop table ${testName2}_lineitem;
+success
+drop table ${testName2}_partsupp;
+success

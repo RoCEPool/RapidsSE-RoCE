@@ -585,7 +585,9 @@ void XF_FLATTEN::vPromote_aggreg_To_gbyAgg(CardIter* pCI)
 //  pCI->Flat.m_p_expr_crlKey->vDump(__func__);
 //  pCI->Flat.m_p_conj_crlKey->vDump(__func__);
 //  pCI->Flat.m_p_term_crlKey->vDump(__func__);
-  RASSERT(pCI->Flat.m_p_expr_crlKey->pSymbol()->bMatches(pCI->Flat.m_p_term_crlKey->pSymbol()));
+  i8 nKeys = pCI->Flat.m_n_crlKey;
+  for (i8 i_key = 0; i_key < nKeys; i_key++)
+    RASSERT(pCI->Flat.m_ap_expr_crlKey[i_key]->pSymbol()->bMatches(pCI->Flat.m_ap_term_crlKey[i_key]->pSymbol()));
 
 
   // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -635,17 +637,27 @@ void XF_FLATTEN::vPromote_aggreg_To_gbyAgg(CardIter* pCI)
   //           +                   //             %1
 
 
-  pCI->vClearRegisters();
-  pCI->vBeginEach();
-  while (pCI->bEachOp(CK_o_FROM, CK_o_FILTER, CK_PREDICATE)) {
-    if (pCI->E.p_predicate->bHasSub(pCI->Flat.m_p_conj_crlKey)) {
-      pCI->E.p_predicate->vRemoveSub(pCI->Flat.m_p_conj_crlKey);
-      break;
+  for (i8 i_key = 0; i_key < nKeys; i_key++) {
+    Card_CONJ* p_conj_crlKey = pCI->Flat.m_ap_conj_crlKey[i_key];
+
+    pCI->vClearRegisters();
+    pCI->vBeginEach();
+    bool bRemoved = false;
+    while (pCI->bEachOp(CK_o_FROM, CK_o_FILTER, CK_PREDICATE)) {
+      if (pCI->E.p_predicate->bHasSub(p_conj_crlKey)) {
+        // takes the comparison out and tidies up an AND that it leaves
+        // with one child or none
+        pCI->E.p_predicate->vRemove_rlnConj(_pCard_RlnConj(p_conj_crlKey));
+        bRemoved = true;
+        break;
+      }
     }
+    RASSERT(bRemoved);
+    RASSERT(p_conj_crlKey->pSymbol()->Y_bHas(P_CrlKeyConj));
+
+    // tidy up empty SQ:<table>/<filter>
+    pCI->E.p_from->vCull_filter_IfEmpty(pCI->E.p_filter);
   }
-  RASSERT(pCI->Flat.m_p_conj_crlKey->pSymbol()->Y_bHas(P_CrlKeyConj));
-  // tidy up empty SQ:<table>/<filter>
-  pCI->E.p_from->vCull_filter_IfEmpty(pCI->E.p_filter);
 
   //                   v           //  ]filter
   // F A A A P + F F F W A A A     //  .]boolPred
@@ -673,15 +685,17 @@ void XF_FLATTEN::vPromote_aggreg_To_gbyAgg(CardIter* pCI)
   // ???
 
   RASSERT(pCI->bEachOp(CK_o_WHERE, CK_PREDICATE));
-  pCI->E.p_predicate->vBump_term_ordCol(SF_EXP_COL, 2);
+  // the inner query arrives as its keys followed by its result
+  pCI->E.p_predicate->vBump_term_ordCol(SF_EXP_COL, nKeys + 1);
 
-  // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-  // append correlation key conjunction onto the OQ:<where>/<filter>/<boolPred>
+  // append correlation key conjunctions onto the OQ:<where>/<filter>/<boolPred>
+  for (i8 i_key = 0; i_key < nKeys; i_key++) {
+    Card_CONJ* p_conj_crlKey = pCI->Flat.m_ap_conj_crlKey[i_key];
+    p_conj_crlKey->pSymbol()->Y_vCut(P_CrlKeyConj);
+    p_conj_crlKey->pSymbol()->Y_vSet(P_CrlKeyTest);
 
-  pCI->Flat.m_p_conj_crlKey->pSymbol()->Y_vCut(P_CrlKeyConj);
-  pCI->Flat.m_p_conj_crlKey->pSymbol()->Y_vSet(P_CrlKeyTest);
-
-  pCI->E.p_predicate->vAppend_and_rlnConj(_pCard_RlnConj(pCI->Flat.m_p_conj_crlKey));
+    pCI->E.p_predicate->vAppend_and_rlnConj(_pCard_RlnConj(p_conj_crlKey));
+  }
 
   //                   v           //  ]filter
   // F A A A P + F F F W A A A     //  .]boolPred
@@ -733,6 +747,34 @@ void XF_FLATTEN::vPromote_aggreg_To_gbyAgg(CardIter* pCI)
 }
 
 /*----------------------------------------------------------------------------*/
+/* the <outerColNm> cards of a <correlation>: one per parameter, in order     */
+/*----------------------------------------------------------------------------*/
+static Card_OuterColNm* pOuterColNm(Card_Correlation* p_correlation, i8 iOrdinal)
+{
+  if (! p_correlation)
+    return nullptr;
+
+  i8 n = 0;
+  for (Kid xCorrelation(p_correlation); xCorrelation.bEach(); /**/) {
+    if (! xCorrelation.pChild()->bIsCard(CK_OUTERCOLNM))
+      continue;
+    if (++n == iOrdinal)
+      return _pCard_OuterColNm(xCorrelation.pChild());
+  }
+
+  return nullptr;
+}
+
+static i8 nOuterColNms(Card_Correlation* p_correlation)
+{
+  i8 n = 0;
+  while (pOuterColNm(p_correlation, n + 1))
+    n++;
+
+  return n ? n : 1;
+}
+
+/*----------------------------------------------------------------------------*/
 /*                                                                            */
 /*----------------------------------------------------------------------------*/
 bool XF_FLATTEN::bSnap_IQ_crlKey(CardIter* pCI)
@@ -740,51 +782,98 @@ bool XF_FLATTEN::bSnap_IQ_crlKey(CardIter* pCI)
 
   // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
   // pre-fold identify the <table>/<filter>/<boolPred>/<cmpPred> which is correlated by parameter
-  bool rbSnapped = false;
+  // The inner query may be correlated on several columns: one "column ==
+  // %n" comparison per parameter. Each is a correlation key, kept in
+  // parameter order so that key n belongs to %n.
+  i8 nKeys = nOuterColNms(pCI->Flat.m_pCorrelation);
+  RASSERT(nKeys >= 1 && nKeys <= pCI->Flat.C_MAX_CRLKEYS);
 
-  auto fbSnap_sqyArg = [pCI,&rbSnapped](Card_CONJ* p_conj, bool bUpwards)
+  pCI->Flat.m_n_crlKey = 0;
+  for (i8 i_key = 0; i_key < pCI->Flat.C_MAX_CRLKEYS; i_key++) {
+    pCI->Flat.m_ap_conj_crlKey[i_key] = nullptr;
+    pCI->Flat.m_ap_term_crlKey[i_key] = nullptr;
+    pCI->Flat.m_ap_expr_crlKey[i_key] = nullptr;
+  }
+
+  auto fbSnap_sqyArg = [pCI,nKeys](Card_CONJ* p_conj, bool bUpwards)
   {
     if (bUpwards)
       return C_CONTINUE_RECURSION;
+
     if (! p_conj->bIsCorrConj())
       return C_CONTINUE_RECURSION;
 
-    pCI->Flat.m_p_conj_crlKey = p_conj;
-    pCI->Flat.m_p_conj_crlKey->vMark1(MARK_AT);
-    pCI->Flat.m_p_conj_crlKey->pSymbol()->Y_vSet(P_CrlKeyConj);
+    Card_Term* p_term_prm = p_conj->pGetTerm(0)->pSymbol()->bHasFacet(SF_SQY_PRM) ?
+                              p_conj->pGetTerm(0) : p_conj->pGetTerm(1);
+    i8 i_key = p_term_prm->pSymbol()->iTo_ordinal(SF_SQY_PRM) - 1;
+    RASSERT(i_key >= 0 && i_key < nKeys);
+    RASSERT(! pCI->Flat.m_ap_conj_crlKey[i_key]); // one comparison per parameter
 
-    pCI->Flat.m_p_term_crlKey = static_cast<Card_RlnConj *>(p_conj)->pGet_term_crlKey();
-    pCI->Flat.m_p_term_crlKey->pSymbol()->Y_vSet(P_CrlKeyTerm);
+    p_conj->vMark1(MARK_AT);
+    p_conj->pSymbol()->Y_vSet(P_CrlKeyConj);
 
-    rbSnapped = true;
+    Card_Term* p_term_crlKey = static_cast<Card_RlnConj *>(p_conj)->pGet_term_crlKey();
+    p_term_crlKey->pSymbol()->Y_vSet(P_CrlKeyTerm);
 
-    return C_TERMINATE_RECURSION;
+    pCI->Flat.m_ap_conj_crlKey[i_key] = p_conj;
+    pCI->Flat.m_ap_term_crlKey[i_key] = p_term_crlKey;
+    pCI->Flat.m_n_crlKey++;
+
+    return C_CONTINUE_RECURSION;
   };
 
   // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
+  // the inner query is the part of the deck before the <fold>
+  i8 i_Op_fold = C_UNKNOWN;
+  for (i8 i_Main = 0; i_Main < pCI->E.p_deck->nChildCards(); i_Main++) {
+    if (pCI->E.p_deck->pGetChild(i_Main)->bIsCard(CK_o_FOLD)) {
+      i_Op_fold = i_Main;
+      break;
+    }
+  }
+
   pCI->vClearRegisters();
   pCI->vBeginEach();
-
   while (pCI->bEachOp(CK_o_FROM, CK_p_EMIT, CK_o_FILTER)) {
+
+    if (C_UNKNOWN != i_Op_fold && pCI->E.i_Op > i_Op_fold)
+      break;
 
     pCI->E.p_predicate = pCI->E.p_filter->pSub_predicate();
     Card_CONJ *p_conj_root = pCI->E.p_predicate->pRoot_conj();
 
+    i8 nBefore = pCI->Flat.m_n_crlKey;
     bool bIgnore = p_conj_root->bLambdaWalk_conj(fbSnap_sqyArg);
     UNUSED(bIgnore);
-    if (rbSnapped)
+
+    // the keys found on this <from>: snap the columns they are defined by
+    if (pCI->Flat.m_n_crlKey == nBefore)
+      continue;
+    for (i8 i_key = 0; i_key < nKeys; i_key++) {
+      if (! pCI->Flat.m_ap_term_crlKey[i_key] || pCI->Flat.m_ap_expr_crlKey[i_key])
+        continue;
+      Card_Expr* p_expr = pCI->pBackSearch_expr_For_col(pCI->Flat.m_ap_term_crlKey[i_key]->pSymbol(),
+                                                        pCI->E.i_Op + 1);
+      p_expr->vMark1(MARK_AT);
+      p_expr->pSymbol()->Y_vSet(P_CrlKeyDefn);
+      pCI->Flat.m_ap_expr_crlKey[i_key] = p_expr;
+    }
+
+    if (pCI->Flat.m_n_crlKey == nKeys)
       break;
   }
 
-  if (! rbSnapped)
+  if (! pCI->Flat.m_n_crlKey)
     return false;
 
-  pCI->Flat.m_p_expr_crlKey = pCI->pBackSearch_expr_For_col(pCI->Flat.m_p_term_crlKey->pSymbol(),
-                                                            pCI->E.i_Op + 1);
+  // every parameter needs its "==" comparison: a parameter that is used in
+  // another way is not supported here
+  RASSERT(pCI->Flat.m_n_crlKey == nKeys);
 
-  pCI->Flat.m_p_expr_crlKey->vMark1(MARK_AT);
-  pCI->Flat.m_p_expr_crlKey->pSymbol()->Y_vSet(P_CrlKeyDefn);
+  pCI->Flat.m_p_conj_crlKey = pCI->Flat.m_ap_conj_crlKey[0];
+  pCI->Flat.m_p_term_crlKey = pCI->Flat.m_ap_term_crlKey[0];
+  pCI->Flat.m_p_expr_crlKey = pCI->Flat.m_ap_expr_crlKey[0];
 
   return true;
 }
@@ -815,8 +904,13 @@ void XF_FLATTEN::vPromote_IQ_aggreg_To_gbyAgg_crlKey(CardIter* pCI)
     // -- -- -- -- -- -- -- -- -- -- --
     // emit
 
-    Card_Expr::vAssemble_injCrlRsl(pCI);
-    pCI->E.p_emit->vPushChild(pCI->E.p_expr);
+    // the keys go in front of the aggregates, in order: push the last first
+    for (i8 i_key = pCI->Flat.m_n_crlKey - 1; i_key >= 0; i_key--) {
+      pCI->E.p_expr = pCI->E.p_key->pGet_expr(i_key);
+      Card_Expr::vAssemble_injCrlRsl(pCI, i_key);
+      pCI->E.p_emit->vPushChild(pCI->E.p_expr);
+    }
+
     pCI->E.p_emit->vRenumberAll_expr();
 
     // -- -- -- -- -- -- -- -- -- -- --
@@ -848,25 +942,32 @@ void XF_FLATTEN::vEnhance_IQ_emit_project_Add_crlKey(CardIter* pCI)
   RASSERT(CT_NONE != pCI->E.p_key->eCTVal());
 
   pCI->E.p_emit = pCI->E.p_project->pSub_emit();
-  pCI->E.p_emit->vBump_expCol(pCI);// TODO: ,nBumpBy);
-
-
-  // push <project>/_SQCRLKEY_
-  pCI->vPushChild(pCI->E.p_emit, CK_EXPR);
   i8 i_Board = pCI->Flat.m_pSqy_inner->pBoard()->i_Board();
-  pCI->E.p_expr->pSymbol()->vApplyFacet_varg(SF_NMD_COL, C_CRLKEY, i_Board);
-  pCI->E.p_expr->pSymbol()->Y_vSet(P_InjCrlKey);
+  i8 nKeys = pCI->Flat.m_n_crlKey;
 
-  pCI->vAppendNewChild(pCI->E.p_expr, CK_TERM, Symbol(SF_EXP_COL, "$1"_Stz));
-  Symbol x_Symbol_expCol1(SF_EXP_COL, 1);
+  // push <project>/_SQCRLKEY_ for each key, the last key first: each push
+  // puts a "$1" in front and moves every column that is already there, the
+  // keys pushed before included, one place up.
+  for (i8 i_key = nKeys - 1; i_key >= 0; i_key--) {
+    Cast xCast_key = pCI->Flat.m_ap_expr_crlKey[i_key]->xCast();
 
-  pCI->E.p_term->vApplyCast_x(pCI->E.p_key->xCast());
-  pCI->E.p_expr->vApplyCast_x(pCI->E.p_key->xCast());
+    pCI->E.p_emit->vBump_expCol(pCI);
+
+    pCI->vPushChild(pCI->E.p_emit, CK_EXPR);
+    if (0 == i_key)
+      pCI->E.p_expr->pSymbol()->vApplyFacet_varg(SF_NMD_COL, C_CRLKEY, i_Board);
+    else
+      pCI->E.p_expr->pSymbol()->vApplyFacet_varg(SF_NMD_COL, C_CRLKEY_N, i_Board, i_key + 1);
+    pCI->E.p_expr->pSymbol()->Y_vSet(P_InjCrlKey);
+
+    pCI->vAppendNewChild(pCI->E.p_expr, CK_TERM, Symbol(SF_EXP_COL, "$1"_Stz));
+    pCI->E.p_term->vApplyCast_x(xCast_key);
+    pCI->E.p_expr->vApplyCast_x(xCast_key);
+  }
 
   // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-  // supplemental
-
-  pCI->E.p_expr = pCI->E.p_emit->pGet_expr(1);
+  // supplemental: the result follows the keys
+  pCI->E.p_expr = pCI->E.p_emit->pGet_expr(nKeys);
   pCI->E.p_expr->pSymbol()->vApplyFacet_varg(SF_NMD_COL, C_SQYRSL, i_Board);
 
 
@@ -899,24 +1000,28 @@ void XF_FLATTEN::vConvert_OQ_sqyPrm_Into_expCol(CardIter* pCI,
 
       RASSERT(p_conj_arg->pSymbol()->bHasFacet("=="_Stz));
 
+      // which parameter is this the comparison of? key n arrives as $n
+      i8 iOrdinal = C_UNKNOWN;
+      for (Kid xPrm(p_conj_arg); xPrm.bEach(); /**/) {
+        if (xPrm.pChild()->pSymbol()->bHasFacet(SF_SQY_PRM))
+          iOrdinal = xPrm.pChild()->pSymbol()->iTo_ordinal(SF_SQY_PRM);
+      }
+      RASSERT(iOrdinal >= 1 && iOrdinal <= nOuterColNms(pCI->Flat.m_pCorrelation));
+
       Kid xConj(p_conj_arg);
       while (xConj.bEach()) {
         // TODO: test for: == $d.2 %1 => == $1 [TRANSLATE PARAM %1]
-
         if (xConj.pChild()->pSymbol()->bHasFacet(SF_SQY_PRM)) {
-
-          Symbol xSym_expCol1(SF_EXP_COL, pCI->Flat.m_pSqy_inner->pBoard()->i_Board());
-          xConj.pChild()->pSymbol()->vApplyFacets(&xSym_expCol1);
+          Symbol xSym_expCol(SF_EXP_COL, iOrdinal);
+          xConj.pChild()->pSymbol()->vApplyFacets(&xSym_expCol);
 
           Card_Expr* p_expr_found =
-              pCI->Arriving.m_pEmitted_prior->pGet_expr((i8) 0);
-
+              pCI->Arriving.m_pEmitted_prior->pGet_expr(iOrdinal - 1);
           xConj.pChild()->vApplyCast_x(p_expr_found->xCast());
-
         }
         else
         if (xConj.pChild()->bIsCard(CK_TERM) && xConj.pChild()->pSymbol()->bHasFacet(SF_TBL_COL)) {
-          Card_OuterColNm* p_outerColNm = pCI->Flat.m_pCorrelation->pSub_outerColNm();
+          Card_OuterColNm* p_outerColNm = pOuterColNm(pCI->Flat.m_pCorrelation, iOrdinal);
 
           // todo: hack
           Card* p_card = p_outerColNm->pDupCardRecursive();
@@ -1005,14 +1110,29 @@ void XF_FLATTEN::vConvert_OQ_sqyNo_Into_expCol(CardIter* pCI,
 
       RASSERT(pCI->m_pBench->bKnown_sqy(p_conj_child->pSymbol()));
 
-      Card* p_prev_conj = xConj.pPrev();
-      p_conj_arg->vRemoveChild(p_prev_conj);
-      DELETE_CARD(p_prev_conj);
+      // The call of the sub-query is preceded by its arguments, one per
+      // correlation key: take them out.
+      i8 nKeys = pCI->Flat.m_n_crlKey;
+      RASSERT(nKeys >= 1);
 
-      p_conj_child->pSymbol()->vApplyFacet(SF_EXP_COL, "$2"_Stz);
-      Card_Expr* p_expr_found = pCI->Arriving.m_pEmitted_prior->pGet_expr(1);
+      i8 i_call = 0;
+      while (p_conj_arg->pGetChild(i_call) != p_conj_child)
+        i_call++;
+      RASSERT(i_call >= nKeys);
+      for (i8 i_key = 0; i_key < nKeys; i_key++) {
+        Card* p_arg = p_conj_arg->pGetChild(--i_call);
+        p_conj_arg->vRemoveChild(p_arg);
+        DELETE_CARD(p_arg);
+      }
+
+      // the result follows the correlation keys
+      p_conj_child->pSymbol()->vApplyFacet(SF_EXP_COL, nKeys + 1);
+      Card_Expr* p_expr_found = pCI->Arriving.m_pEmitted_prior->pGet_expr(nKeys);
       p_conj_child->vApplyCast_x(p_expr_found->xCast());
       p_conj_arg->pSymbol()->Y_vSet(P_SqyRslTest);
+
+      // children were removed under the iterator: a comparison has one call
+      break;
     }
 
     return;

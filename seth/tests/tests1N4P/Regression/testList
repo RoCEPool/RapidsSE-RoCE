@@ -4,3 +4,4 @@ decimalArithmetic.test
 timestampCompare.test
 subqueryFold.test
 correlatedMin.test
+correlatedMultiKey.test
