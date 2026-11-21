@@ -6,6 +6,9 @@
 
 #include "Card_OP.hpp"
 #include "CardIter.hpp"
+#include "Grid.hpp"
+#include "MY.hpp"
+#include "Error.hpp"
 
 /*----------------------------------------------------------------------------*/
 /*-- LifeCycle ---------------------------------------------------------------*/
@@ -163,6 +166,33 @@ eXK Card_Deck::eAddStageCast_toPrev_cast(CardIter*        pCI,
 
     // -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
     case XK_BROADCAST:
+      // A broadcast sends each arriving row to every partition of the table,
+      // and each partition answers for the rows it holds. That is right for
+      // an inner join. It is wrong for the operators below: whether a row
+      // has a match, or none, is a fact about all partitions together.
+      //   keyExists    (IN, EXISTS)         one result row per partition
+      //                                     that has a match
+      //   keyNotExists (NOT IN, NOT EXISTS) one result row per partition
+      //                                     that has no match
+      //   left outer join                   one null-extended row per
+      //                                     partition that has no match
+      // These need the table to be partitioned on the column that is looked
+      // up (PARTITION BY), so that one partition holds all matches. Refuse
+      // the query instead of returning a wrong result.
+      if (AM::PTNMAP::nPtnsInGrid() > 1) {
+        bool bOuterJoin = CK_o_INDEXJOIN == p_OP_curr->eCard() && p_OP_curr->pSub_outerJoin();
+        if (CK_o_KEYEXISTS    == p_OP_curr->eCard() ||
+            CK_o_KEYNOTEXISTS == p_OP_curr->eCard() ||
+            bOuterJoin) {
+          Error xError(EC_NOT_IMPLEMENTED,
+                       bOuterJoin
+                         ? "an outer join needs its inner table to be partitioned on the join column"_Stz
+                         : "IN, EXISTS and their negations over one table need that table to be partitioned on the column that is compared"_Stz,
+                       (Stz*) __FILE__, __LINE__);
+          throw xError;
+        }
+      }
+
       p_cast_prev->SYM(SF_STG_CAST,"broadcast"_Stz);
 
       break;

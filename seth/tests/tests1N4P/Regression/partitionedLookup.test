@@ -1,0 +1,132 @@
+/*----------------------------------------------------------------------------*/
+/* partitionedLookup.test -- IN, EXISTS, NOT IN and outer join by partition   */
+/*----------------------------------------------------------------------------*/
+
+// IN / EXISTS (a key lookup), NOT IN / NOT EXISTS and a left outer join decide
+// per arriving row whether the looked-up table has a match. When the table is
+// not partitioned on the column that is looked up, the row is broadcast to all
+// partitions and each partition answered on its own:
+//   IN, EXISTS       one result row per partition that has a match
+//   NOT IN           one result row per partition that has no match
+//   LEFT OUTER JOIN  one null-extended row per partition that has no match
+// These wrong results are now refused with EC_NOT_IMPLEMENTED. With the table
+// partitioned on the column (the first column, or PARTITION BY) one partition
+// holds all matches, the row is sent to that partition only, and the result
+// is right.
+// The expected counts were computed from DATA/TPCH/part_100.tbl and
+// partsupp_2k.tbl independently of RapidsSE: 94 of the 100 parts have a
+// match, a part has up to 4 matches.
+
+create table ${testName2}_part (
+  P_PARTKEY     INTEGER       NOT NULL,
+  P_NAME        VARCHAR(55)   NOT NULL,
+  P_MFGR        VARCHAR(25)   NOT NULL,
+  P_BRAND       VARCHAR(10)   NOT NULL,
+  P_TYPE        VARCHAR(25)   NOT NULL,
+  P_SIZE        INTEGER       NOT NULL,
+  P_CONTAINER   VARCHAR(10)   NOT NULL,
+  P_RETAILPRICE DECIMAL(15,2) NOT NULL,
+  P_COMMENT     VARCHAR(23)   NOT NULL
+);
+success
+create index ${testName2}_IxP_PARTKEY on ${testName2}_part (P_PARTKEY);
+affected: 0
+load ${testName2}_part "../DATA/TPCH/part_100.tbl" <field_delimiter> = "|";
+success
+
+// partitioned on its first column, PS_PARTKEY: the column that is looked up
+create table ${testName2}_psKey (
+  PS_PARTKEY    INTEGER       NOT NULL,
+  PS_SUPPKEY    INTEGER       NOT NULL,
+  PS_AVAILQTY   INTEGER       NOT NULL,
+  PS_SUPPLYCOST DECIMAL(15,2) NOT NULL,
+  PS_COMMENT    VARCHAR(199)  NOT NULL
+);
+success
+create index ${testName2}_IxpsKey_PARTKEY on ${testName2}_psKey (PS_PARTKEY);
+affected: 0
+load ${testName2}_psKey "../DATA/TPCH/partsupp_2k.tbl" <field_delimiter> = "|";
+success
+
+// partitioned on another column
+create table ${testName2}_psOther (
+  PS_PARTKEY    INTEGER       NOT NULL,
+  PS_SUPPKEY    INTEGER       NOT NULL,
+  PS_AVAILQTY   INTEGER       NOT NULL,
+  PS_SUPPLYCOST DECIMAL(15,2) NOT NULL,
+  PS_COMMENT    VARCHAR(199)  NOT NULL
+) partition by (PS_SUPPKEY);
+success
+create index ${testName2}_IxpsOther_PARTKEY on ${testName2}_psOther (PS_PARTKEY);
+affected: 0
+load ${testName2}_psOther "../DATA/TPCH/partsupp_2k.tbl" <field_delimiter> = "|";
+success
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  Partitioned on the looked-up column: one partition answers
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+select count(*)
+  from ${testName2}_part
+ where p_partkey in (select ps_partkey from ${testName2}_psKey where ps_availqty < 5000);
+rows:
+  (94)
+
+select count(*)
+  from ${testName2}_part
+ where exists (select * from ${testName2}_psKey where ps_partkey = p_partkey and ps_availqty < 5000);
+rows:
+  (94)
+
+select count(*)
+  from ${testName2}_part
+ where p_partkey not in (select ps_partkey from ${testName2}_psKey where ps_availqty < 5000);
+rows:
+  (6)
+
+select count(*)
+  from ${testName2}_part left outer join ${testName2}_psKey
+       on p_partkey = ps_partkey and ps_availqty < 5000;
+rows:
+  (205)
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  Not partitioned on the looked-up column: refused
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+select count(*)
+  from ${testName2}_part
+ where p_partkey in (select ps_partkey from ${testName2}_psOther where ps_availqty < 5000);
+failure contains: 'EC_NOT_IMPLEMENTED'
+
+select count(*)
+  from ${testName2}_part
+ where exists (select * from ${testName2}_psOther where ps_partkey = p_partkey and ps_availqty < 5000);
+failure contains: 'EC_NOT_IMPLEMENTED'
+
+select count(*)
+  from ${testName2}_part
+ where p_partkey not in (select ps_partkey from ${testName2}_psOther where ps_availqty < 5000);
+failure contains: 'EC_NOT_IMPLEMENTED'
+
+select count(*)
+  from ${testName2}_part left outer join ${testName2}_psOther
+       on p_partkey = ps_partkey and ps_availqty < 5000;
+failure contains: 'EC_NOT_IMPLEMENTED'
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  An inner join may be broadcast
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+select count(*)
+  from ${testName2}_part, ${testName2}_psOther
+ where p_partkey = ps_partkey and ps_availqty < 5000;
+rows:
+  (199)
+
+drop table ${testName2}_part;
+success
+drop table ${testName2}_psKey;
+success
+drop table ${testName2}_psOther;
+success
