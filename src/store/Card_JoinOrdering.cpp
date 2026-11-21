@@ -188,8 +188,11 @@ void Card_JoinOrdering::vReorder(Card_Deck* pDeck)
   Card* pAfter = nullptr;
 
   {
+    // The tables that were ordered are those after the last <fold> of the
+    // deck (Card_TableList::pExtractList): put them back there. A deck has
+    // several folds when a folded sub-query has sub-queries of its own.
     Kid xCI_deck(pDeck);
-    if (xCI_deck.bEach(CK_o_FOLD))
+    while (xCI_deck.bEach(CK_o_FOLD))
       pAfter = xCI_deck.p_fold();
 
     if (! pAfter) {

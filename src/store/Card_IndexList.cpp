@@ -151,6 +151,44 @@ void Card_IndexList::vChoose_index_For_indexJoin(void)
 }
 
 /*----------------------------------------------------------------------------*/
+/* choose the index for keyExists / keyNotExists                              */
+/*----------------------------------------------------------------------------*/
+// The lookup is made with a column of the arriving row: choose the index that
+// has an "==" bound to a column. Taking the first index of the table could
+// pick one that only has a bound to a literal (e.g. "ps_partkey < 10"), which
+// left the comparison with the arriving column as a constraint on the table,
+// where the arriving column is not known.
+bool Card_IndexList::bChoose_index_For_keyExists(void)
+{
+  _precondition_(_ADDRESS_, _MAGIC_, CN_CARD, _FOOTER_);
+
+  Kid xIndexList(this);
+  while (xIndexList.bEach(CK_INDEX)) {
+
+    if (! xIndexList.pChild()->pSub_bounds())
+      continue;
+
+    Card_Index* p_index = _pCard_Index(xIndexList.pChild());
+
+    Kid xCI_bounds(p_index->pSub_bounds());
+    while (xCI_bounds.bEach(CK_BOUND)) {
+      Card_Bound* p_bound = _pCard_Bound(xCI_bounds.pChild());
+      if (! p_bound->bIsEBound())
+        continue;
+      Card_Term* p_term = p_bound->pGet_IfNot_idxCol();
+      if (! p_term || ! p_term->pSymbol()->bIs_Col())
+        continue;
+
+      p_index->vSet_Choose_index();
+      p_bound->pSymbol()->Y_vSet(P_ChosenBound);
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/*----------------------------------------------------------------------------*/
 /* choose appropriate index for indexScan                                     */
 /*----------------------------------------------------------------------------*/
 void Card_IndexList::vChoose_index_For_indexScan(void)

@@ -7,3 +7,4 @@ correlatedMin.test
 correlatedMultiKey.test
 inSubquery.test
 orderByMixed.test
+inWithJoin.test

@@ -1,0 +1,191 @@
+/*----------------------------------------------------------------------------*/
+/* inWithJoin.test -- IN sub-queries next to joins, and nested (TPC-H Q20)    */
+/*----------------------------------------------------------------------------*/
+
+// 1. "x IN (query)" over one table is run as a key lookup on that table.
+//    The lookup took the first index of the table, even when that index
+//    only had a bound to a literal ("ps_partkey < 10" below) and another
+//    index had the bound to the outer column. The comparison with the outer
+//    column was then left as a constraint on the table, where the outer
+//    column is not known ("EC_NONE; none").
+// 2. A sub-query that has sub-queries of its own, folded into an outer query
+//    with a join (the shape of TPC-H Q20), failed or returned every row
+//    twice:
+//     - only the first of two adjacent <fold>s was deleted;
+//     - after join ordering the outer tables were put back behind the first
+//       <fold> of the deck, in the middle of the folded sub-query;
+//     - the table to anchor (the one that uses the sub-query result) was
+//       looked for from the start of the deck and found in the sub-query, so
+//       the outer table was not anchored and the other outer table could be
+//       joined first, without a join predicate.
+// The second query below (IN over a join) already worked; it is here to keep
+// it working next to the other two.
+// The expected rows were computed from the files in DATA/TPCH independently
+// of RapidsSE.
+
+create table ${testName2}_part (
+  P_PARTKEY     INTEGER       NOT NULL,
+  P_NAME        VARCHAR(55)   NOT NULL,
+  P_MFGR        VARCHAR(25)   NOT NULL,
+  P_BRAND       VARCHAR(10)   NOT NULL,
+  P_TYPE        VARCHAR(25)   NOT NULL,
+  P_SIZE        INTEGER       NOT NULL,
+  P_CONTAINER   VARCHAR(10)   NOT NULL,
+  P_RETAILPRICE DECIMAL(15,2) NOT NULL,
+  P_COMMENT     VARCHAR(23)   NOT NULL
+);
+success
+create index ${testName2}_IxP_PARTKEY on ${testName2}_part (P_PARTKEY);
+affected: 0
+load ${testName2}_part "../DATA/TPCH/part_100.tbl" <field_delimiter> = "|";
+success
+
+create table ${testName2}_partsupp (
+  PS_PARTKEY    INTEGER       NOT NULL,
+  PS_SUPPKEY    INTEGER       NOT NULL,
+  PS_AVAILQTY   INTEGER       NOT NULL,
+  PS_SUPPLYCOST DECIMAL(15,2) NOT NULL,
+  PS_COMMENT    VARCHAR(199)  NOT NULL
+);
+success
+create index ${testName2}_IxPS_PARTKEY on ${testName2}_partsupp (PS_PARTKEY);
+affected: 0
+create index ${testName2}_IxPS_SUPPKEY on ${testName2}_partsupp (PS_SUPPKEY);
+affected: 0
+load ${testName2}_partsupp "../DATA/TPCH/partsupp_2k.tbl" <field_delimiter> = "|";
+success
+
+create table ${testName2}_supplier (
+  S_SUPPKEY   INTEGER       NOT NULL,
+  S_NAME      VARCHAR(25)   NOT NULL,
+  S_ADDRESS   VARCHAR(40)   NOT NULL,
+  S_NATIONKEY INTEGER       NOT NULL,
+  S_PHONE     VARCHAR(15)   NOT NULL,
+  S_ACCTBAL   DECIMAL(15,2) NOT NULL,
+  S_COMMENT   VARCHAR(101)  NOT NULL
+);
+success
+create index ${testName2}_IxS_SUPPKEY on ${testName2}_supplier (S_SUPPKEY);
+affected: 0
+create index ${testName2}_IxS_NATIONKEY on ${testName2}_supplier (S_NATIONKEY);
+affected: 0
+load ${testName2}_supplier "../DATA/TPCH/supplier_2k.tbl" <field_delimiter> = "|";
+success
+
+create table ${testName2}_nation (
+  N_NATIONKEY INTEGER      NOT NULL,
+  N_NAME      VARCHAR(25)  NOT NULL,
+  N_REGIONKEY INTEGER      NOT NULL,
+  N_COMMENT   VARCHAR(152) NOT NULL
+);
+success
+create index ${testName2}_IxN_NATIONKEY on ${testName2}_nation (N_NATIONKEY);
+affected: 0
+load ${testName2}_nation "../DATA/TPCH/nation.tbl" <field_delimiter> = "|";
+success
+
+create table ${testName2}_lineitem (
+  L_ORDERKEY      INTEGER       NOT NULL,
+  L_PARTKEY       INTEGER       NOT NULL,
+  L_SUPPKEY       INTEGER       NOT NULL,
+  L_LINENUMBER    INTEGER       NOT NULL,
+  L_QUANTITY      DECIMAL(15,2) NOT NULL,
+  L_EXTENDEDPRICE DECIMAL(15,2) NOT NULL,
+  L_DISCOUNT      DECIMAL(15,2) NOT NULL,
+  L_TAX           DECIMAL(15,2) NOT NULL,
+  L_RETURNFLAG    CHAR(1)       NOT NULL,
+  L_LINESTATUS    CHAR(1)       NOT NULL,
+  L_SHIPDATE      DATE          NOT NULL,
+  L_COMMITDATE    DATE          NOT NULL,
+  L_RECEIPTDATE   DATE          NOT NULL,
+  L_SHIPINSTRUCT  CHAR(25)      NOT NULL,
+  L_SHIPMODE      CHAR(10)      NOT NULL,
+  L_COMMENT       VARCHAR(44)   NOT NULL
+);
+success
+create index ${testName2}_IxL_PARTKEY on ${testName2}_lineitem (L_PARTKEY);
+affected: 0
+load ${testName2}_lineitem "../DATA/TPCH/lineitem10k.csv";
+success
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  IN over one table, next to a join
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+select s_name, n_name
+  from ${testName2}_supplier, ${testName2}_nation
+ where s_suppkey in (select ps_suppkey from ${testName2}_partsupp where ps_partkey < 10)
+   and s_nationkey = n_nationkey
+   and n_regionkey = 1
+ order by s_name;
+ordered rows:
+  ('Supplier#000000003', 'ARGENTINA')
+  ('Supplier#000000008', 'PERU')
+  ('Supplier#000000010', 'UNITED STATES')
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  IN over a join (planned as DISTINCT), next to a join
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+select count(*)
+  from ${testName2}_supplier, ${testName2}_nation
+ where s_suppkey in (select ps_suppkey
+                       from ${testName2}_partsupp, ${testName2}_part
+                      where ps_partkey = p_partkey and p_size < 10)
+   and s_nationkey = n_nationkey
+   and n_regionkey = 1;
+rows:
+  (2)
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+//  The shape of TPC-H Q20: an IN sub-query that has an IN sub-query and a
+//  correlated aggregate sub-query of its own, next to a join
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+select s_name, n_name
+  from ${testName2}_supplier, ${testName2}_nation
+ where s_suppkey in (select ps_suppkey
+                       from ${testName2}_partsupp
+                      where ps_suppkey in (select s2.s_suppkey
+                                             from ${testName2}_supplier s2
+                                            where s2.s_acctbal > 0)
+                        and ps_availqty > (select 10 * sum(l_quantity)
+                                             from ${testName2}_lineitem
+                                            where l_partkey = ps_partkey
+                                              and l_suppkey = ps_suppkey))
+   and s_nationkey = n_nationkey
+ order by s_name;
+ordered rows:
+  ('Supplier#000000021', 'BRAZIL')
+  ('Supplier#000000196', 'CHINA')
+  ('Supplier#000000246', 'EGYPT')
+  ('Supplier#000000279', 'JORDAN')
+  ('Supplier#000000310', 'ALGERIA')
+  ('Supplier#000000359', 'UNITED STATES')
+  ('Supplier#000000575', 'ROMANIA')
+  ('Supplier#000000581', 'CHINA')
+  ('Supplier#000000599', 'EGYPT')
+  ('Supplier#000000642', 'IRAQ')
+  ('Supplier#000000675', 'MOROCCO')
+  ('Supplier#000000825', 'SAUDI ARABIA')
+  ('Supplier#000000977', 'SAUDI ARABIA')
+  ('Supplier#000000984', 'VIETNAM')
+  ('Supplier#000001036', 'INDONESIA')
+  ('Supplier#000001170', 'KENYA')
+  ('Supplier#000001201', 'VIETNAM')
+  ('Supplier#000001325', 'KENYA')
+  ('Supplier#000001334', 'MOROCCO')
+  ('Supplier#000001424', 'IRAN')
+  ('Supplier#000001429', 'VIETNAM')
+  ('Supplier#000001948', 'UNITED STATES')
+
+drop table ${testName2}_part;
+success
+drop table ${testName2}_partsupp;
+success
+drop table ${testName2}_supplier;
+success
+drop table ${testName2}_nation;
+success
+drop table ${testName2}_lineitem;
+success

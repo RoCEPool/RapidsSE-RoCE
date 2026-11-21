@@ -64,9 +64,15 @@ void XF_Flatten_Delete_fold::vXF_Delete_fold(void)
 
   m_pCI->vTransform(__FILE__, __func__, XF_FLATTEN_DELETE_FOLD);
 
-  m_pCI->vBeginEach();
-  while (m_pCI->bEachOp(CK_o_FOLD))
+  // Start again after each delete: the iterator steps over the card that
+  // moves into the place of the deleted one, so the second of two adjacent
+  // <fold>s (a sub-query that has sub-queries of its own) was left behind.
+  for (;;) {
+    m_pCI->vBeginEach();
+    if (! m_pCI->bEachOp(CK_o_FOLD))
+      break;
     m_pCI->E.p_deck->vDeleteChild(m_pCI->E.p_fold);
+  }
 
   m_pCI->vEndTransform(__LINE__);
 }
