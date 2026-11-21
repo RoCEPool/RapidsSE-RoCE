@@ -54,9 +54,12 @@ void Card_KeyNotExists::vMorph_from_To_keyNotExists(CardIter *pCI)
   pCI->E.p_keyNotExists = _pCard_KeyNotExists(pCI->E.p_from->pCard(CK_o_KEYNOTEXISTS));
 
   // todo: this should be in index list
-  pCI->E.p_index = pCI->E.p_keyNotExists->pSub_index();
-  pCI->E.p_index->vSet_Choose_index();
-  pCI->E.p_index->pSub_bound()->pSymbol()->Y_vSet(P_ChosenBound);
+  Card_IndexList* p_indexList = pCI->E.p_keyNotExists->pSub_indexList();
+  if (! (p_indexList && p_indexList->bChoose_index_For_keyExists())) {
+    pCI->E.p_index = pCI->E.p_keyNotExists->pSub_index();
+    pCI->E.p_index->vSet_Choose_index();
+    pCI->E.p_index->pSub_bound()->pSymbol()->Y_vSet(P_ChosenBound);
+  }
 
   pCI->E.p_filter = pCI->E.p_keyNotExists->pSub_filter();
   pCI->E.p_filter->vCard(CK_p_CONSTRAINT);
@@ -100,6 +103,11 @@ void Card_KeyNotExists::vAdd_transients(CardIter* pCI)
     if (Card_Expr* p_expr_defn = pCI->pPrior_expr(pCI->E.p_term->pSymbol())) {
       //p_expr_defn->vDump();
       Card_Expr* p_expr_clone = p_expr_defn->pClone();
+      // The clone carries the position ($n) that the column has where it is
+      // defined. It may arrive here at another position, e.g. behind an
+      // index join, and needed columns are matched on any facet: drop the
+      // position, as Card_IndexJoin::vAdd_transients does.
+      p_expr_clone->pGet_Symbol(0)->vDeleteFacet(SF_EXP_COL);
       pCI->Early.m_pNeeded_later->vAppendChild(p_expr_clone);
       pCI->Early.m_pNeeded_later->vRenumberAll_expr();
     }

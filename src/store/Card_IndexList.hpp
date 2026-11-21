@@ -22,6 +22,7 @@ namespace STORE
 
     void vChoose_index_For_crossJoin(void);
     void vChoose_index_For_indexJoin(void);
+    bool bChoose_index_For_keyExists(void);
     void vChoose_index_For_indexScan(void);
 
     void vDeleteAll_bounds(void);

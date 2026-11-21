@@ -154,8 +154,25 @@ void Card_Table::vFixTablePos(CardIter* pCI)
 {
   _static_
 
-  for (Kid xTable(pCI->E.p_deck); xTable.bEach(CK_o_FROM); /**/) {
-    Card_Table* p_table = xTable.pChild()->pSub_table();
+  // Join ordering orders the tables after the last <fold> of the deck
+  // (Card_TableList::pExtractList), so that is where the table to anchor is.
+  // The tables before it belong to a sub-query that is already folded; with
+  // nested sub-queries one of those uses a sub-query result as well, and
+  // stopping at it left the outer table without an anchor.
+  i8 i_fold_last = C_UNKNOWN;
+  for (i8 i_Main = 0; i_Main < pCI->E.p_deck->nChildCards(); i_Main++) {
+    if (pCI->E.p_deck->pGetChild(i_Main)->bIsCard(CK_o_FOLD))
+      i_fold_last = i_Main;
+  }
+
+  for (i8 i_Main = i_fold_last + 1; i_Main < pCI->E.p_deck->nChildCards(); i_Main++) {
+
+    Card* p_from = pCI->E.p_deck->pGetChild(i_Main);
+    if (! p_from->bIsCard(CK_o_FROM))
+      continue;
+
+    Card_Table* p_table = p_from->pSub_table();
+
     if (p_table->bUsesSqyRsl()) {
       p_table->pSymbol()->Y_vSet(P_FixedPos,(i8)0);
       break;
