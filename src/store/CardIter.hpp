@@ -62,6 +62,14 @@ namespace STORE
       Card_Term* m_p_term_crlKey;
       Card_Expr* m_p_expr_crlKey;
 
+      // All correlation keys of the inner query, in parameter order: entry i
+      // belongs to parameter %(i+1). The three registers above are entry 0.
+      enum { C_MAX_CRLKEYS = 8 };
+      i8         m_n_crlKey;
+      Card_CONJ* m_ap_conj_crlKey[C_MAX_CRLKEYS];
+      Card_Term* m_ap_term_crlKey[C_MAX_CRLKEYS];
+      Card_Expr* m_ap_expr_crlKey[C_MAX_CRLKEYS];
+
       Card_Correlation* m_pCorrelation;
 
       i8         m_i_fold;

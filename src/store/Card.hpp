@@ -239,6 +239,7 @@ extern Stz* MARK_UP;
 extern Stz* MARK_VALID;
 
 extern Stz* C_CRLKEY;
+extern Stz* C_CRLKEY_N;
 extern Stz* C_SQYRSL;
 
 extern Stz* C_ASC;

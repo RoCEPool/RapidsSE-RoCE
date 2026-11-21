@@ -17,7 +17,7 @@ namespace STORE
    ~Card_Expr(void) noexcept(false);
 
     //-----------------------------------------------------------
-    static void vAssemble_injCrlRsl(CardIter* pCI);
+    static void vAssemble_injCrlRsl(CardIter* pCI, i8 i_key=0);
 
     static Card_Expr* pCraft_expr_Of_expr(Card_Expr* p_expr, i8 iExpCol);
     static Card_Expr* pCraft_expr_Of_symbol(Symbol* pSymbol);

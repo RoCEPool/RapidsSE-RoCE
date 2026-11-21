@@ -265,7 +265,7 @@ bool Dynamo::bCollectParams(void)
     return false;
   vTokenAccept();
                                                   // TODO: add parameter ordinal
-  s32 sParamNm = pTkn()->szChars();
+  s256 sParamNm = pTkn()->szChars();
 
   m_pParamsSpec = new ParamsSpec;
   m_pParamsSpec->vAppend(new ParamSpec(sParamNm));

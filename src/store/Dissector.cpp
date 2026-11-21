@@ -172,11 +172,40 @@ void Dissector::vStage(i8 i_StageSpec)
     if (pParamsSpec) {
       Card_Correlation* p_paramList = new Card_Correlation;
       m_pBoard->pDeck()->vAppendChild(p_paramList);
-      Card_OuterColNm* p_param = new Card_OuterColNm;
+      // The parameter names arrive as one comma separated list, in the
+      // order of %1, %2, ... : one <outerColNm> per parameter.
       StrLib::vStrip((char*)pParamsSpec->pGet(0)->szParamNm(), pParamsSpec->pGet(0)->iParamNmBufSize(), ' ');
-      p_param->SYM(SF_NMD_COL, pParamsSpec->pGet(0)->szParamNm());
-      p_param->pSymbol()->Y_vSet(P_PrmOdn, "%1"_Stz);
-      p_paramList->vAppendChild(p_param);
+      // The list is cut up in place, so that the names live as long as
+      // the spec does, as the single name did.
+      static Stz* aszOrdinal[] = { "%1"_Stz, "%2"_Stz, "%3"_Stz, "%4"_Stz,
+                                   "%5"_Stz, "%6"_Stz, "%7"_Stz, "%8"_Stz };
+      char* acList = (char*)pParamsSpec->pGet(0)->szParamNm();
+      i8 nParams = 0;
+      while (*acList) {
+        char* acEnd = acList;
+        while (*acEnd && ',' != *acEnd)
+          acEnd++;
+        bool bLast = ! *acEnd;
+        *acEnd = 0;
+
+        // trim the blanks around the name
+        while (' ' == *acList)
+          acList++;
+        for (char* acTail = acEnd - 1; acTail >= acList && ' ' == *acTail; acTail--)
+          *acTail = 0;
+
+        RASSERT(*acList);
+        RASSERT(nParams < (i8) (sizeof(aszOrdinal) / sizeof(aszOrdinal[0])));
+
+        Card_OuterColNm* p_param = new Card_OuterColNm;
+        p_param->SYM(SF_NMD_COL, (Stz*) acList);
+        p_param->pSymbol()->Y_vSet(P_PrmOdn, aszOrdinal[nParams++]);
+        p_paramList->vAppendChild(p_param);
+
+        if (bLast)
+          break;
+        acList = acEnd + 1;
+      }
     }
   }
 
