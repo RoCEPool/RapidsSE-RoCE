@@ -17,6 +17,11 @@
 #include "ProjectedColumns.hpp"
 #include "Expr.hpp"
 #include "AggregateExpr.hpp"
+#include "MinExpr.hpp"
+#include "MaxExpr.hpp"
+#include "AvgExpr.hpp"
+#include "PlanMarker.hpp"
+#include "SqlException.hpp"
 
 using namespace Parser;
 
@@ -156,6 +161,176 @@ void AggregateSplit::vSplitMultipleAggregates(QueryNode *pPlanNode, PlanNode *pR
   GraphNav::bGlobalWalkBottomUp(pPlanNode, false, true, fVisitor, nullptr);
 }
 
+
+/*----------------------------------------------------------------------------*/
+/* DISTINCT aggregates of the logical plan (before it is partitioned)         */
+/*----------------------------------------------------------------------------*/
+void AggregateSplit::vDistinctSplit(PlanNode *pRootNode)
+{
+  QueryNode* pPlanNode = _pQueryNode(ShadowRoot::pPlanRoot(pRootNode));
+  ASSERT(pPlanNode);
+  ASSERT(ShadowPlan::bIsOfType(pPlanNode));
+
+  vSplitDistinctAggregates(pPlanNode, pRootNode);
+}
+
+/*----------------------------------------------------------------------------*/
+/* DISTINCT aggregates. The execution engine has no DISTINCT aggregate, so    */
+/*   select g, count(distinct e) from t group by g                            */
+/* is planned as                                                              */
+/*   select g, count(e) from (select g, e from t group by g, e) group by g    */
+/* The lower aggregation is an ordinary one: it is split over the partitions  */
+/* and merged like any other GROUP BY, and what reaches the upper aggregation */
+/* is one row per (g, e). The upper aggregation runs at the origin only (see  */
+/* ProjectOp::bIsPartitionable). NULLs of e form one group, which COUNT/SUM/AVG then */
+/* ignore, as DISTINCT requires.                                              */
+/* MIN and MAX do not depend on DISTINCT; the flag is just dropped.           */
+/* Not handled (reported as not implemented): AVG(DISTINCT), DISTINCT          */
+/* aggregates together with other aggregates in one operator, or over         */
+/* different expressions.                                                     */
+/*----------------------------------------------------------------------------*/
+void AggregateSplit::vSplitDistinctAggregates(QueryNode *pPlanNode, PlanNode *pRootNode)
+{
+  ASSERT(pPlanNode);
+  ASSERT(ShadowPlan::bIsOfType(pPlanNode));
+
+  auto fVisitor = [pRootNode](PlanNode* pNode, s2K& sPath, i8 iDepth, void* pvArg) -> GraphNav::eWalkCtrl {
+    UNUSED(sPath);
+    UNUSED(iDepth);
+    UNUSED(pvArg);
+
+    if (!ProjectOp::bIsOfType(pNode)) {
+      return GraphNav::WALK_CONTINUE;
+    }
+    QueryNode* pSqlOp = _pQueryNode(pNode);
+
+    // The aggregates of this operator (pointers into its expressions)
+    QueryNodeList* pDistinct = new QueryNodeList();
+    i8 nOther = 0;
+
+    PlanNodeIter* pIter = ProjectOp::pProjectedColumns(pSqlOp)->pNewChildrenIter();
+    while (pIter->bHasNext()) {
+      QueryNode* pProjCol = _pQueryNode(pIter->pNext());
+      QueryNodeList* pAggs = Expr::pAggregateExprs(ProjectedColumn::pExprNode(pProjCol), false);
+      while (pAggs->nItems() > 0) {
+        QueryNode* pAgg = pAggs->pPop();
+        if (!AggregateExpr::bIsDistinct(pAgg)) {
+          ++nOther;
+        }
+        else if (MinExpr::bIsOfType(pAgg) || MaxExpr::bIsOfType(pAgg)) {
+          AggregateExpr::vClearDistinct(pAgg);
+          ++nOther;
+        }
+        else if (AvgExpr::bIsOfType(pAgg)) {
+          // AVG over the rows of another aggregation is not computed correctly yet
+          // (select avg(x) from (select x from t group by x) returns the count)
+          delete pAggs;
+          delete pIter;
+          pDistinct->vRemoveAll();
+          delete pDistinct;
+          SemanticException::vThrowNotImplemented("AVG(DISTINCT ...)"_Stz);
+        }
+        else {
+          pDistinct->vAppend(pAgg);
+        }
+      }
+      delete pAggs;
+    }
+    delete pIter;
+
+    if (pDistinct->nItems() == 0) {
+      delete pDistinct;
+      return GraphNav::WALK_CONTINUE;
+    }
+
+    QueryNode* pDistinctExpr = AggregateExpr::pArgument(pDistinct->pGet(0));
+    b1 bSameExpr = true;
+    for (i8 i = 1; i < pDistinct->nItems(); ++i) {
+      if (!Expr::bIsSymbolicallyEqual(pDistinctExpr, AggregateExpr::pArgument(pDistinct->pGet(i))))
+        bSameExpr = false;
+    }
+    if (nOther > 0 || !bSameExpr) {
+      pDistinct->vRemoveAll();
+      delete pDistinct;
+      if (nOther > 0)
+        SemanticException::vThrowNotImplemented("DISTINCT aggregates together with other aggregates"_Stz);
+      SemanticException::vThrowNotImplemented("DISTINCT aggregates over different expressions"_Stz);
+    }
+
+    // The lower aggregation: GROUP BY <grouping expressions>, <e>
+    QueryNodeList* pSelectExprs  = new QueryNodeList();
+    QueryNodeList* pGroupByExprs = new QueryNodeList();
+    b1 bGrouped = false;   // <e> is one of the grouping expressions
+
+    if (AggregateOp::bIsOfType(pSqlOp)) {
+      PlanNodeIter* pGroupIter = AggregateOp::pGroupByList(pSqlOp)->pNewChildrenIter();
+      while (pGroupIter->bHasNext()) {
+        QueryNode* pGroupExpr = _pQueryNode(pGroupIter->pNext());
+        if (Expr::bIsSymbolicallyEqual(pGroupExpr, pDistinctExpr))
+          bGrouped = true;
+        pSelectExprs->vAppend(ProjectedColumn::pCreate(pGroupExpr->pDeepCopy(true), nullptr));
+        pGroupByExprs->vAppend(pGroupExpr->pDeepCopy(true));
+      }
+      delete pGroupIter;
+    }
+    if (!bGrouped) {
+      pSelectExprs->vAppend(ProjectedColumn::pCreate(pDistinctExpr->pDeepCopy(true), nullptr));
+      pGroupByExprs->vAppend(pDistinctExpr->pDeepCopy(true));
+    }
+
+    QueryNode* pChild = AggregateOp::pCreate(pSelectExprs, pGroupByExprs);
+    ASSERT(pSelectExprs->nItems() == 0);
+    ASSERT(pGroupByExprs->nItems() == 0);
+    delete pSelectExprs;
+    delete pGroupByExprs;
+
+    pSqlOp->vInsertAsParentOfChildren(pChild);
+
+    // This operator now aggregates distinct values already
+    while (pDistinct->nItems() > 0) {
+      AggregateExpr::vClearDistinct(pDistinct->pPop());
+    }
+    delete pDistinct;
+
+    // The operators above (HAVING, ORDER BY, a later projection) name the same
+    // aggregates and find them by their expression: they have to name them
+    // without DISTINCT as well. Up to the start of this statement.
+    auto fClearInExpr = [pDistinctExpr](PlanNode* pExprNode, s2K& sPath, i8 iDepth, void* pvArg) -> GraphNav::eWalkCtrl {
+      UNUSED(sPath);
+      UNUSED(iDepth);
+      UNUSED(pvArg);
+      if (AggregateExpr::bIsOfType(pExprNode) && AggregateExpr::bIsDistinct(pExprNode) &&
+          pExprNode->nChildren() == 1 &&
+          Expr::bIsSymbolicallyEqual(pDistinctExpr, _pQueryNode(pExprNode->pFirstChild()))) {
+        AggregateExpr::vClearDistinct(pExprNode);
+      }
+      return GraphNav::WALK_CONTINUE;
+    };
+    auto fUp = [pSqlOp, fClearInExpr](PlanNode* pAbove, s2K& sPath, i8 iDepth, GraphNav::eWalkEvent eEvent, void* pvArg) -> GraphNav::eWalkCtrl {
+      UNUSED(sPath);
+      UNUSED(iDepth);
+      UNUSED(eEvent);
+      UNUSED(pvArg);
+      if (pAbove == pSqlOp) {
+        return GraphNav::WALK_CONTINUE;
+      }
+      if (PlanMarker::bIsOfType(pAbove)) {
+        return GraphNav::WALK_ABORT;
+      }
+      PlanNodeIter* pPropIter = pAbove->pNewPropertyIter();
+      while (pPropIter->bHasNext()) {
+        GraphNav::bGlobalWalk(pPropIter->pNext(), true, true, fClearInExpr, nullptr);
+      }
+      delete pPropIter;
+      return GraphNav::WALK_CONTINUE;
+    };
+    GraphNav::bWalkUp(pSqlOp, pRootNode, fUp, nullptr);
+
+    return GraphNav::WALK_CONTINUE;
+  };
+
+  GraphNav::bGlobalWalkBottomUp(pPlanNode, false, true, fVisitor, nullptr);
+}
 
 /*----------------------------------------------------------------------------*/
 /* Inserts a ProjectOp or AggregateOp below pParentNode with the aggregate    */

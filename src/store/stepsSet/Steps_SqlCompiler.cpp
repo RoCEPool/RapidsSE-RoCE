@@ -197,6 +197,10 @@ void Step::vSqlCompilerCorrBySquash(void) {
   try {
     CorrBySquash::vSearchAndSquash(pPlanRoot);
 
+    // DISTINCT aggregates become two aggregations here, before the plan is
+    // partitioned, so that the lower one is partitioned like any GROUP BY.
+    AggregateSplit::vDistinctSplit(pPlanRoot);
+
   } catch (Parser::SqlException& e) {
     Grid* pGrid = AM::pGrid();
 		Pds* pPds = _pPds(*m_pLogicUnit->m_xpPdsErr);

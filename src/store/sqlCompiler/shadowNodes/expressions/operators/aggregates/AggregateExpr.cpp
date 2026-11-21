@@ -79,6 +79,32 @@ b1 AggregateExpr::bIsDistinct(PlanNode* pNode)
 }
 
 /*----------------------------------------------------------------------------*/
+/* Turns a DISTINCT aggregate into a plain one                                */
+/*----------------------------------------------------------------------------*/
+void AggregateExpr::vClearDistinct(PlanNode* pNode)
+{
+  _static_
+  ASSERT(bIsOfType(pNode));
+
+  PlanNode* pDistinctNode = GraphNav::pFindProperty(const_cast<Stz*>(C_DISTINCT_PROP_NAME), pNode);
+  if (pDistinctNode) {
+    pDistinctNode->pValue()->vSet((b1)false);
+  }
+}
+
+/*----------------------------------------------------------------------------*/
+/* The expression that is aggregated                                          */
+/*----------------------------------------------------------------------------*/
+QueryNode* AggregateExpr::pArgument(QueryNode* pNode)
+{
+  _static_
+  ASSERT(bIsOfType(pNode));
+
+  ASSERT(pNode->nChildren() == 1);
+  return _pQueryNode(pNode->pFirstChild());
+}
+
+/*----------------------------------------------------------------------------*/
 /* Returns true if the given node is derived from the expr definition         */
 /*----------------------------------------------------------------------------*/
 b1 AggregateExpr::bIsOfType(PlanNode *pNode)

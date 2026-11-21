@@ -30,6 +30,12 @@ namespace Parser
 
     static b1   bIsDistinct(PlanNode* pNode);
 
+    // Turns a DISTINCT aggregate into a plain one (its input is distinct already)
+    static void vClearDistinct(PlanNode* pNode);
+
+    // The expression that is aggregated
+    static QueryNode* pArgument(QueryNode* pNode);
+
     // Returns true if a given node is a given type ** or is derived from that type **
     static b1 bIsOfType(PlanNode* pNode);
 

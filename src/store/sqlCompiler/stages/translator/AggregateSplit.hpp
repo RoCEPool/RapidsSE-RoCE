@@ -28,10 +28,19 @@ namespace Parser
     //
     static void vAggregateSplit(PlanNode* pRootNode);
 
+    // Plans DISTINCT aggregates as two aggregations. Runs on the logical plan,
+    // before it is partitioned.
+    static void vDistinctSplit(PlanNode* pRootNode);
+
   private:
     // Splits multiple aggregations into separate proj columns so that we don't
     // have more than one aggregation in a single expression.
     static void vSplitMultipleAggregates(QueryNode *pPlanNode, PlanNode* pRootNode);
+
+    // Plans COUNT/SUM/AVG(DISTINCT e) as two aggregations: an AggregateOp that
+    // groups by the grouping expressions and e is put below the operator, and
+    // the operator then aggregates e without DISTINCT.
+    static void vSplitDistinctAggregates(QueryNode *pPlanNode, PlanNode* pRootNode);
 
     // Inserts a ProjectOp or AggregateOp below pParentNode with the aggregate
     // expressions from pAggList. pAggList items are borrowed and must be copied
