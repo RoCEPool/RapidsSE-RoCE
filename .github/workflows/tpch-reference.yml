@@ -2,7 +2,9 @@
 #
 # Generates the SF1 data set with the DBGEN of this repository, checks it against the pinned
 # checksums, runs the 22 queries of tests/tpch_sf1_correctness/queries in DuckDB and reports where
-# DuckDB and the official TPC-H answer set differ. The DuckDB results are kept as an artifact.
+# DuckDB and the official TPC-H answer set differ. The DuckDB results are kept as an artifact
+# and, when they changed, committed to tests/tpch_sf1_correctness/reference/expected_results
+# of the branch that was built.
 # RapidsSE itself is not run here.
 name: tpch-reference
 
@@ -14,7 +16,7 @@ on:
       - ".github/workflows/tpch-reference.yml"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   duckdb:
@@ -26,6 +28,8 @@ jobs:
       OUT: /tmp/tpch_reference
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
       - name: Data set (generate, row counts, checksums)
         run: python3 tests/tpch_sf1_correctness/scripts/prepare_sf1.py
       - name: DuckDB
@@ -42,3 +46,13 @@ jobs:
         with:
           name: tpch-sf1-duckdb-reference
           path: /tmp/tpch_reference/duckdb
+      - name: Commit the DuckDB reference when it changed
+        run: |
+          dir=tests/tpch_sf1_correctness/reference/expected_results
+          mkdir -p "$dir" && cp "$OUT"/duckdb/* "$dir"/
+          git add "$dir"
+          if ! git diff --cached --quiet; then
+            git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -m "Update the DuckDB reference results of the TPC-H SF1 correctness test"
+            git push
+          fi

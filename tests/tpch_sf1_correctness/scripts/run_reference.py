@@ -10,7 +10,8 @@ official  The answer set that ships with DBGEN (dbgen/answers), which the TPC pu
           factor 1 and the default substitution parameters used in queries/. Its values are
           rounded to two decimals.
 
-Without --engine, duckdb is used when it can be imported, otherwise official. source.json records
+Without --engine, duckdb is used when it can be imported; otherwise the committed DuckDB results
+are kept as they are, and only when there are none, official. source.json records
 which one produced the files and the numeric tolerance that goes with it.
 """
 import argparse, json, os, re, sys
@@ -71,6 +72,13 @@ def run(engine=None, data_dir=c.DATA, out=c.EXPECTED):
             import duckdb  # noqa: F401
             engine = 'duckdb'
         except ImportError:
+            # DuckDB is not installed here: keep the DuckDB results that are committed (the
+            # workflow tpch-reference produces them); the official answer set is the last resort
+            src_path = os.path.join(out, 'source.json')
+            if os.path.exists(src_path):
+                src = json.load(open(src_path))
+                if src['engine'].startswith('DuckDB'):
+                    return src
             engine = 'official'
     src = duckdb_reference(data_dir, out) if engine == 'duckdb' else official(out)
     src['queries'] = 'tests/tpch_sf1_correctness/queries (TPC-H validation parameters)'

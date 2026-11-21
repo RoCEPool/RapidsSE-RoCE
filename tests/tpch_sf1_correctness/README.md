@@ -54,10 +54,14 @@ inside RapidsSE are checked as well.
 
 ## Reference
 
-`run_reference.py` uses DuckDB over the same `.tbl` files when the Python package `duckdb`
-is installed, otherwise the answer set that ships with DBGEN (`dbgen/answers`), which the TPC
-published for scale factor 1 with the same parameters. `reference/expected_results/source.json`
-and every report say which one was used. Results are never taken from RapidsSE.
+The reference is DuckDB, running the same query files over the same `.tbl` files. The
+workflow `tpch-reference` produces it on a GitHub runner (data generated there with the same
+DBGEN and checked against the pinned checksums) and commits the rows to
+`reference/expected_results/`; `source.json` there names the DuckDB version. `run_reference.py`
+regenerates them when the Python package `duckdb` is installed and otherwise uses the committed
+files. The answer set that ships with DBGEN (`dbgen/answers`) is only a cross-check: it agrees
+with DuckDB on 21 queries and differs on Q17 (348406.02 in the file, 348406.05 from DuckDB).
+Results are never taken from RapidsSE.
 
 ## How results are compared
 
