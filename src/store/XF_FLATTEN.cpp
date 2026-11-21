@@ -390,13 +390,17 @@ void XF_FLATTEN::vSet_smooth(CardIter* pCI, eCK eCardWithSQ, eQO eWhatOp)
   if (pCI->pPeekNextIf(CK_o_WHERE) && pCI->bEachOp(CK_o_WHERE))
     {;}
 
+  // an aggregation between the <where> and the <sort> restates the columns: what the
+  // sub-query adds to the rows of the <where> does not reach the <sort> then
+  bool bAggregated = false;
+
   // <aggreg>*
   while (pCI->pPeekNextIf(CK_o_AGGREG) && pCI->bEachOp(CK_o_AGGREG))
-    {;}
+    bAggregated = true;
 
   // <gbyAgg>*
   while (pCI->pPeekNextIf(CK_o_GBYAGG) && pCI->bEachOp(CK_o_GBYAGG))
-  {;}
+    bAggregated = true;
 
   // [<project>]
   if (pCI->pPeekNextIf(CK_o_PROJECT) && pCI->bEachOp(CK_o_PROJECT)) {
@@ -408,8 +412,11 @@ void XF_FLATTEN::vSet_smooth(CardIter* pCI, eCK eCardWithSQ, eQO eWhatOp)
   {;}
 
   // <sort>
+  // the sort keys move up by the injected column only when that column reaches the <sort>:
+  // a sub-query of the <having> is injected into the aggregation itself, a sub-query of the
+  // <where> reaches the <sort> when no aggregation lies between them (refer: Q18)
   if (pCI->pPeekNextIf(CK_o_SORT) && pCI->bEachOp(CK_o_SORT)) {
-    pCI->Smooth.Sort.m_bCorrect_After_Inject = true;
+    pCI->Smooth.Sort.m_bCorrect_After_Inject = (CK_o_HAVING == eCardWithSQ) || ! bAggregated;
   }
 
   // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -

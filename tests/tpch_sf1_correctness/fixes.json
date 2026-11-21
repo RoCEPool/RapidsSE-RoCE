@@ -3,6 +3,10 @@
     "fix": "PR #9",
     "source_files": "src/store/Card_Predicate.cpp, src/store/Card_Term.cpp"
   },
+  "18": {
+    "fix": "PR #18",
+    "source_files": "src/store/XF_FLATTEN.cpp"
+  },
   "20": {
     "fix": "PR #11, #12, #13, #15",
     "source_files": "src/store/Card.cpp, src/store/Card.hpp, src/store/CardIter.cpp, src/store/CardIter.hpp, src/store/Card_Expr.cpp, src/store/Card_Expr.hpp, src/store/Card_IndexList.cpp, src/store/Card_IndexList.hpp, src/store/Card_JoinOrdering.cpp, src/store/Card_Key.cpp, src/store/Card_KeyExists.cpp, src/store/Card_KeyNotExists.cpp, src/store/Card_Table.cpp, src/store/Card_TableList.cpp, src/store/Dissector.cpp, src/store/Dynamo.cpp, src/store/ParamSpec.hpp, src/store/Weaver.cpp, src/store/XF_FLATTEN.cpp, src/store/XF_Flatten_Delete_fold.cpp, src/store/sqlCompiler/stages/parser/SqlPlanner.cpp, src/store/sqlCompiler/stages/parser/SqlPlanner.hpp"

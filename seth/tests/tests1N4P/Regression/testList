@@ -10,3 +10,4 @@ orderByMixed.test
 inWithJoin.test
 partitionedLookup.test
 existsCorrelated.test
+subqueryOrderBy.test
