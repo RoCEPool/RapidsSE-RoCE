@@ -57,7 +57,13 @@ void Card_Project::vUnproject_foldExpr(CardIter* pCI)
   RASSERT(pCI->Smooth.Unproject.m_bUnproject_foldExpr);
 
   Card_Project* p_project_unproject = new Card_Project(CK_o_PROJECT);
-  pCI->E.p_deck->vAppendChild(p_project_unproject);
+  // It follows the last operator that was smoothed. That is the end of the deck,
+  // unless the sub-query was folded into a derived table that the deck goes on
+  // after (see XF_Flatten_Flatten_pipeline::vPush_sqyFilter_Into_derived).
+  if (pCI->E.p_Op && pCI->E.p_deck->pFindParentRecursive(pCI->E.p_Op) == pCI->E.p_deck)
+    pCI->E.p_deck->vInsertChildAfter(p_project_unproject, pCI->E.p_Op);
+  else
+    pCI->E.p_deck->vAppendChild(p_project_unproject);
   p_project_unproject->pSymbol()->Y_vSet(P_Unproject);
 
   Card_Level* p_level = new Card_Level(AL_ORIGIN);
@@ -80,6 +86,16 @@ void Card_Project::vUnproject_foldExpr(CardIter* pCI)
 
     Card_Expr* p_expr_simple = Card_Expr::pCraft_expr_Of_expr(pCI->E.p_expr, i_Col);
     p_expr_simple->vDeleteFacetRecursive(SF_KEY_COL);
+
+    // The column keeps its name. Operators that follow find their columns by
+    // name: an index join after a derived table whose HAVING used a sub-query
+    // did not find the columns it propagates when they were renamed here.
+    Symbol* pSym_expr = pCI->E.p_expr->pSymbol();
+    if (pSym_expr->bHasFacet(SF_NMD_COL)) {
+      p_expr_simple->pSymbol()->vApplyFacet(SF_NMD_COL, pSym_expr->szFacet(SF_NMD_COL));
+      if (pSym_expr->Y_bHas(P_FixedNm))
+        p_expr_simple->pSymbol()->Y_vSet(P_FixedNm);
+    }
 
     p_emitted_unproject->vAppendChild(p_expr_simple);
 
