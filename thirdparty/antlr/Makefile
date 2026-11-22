@@ -62,7 +62,8 @@ $(LIBDIR)/$(LIBANTLR) :
 	@unzip -o $(SRCZIP) -d $(SRCDIR)
 	cd $(SRCDIR) && cmake -DCMAKE_BUILD_TYPE=Release $(CMAKE_ARGS) CMakeLists.txt
 	+cd $(SRCDIR) && $(MAKE) 
-	cp $(SRCDIR)/dist/$(LIBANTLR) $(LIBDIR)
+	@# older CMake leaves the library in dist/, CMake 3.28 in runtime/
+	cp $$(find $(SRCDIR)/dist $(SRCDIR)/runtime -maxdepth 1 -name $(LIBANTLR) 2>/dev/null | head -1) $(LIBDIR)
 	cd $(SRCDIR)/runtime/src && find . -name '*.h' | cpio -pdv $(INCDIR)
 	@rm -rf $(SRCDIR)
 
