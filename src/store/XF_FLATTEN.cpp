@@ -407,6 +407,12 @@ void XF_FLATTEN::vSet_smooth(CardIter* pCI, eCK eCardWithSQ, eQO eWhatOp)
     pCI->Smooth.Project_postAgg.m_bSeen = true;
   }
 
+  // [<fold>]
+  // the end of a derived table that was folded in earlier, when a <having> on
+  // its columns follows it (XF_Flatten_Flatten_pipeline::vPush_sqyFilter_Into_derived)
+  if (CK_o_HAVING == eCardWithSQ && pCI->pPeekNextIf(CK_o_FOLD) && pCI->bEachOp(CK_o_FOLD))
+  {;}
+
   // <having>
   if (pCI->pPeekNextIf(CK_o_HAVING) && pCI->bEachOp(CK_o_HAVING))
   {;}
@@ -481,6 +487,14 @@ void XF_FLATTEN::vSmooth(CardIter* pCI)
       pCI->E.p_Op->vRestate_emit(pCI);
     pCI->vSnapIf_arriving();
   }
+
+  // [<fold>]
+  // the end of a derived table that was folded in earlier, when a <having> on
+  // its columns follows it. The rows that arrive at the <having> are those of
+  // the <gbyAgg>, with the injected column: the <fold> is not snapped.
+  if (pCI->Smooth.Having.m_bCorrect_After_Inject &&
+      pCI->pPeekNextIf(CK_o_FOLD) && pCI->bEachOp(CK_o_FOLD))
+  {;}
 
   // [<having>]
   if (pCI->pPeekNextIf(CK_o_HAVING) && pCI->bEachOp(CK_o_HAVING)) {

@@ -726,9 +726,32 @@ void XF_Synthesise_Craft_pipelineDef::vCraftColPpg(ColPpg* pColPpg, Card *pSubCa
       }
       else {
 
-        // not propagated
-        //vTrace("--NOT-FOUND expr\n"_Stz);
-        return C_CONTINUE_RECURSION;
+        // By position: an emitted column that is just "$n" is the n-th arriving
+        // column, whatever the two are called. (The names differ when a
+        // projection that renames was fused into the join: a column of a WITH
+        // query arrives as COL1 and is emitted under its alias.)
+        p_expr_e = nullptr;
+        if (pSym_expr_a->bHasFacet(SF_EXP_COL)) {
+          i8 iArriving = pSym_expr_a->iTo_ordinal(SF_EXP_COL);
+          for (Kid xEmit(p_emit); xEmit.bEach(CK_EXPR); /**/) {
+            Card_Expr* p_expr_x = xEmit.p_expr();
+            if (! p_expr_x->bIsScalarCol())
+              continue;
+            Symbol* pSym_term_x = p_expr_x->pGet_term0()->pSymbol();
+            if (pSym_term_x->bHasFacet(SF_EXP_COL) && ! pSym_term_x->bHasFacet(SF_TBL_COL) &&
+                pSym_term_x->iTo_ordinal(SF_EXP_COL) == iArriving) {
+              p_expr_e = p_expr_x;
+              break;
+            }
+          }
+        }
+
+        if (! p_expr_e) {
+          // not propagated
+          //vTrace("--NOT-FOUND expr\n"_Stz);
+          return C_CONTINUE_RECURSION;
+        }
+        pSym_In_a = pSym_expr_a;
       }
 
       if (m_pStageDef->i_Stage() == 3) {

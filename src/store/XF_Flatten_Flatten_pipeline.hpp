@@ -33,6 +33,10 @@ namespace STORE
 
     void vFlatten_recurse(Symbol* pSym_sqyNo_inner, i8 iDepth);
 
+    // moves "<column of a derived table> <op> (scalar sub-query)" from the
+    // <where> of this query into the derived table, as its <having>
+    void vPush_sqyFilter_Into_derived(i8 iDepth);
+
 
   protected:
     Footer* aFooter(void);

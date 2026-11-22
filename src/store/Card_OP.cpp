@@ -173,8 +173,8 @@ void Card_OP::vFuse_project_Viable(CardIter *pCI)
   RASSERT(pCI->E.p_Op->bEither(CK_o_SCAN, CK_o_INDEXSCAN, CK_o_INDEXJOIN, CK_o_CROSSJOIN, CK_NONE));
   pCI->Next.m_pEmitted = pCI->Next.m_pProject->pSub_emit();
 
-  if ((pCI->E.p_emit = pCI->E.p_Op->pSub_emit()))
-    pCI->E.p_Op->vDeleteChild(pCI->E.p_emit);
+  // the emit of this op before the fuse: that of the join (see below)
+  Card_Emit* p_emit_join = pCI->E.p_Op->pSub_emit();
 
   // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
   // no arrived columns (only injected), emitted is next emitted
@@ -182,6 +182,8 @@ void Card_OP::vFuse_project_Viable(CardIter *pCI)
   // <scan> or <indexScan>
 
   if (pCI->E.p_Op->bEither(CK_o_SCAN, CK_o_INDEXSCAN, CK_NONE)) {
+    if (p_emit_join)
+      pCI->E.p_Op->vDeleteChild(p_emit_join);
     pCI->E.p_Op->vAppendChild(pCI->Next.m_pEmitted->pClone());
     return;
   }
@@ -192,7 +194,34 @@ void Card_OP::vFuse_project_Viable(CardIter *pCI)
   // <indexJoin> or <crossJoin>
 
   //
-  pCI->E.p_Op->vAppendChild(pCI->Next.m_pEmitted->pClone());
+  Card_Emit* p_emit_fused = _pCard_Emit(pCI->Next.m_pEmitted->pClone());
+
+  // The <project> names the columns of this op's emit. Where it names one only
+  // by position ("$n") and that column is a column of this op's table, say so:
+  // the fused emit is what tells injected columns from arriving ones, and a
+  // bare "$n" beyond the arriving columns is neither.
+  if (p_emit_join) {
+    i8 nJoined = p_emit_join->nChildCards(CK_EXPR);
+    for (Kid xEmit(p_emit_fused); xEmit.bEach(CK_EXPR); /**/) {
+      for (pCI->vBeginTarget(xEmit.p_expr(), CK_TERM); pCI->bEachTarget(); /**/) {
+        Symbol* pSym_term = pCI->E.xTarget.p_term()->pSymbol();
+        if (! pSym_term->bHasFacet(SF_EXP_COL) || pSym_term->bHasFacet(SF_TBL_COL))
+          continue;
+        i8 iCol = pSym_term->iTo_ordinal(SF_EXP_COL);
+        if (iCol < 1 || iCol > nJoined)
+          continue;
+        Card_Expr* p_expr_join = p_emit_join->pGet_expr(iCol - 1);
+        if (! p_expr_join->bIsScalarCol())
+          continue;
+        Symbol* pSym_join = p_expr_join->pGet_term0()->pSymbol();
+        if (pSym_join->bHasFacet(SF_TBL_COL))
+          pSym_term->vApplyFacet(SF_TBL_COL, pSym_join->szFacet(SF_TBL_COL));
+      }
+    }
+    pCI->E.p_Op->vDeleteChild(p_emit_join);
+  }
+
+  pCI->E.p_Op->vAppendChild(p_emit_fused);
 
   // delete any SF_EXP_COL facet with SF_TBL_COL of this op's table
   pCI->E.p_emit = pCI->E.p_Op->pSub_emit();
