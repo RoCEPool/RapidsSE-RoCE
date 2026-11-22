@@ -52,6 +52,8 @@ jobs:
       BUILD_FLAGS: "-O2"
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # the build takes its version from the tags
       - name: Files kept in LFS that the build and the client need
         run: git lfs pull --include="shell/**,thirdparty/**"
       - name: Machine
