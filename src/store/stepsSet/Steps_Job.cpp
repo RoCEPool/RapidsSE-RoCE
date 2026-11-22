@@ -1475,6 +1475,8 @@ void Step::vJobTscBegun(void)
   u4 uProcId;
   pJob->vTscBegun(Hardware::iReadTsc(&uProcId));
   
+  vPhaseMark("begun");
+
   EXIT();
 }
 
@@ -1491,6 +1493,8 @@ void Step::vJobTscExecuting(void)
   u4 uProcId;
   pJob->vTscExecuting(Hardware::iReadTsc(&uProcId));
   
+  vPhaseMark("executing");
+
   EXIT();
 }
 
@@ -1507,6 +1511,8 @@ void Step::vJobTscExecuted(void)
   u4 uProcId;
   pJob->vTscExecuted(Hardware::iReadTsc(&uProcId));
   
+  vPhaseMark("executed");
+
   EXIT();
 }
 
@@ -1539,6 +1545,8 @@ void Step::vJobTscEnded(void)
   u4 uProcId;
   pJob->vTscEnded(Hardware::iReadTsc(&uProcId));
   
+  vPhaseMark("ended");
+
   EXIT();
 }
 

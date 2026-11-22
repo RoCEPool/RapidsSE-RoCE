@@ -834,6 +834,8 @@ void Step::vSqlCompilerParser(void)
 {
   ENTRY();
 
+  vPhaseMark("sqlcompile_start");
+
   /**
    * This stage of the plan is all about producing an initial basic plan graph.
    * The graph is not yet executable and it may not be correct (e.g. incorrect
@@ -1294,6 +1296,8 @@ void Step::vSqlCompilerTransliterate(void)
 
   // return the pipeline
   m_oDataStack.vPushStr(sPipelineStmt);
+
+  vPhaseMark("sqlcompile_end");
 
   EXIT();
 }

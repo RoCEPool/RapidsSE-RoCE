@@ -2,6 +2,7 @@
 /* CardIter.cpp --                                                            */
 /*============================================================================*/
 
+#include <time.h>
 #include "CardIter.hpp"
 #include "Cue.hpp"
 #include "OptimiserFun.hpp"
@@ -9,6 +10,51 @@
 #include "Optimiser.hpp"
 
 #include "eOT.h"
+
+/*----------------------------------------------------------------------------*/
+/* time per transformation (job tag <phaseTimes>; see Step::vPhaseMark)       */
+/*----------------------------------------------------------------------------*/
+// The optimiser of one job runs in one step on one thread: thread-local sums.
+thread_local double gadXformMs[XF_ENUMS];
+thread_local i8     ganXform[XF_ENUMS];
+thread_local double gdValidateMs = 0;
+thread_local double gdXformStartMs = -1;
+thread_local int    geXformRunning = -1;
+
+static inline double dMonotonicMs(void)
+{
+  struct timespec xNow;
+  clock_gettime(CLOCK_MONOTONIC, &xNow);
+  return (double) xNow.tv_sec * 1000.0 + (double) xNow.tv_nsec / 1.0e6;
+}
+
+void CardIter::vXformTimesReset(void)
+{
+  for (int i = 0; i < XF_ENUMS; i++) { gadXformMs[i] = 0; ganXform[i] = 0; }
+  gdValidateMs = 0;
+  gdXformStartMs = -1;
+  geXformRunning = -1;
+}
+
+// one line per transformation that took at least 1 ms, the largest first
+void CardIter::vXformTimesTrace(Stz* szJob)
+{
+  double dTotal = 0;
+  for (int i = 0; i < XF_ENUMS; i++) dTotal += gadXformMs[i];
+  vTrace("[phase-xf] %s total %.3f validate %.3f\n"_Stz, szJob, dTotal, gdValidateMs);
+  bool abDone[XF_ENUMS] = {};
+  for (;;) {
+    int iMax = -1;
+    for (int i = 0; i < XF_ENUMS; i++)
+      if (! abDone[i] && ganXform[i] && (iMax < 0 || gadXformMs[i] > gadXformMs[iMax]))
+        iMax = i;
+    if (iMax < 0 || gadXformMs[iMax] < 1.0)
+      break;
+    abDone[iMax] = true;
+    vTrace("[phase-xf] %s %s %.3f %lld\n"_Stz, szJob, aXF[iMax], gadXformMs[iMax], ganXform[iMax]);
+  }
+}
+
 
 extern OptimiserCatalog gxOptimiserCatalog;
 
@@ -1397,7 +1443,16 @@ void CardIter::vEndTransform(i8 iLineNo)
 
   }
 
+  double dEndMs = dMonotonicMs();
+  if (geXformRunning >= 0 && geXformRunning < XF_ENUMS && gdXformStartMs >= 0) {
+    gadXformMs[geXformRunning] += dEndMs - gdXformStartMs;
+    ganXform[geXformRunning]++;
+  }
+  geXformRunning = -1;
+
   vValidateBench();
+
+  gdValidateMs += dMonotonicMs() - dEndMs;
 
   E.xEachOp.vEnded();
 }
@@ -2387,6 +2442,7 @@ void CardIter::vSnapIf_arriving_till(eCK eTill)
   RASSERT(eTill == E.e_Op);
 }
 
+
 /*----------------------------------------------------------------------------*/
 /* begin and record transformation information                                */
 /*----------------------------------------------------------------------------*/
@@ -2397,6 +2453,9 @@ void CardIter::vTransform(const char* azXfile, const char* azXfunc, eXF eXform)
   vClearRegisters();
 
   m_pBench->vTransform(azXfile, azXfunc, eXform);
+
+  gdXformStartMs = dMonotonicMs();
+  geXformRunning = (int) eXform;
 }
 
 /*----------------------------------------------------------------------------*/

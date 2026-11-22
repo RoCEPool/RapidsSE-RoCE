@@ -2,6 +2,7 @@
 /* Steps_Optimiser.cpp -- Optimiser step group                                */
 /*============================================================================*/
 
+#include <time.h>
 #include "BASE.h"
 #include "Step.hpp"
 #include "EnterExit.h"
@@ -10,6 +11,9 @@
 
 #include "Op.hpp"
 #include "Job.hpp"
+#include "CardIter.hpp"
+#include "Grid.hpp"
+#include "Node.hpp"
 
 #include "LogicUnit.hpp"
 #include "Error.hpp"
@@ -73,6 +77,31 @@ void Step::vOptimiserGet(void)
 }
 
 /*----------------------------------------------------------------------------*/
+/* phase mark -- with the job tag <phaseTimes>, one trace line per point:      */
+/*   [phase] <node> J<origin>.<job> <point> <monotonic ms>                    */
+/* tests/tpch_sf1_correctness/scripts/phase_times.py turns these into the time */
+/* of each phase of a query (SQL compile, optimise, C compile, execute).      */
+/*----------------------------------------------------------------------------*/
+void Step::vPhaseMark(const char* szPoint)
+{
+  Job* pJob = nullptr;
+  if (m_pJob.bIsNotNull())
+    pJob = *m_pJob;
+  else if (m_pOp.bIsNotNull())
+    pJob = m_pOp->pOuterJobOfOp();
+  if (! pJob || ! pJob->bHasTag("<phaseTimes>"_Stz))
+    return;
+
+  struct timespec xNow;
+  clock_gettime(CLOCK_MONOTONIC, &xNow);
+  double dMs = (double) xNow.tv_sec * 1000.0 + (double) xNow.tv_nsec / 1.0e6;
+
+  JobId tId = pJob->tJobId();
+  vTrace("[phase] %s J%04lld.%04lld %s %.3f\n"_Stz,
+         AM::pGrid()->pThisNode()->szNodeNm(), tId.uNodeId(), tId.uJobNo(), (Stz*) szPoint, dMs);
+}
+
+/*----------------------------------------------------------------------------*/
 /* Optimiser[].new -- new optimiser                                           */
 /*----------------------------------------------------------------------------*/
 void Step::vOptimiserNew(void)
@@ -94,6 +123,7 @@ void Step::vOptimiserNew(void)
     NEVER_REACH;
   }
 
+  vPhaseMark("optimise_start");
   m_pLogicUnit->m_xpOptimiser = new Optimiser(pJob->pJobTags());
 
   EXIT();
@@ -120,7 +150,13 @@ void Step::vOptimiserTransform(void)
   }
 
   Error xError;
+  CardIter::vXformTimesReset();
   bResult = m_pLogicUnit->m_xpOptimiser->bTransform(xError, pPdsRowBuffer);
+  if (pJobTags->bHasName("<phaseTimes>"_Stz)) {
+    s256 sJob;
+    sJob.vSprint("J%04lld.%04lld"_Stz, pJob->tJobId().uNodeId(), pJob->tJobId().uJobNo());
+    CardIter::vXformTimesTrace(sJob.szStz());
+  }
 
   // push error code
   if (! bResult) {
@@ -129,6 +165,8 @@ void Step::vOptimiserTransform(void)
   }
 
   m_oDataStack.vPushBol(bResult);
+
+  vPhaseMark("optimise_end");
 
   EXIT();
 }
@@ -172,6 +210,8 @@ void Step::vOptimiserWeave(void)
   }
 
   m_pJob->vCodeBlock(pCodeBlock);
+
+  vPhaseMark("weave_end");
 
   EXIT();
 }
