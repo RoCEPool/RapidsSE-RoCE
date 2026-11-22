@@ -1,0 +1,91 @@
+/*----------------------------------------------------------------------------*/
+/* corrSemiJoin.test -- outer IN restriction copied into a correlated sub-query */
+/*----------------------------------------------------------------------------*/
+
+// A sub-query correlated by "inner = outer" was computed for every value of
+// the correlation key over the whole inner table. When the AND of the outer
+// filter also has "outer IN (S)", the SQL compiler now adds "inner IN (S)" to
+// the WHERE of the correlated sub-query (TPC-H Q20). This needs an IN
+// sub-query inside a correlated sub-query, which failed with EC_NONE before:
+// the <fold> of the folded IN was taken as the end of the inner query, and the
+// <correlation> card was copied into the outer query.
+// The queries check that the rows do not change: the plain case, a sub-query
+// with its own conditions, an IN written in the sub-query by hand, and NOT IN
+// (nothing is added). TPC-H Q20 itself is checked by the SF1 correctness test.
+// The expected rows were computed from DATA/TPCH (lineitem10k.csv,
+// supplier_2k.tbl, nation.tbl) with SQLite, independently of RapidsSE.
+
+create table ${testName2}_lineitem (
+  L_ORDERKEY      INTEGER       NOT NULL,
+  L_PARTKEY       INTEGER       NOT NULL,
+  L_SUPPKEY       INTEGER       NOT NULL,
+  L_LINENUMBER    INTEGER       NOT NULL,
+  L_QUANTITY      DECIMAL(15,2) NOT NULL,
+  L_EXTENDEDPRICE DECIMAL(15,2) NOT NULL,
+  L_DISCOUNT      DECIMAL(15,2) NOT NULL,
+  L_TAX           DECIMAL(15,2) NOT NULL,
+  L_RETURNFLAG    CHAR(1)       NOT NULL,
+  L_LINESTATUS    CHAR(1)       NOT NULL,
+  L_SHIPDATE      DATE          NOT NULL,
+  L_COMMITDATE    DATE          NOT NULL,
+  L_RECEIPTDATE   DATE          NOT NULL,
+  L_SHIPINSTRUCT  CHAR(25)      NOT NULL,
+  L_SHIPMODE      CHAR(10)      NOT NULL,
+  L_COMMENT       VARCHAR(44)   NOT NULL
+);
+success
+create index ${testName2}_IxL_ORDERKEY on ${testName2}_lineitem (L_ORDERKEY);
+affected: 0
+load ${testName2}_lineitem "../DATA/TPCH/lineitem10k.csv";
+success
+
+create table ${testName2}_nation (
+  N_NATIONKEY  INTEGER      NOT NULL,
+  N_NAME       CHAR(25)     NOT NULL,
+  N_REGIONKEY  INTEGER      NOT NULL,
+  N_COMMENT    VARCHAR(152)
+);
+success
+create index ${testName2}_IxN_NATIONKEY on ${testName2}_nation (N_NATIONKEY);
+affected: 0
+create index ${testName2}_IxN_REGIONKEY on ${testName2}_nation (N_REGIONKEY);
+affected: 0
+load ${testName2}_nation "../DATA/TPCH/nation.tbl" <field_delimiter> = "|";
+success
+create table ${testName2}_supplier (
+  S_SUPPKEY    INTEGER       NOT NULL,
+  S_NAME       CHAR(25)      NOT NULL,
+  S_ADDRESS    VARCHAR(40)   NOT NULL,
+  S_NATIONKEY  INTEGER       NOT NULL,
+  S_PHONE      CHAR(15)      NOT NULL,
+  S_ACCTBAL    DECIMAL(15,2) NOT NULL,
+  S_COMMENT    VARCHAR(101)  NOT NULL
+);
+success
+create index ${testName2}_IxS_SUPPKEY on ${testName2}_supplier (S_SUPPKEY);
+affected: 0
+load ${testName2}_supplier "../DATA/TPCH/supplier_2k.tbl" <field_delimiter> = "|";
+success
+
+create index ${testName2}_IxL_SUPPKEY on ${testName2}_lineitem (L_SUPPKEY);
+affected: 0
+create index ${testName2}_IxL_PARTKEY on ${testName2}_lineitem (L_PARTKEY);
+affected: 0
+create index ${testName2}_IxS_NATIONKEY on ${testName2}_supplier (S_NATIONKEY);
+affected: 0
+
+// outer IN on the correlation key
+select count(*) from ${testName2}_supplier where s_suppkey in (select n_nationkey from ${testName2}_nation where n_regionkey <> 1) and s_acctbal > (select 0.05 * sum(l_extendedprice) from ${testName2}_lineitem where l_suppkey = s_suppkey);
+rows: (10)
+
+// the sub-query has its own conditions
+select count(*) from ${testName2}_supplier where s_suppkey in (select n_nationkey from ${testName2}_nation where n_regionkey <> 1) and s_acctbal > (select 0.05 * sum(l_extendedprice) from ${testName2}_lineitem where l_suppkey = s_suppkey and l_returnflag = 'R');
+rows: (5)
+
+// an IN sub-query written inside the correlated sub-query (failed with EC_NONE)
+select count(*) from ${testName2}_supplier where s_suppkey < 2000 and s_acctbal > (select 0.05 * sum(l_extendedprice) from ${testName2}_lineitem where l_suppkey = s_suppkey and l_suppkey in (select n_nationkey from ${testName2}_nation where n_regionkey <> 1));
+rows: (10)
+
+// NOT IN: nothing is added
+select count(*) from ${testName2}_supplier where s_suppkey not in (select n_nationkey from ${testName2}_nation where n_regionkey <> 1) and s_acctbal > (select 0.05 * sum(l_extendedprice) from ${testName2}_lineitem where l_suppkey = s_suppkey);
+rows: (759)

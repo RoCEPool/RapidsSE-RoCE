@@ -15,3 +15,4 @@ aggregateDistinct.test
 derivedTableSubquery.test
 avgOverAggregate.test
 orFactor.test
+corrSemiJoin.test
