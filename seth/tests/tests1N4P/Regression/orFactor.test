@@ -1,0 +1,188 @@
+/*----------------------------------------------------------------------------*/
+/* orFactor.test -- conditions implied by an OR added to the filter           */
+/*----------------------------------------------------------------------------*/
+
+// The run-time optimiser applies a condition to its table before the joins only
+// when it is a member of the AND of the filter, never inside an OR. The SQL
+// compiler now adds to the AND what every branch of an OR implies: a condition
+// that is a member of every branch, and "column IN (constants)" for a column
+// that every branch compares with constants (TPC-H Q7 and Q19). The OR stays.
+// These queries check that the added conditions remove no row: branches that
+// share a condition, branches without one, a column missing from a branch, an
+// OR under NOT, and ORs across the tables of a join.
+// The expected rows were computed from DATA/TPCH (lineitem10k.csv, nation.tbl,
+// supplier_2k.tbl) with SQLite, independently of RapidsSE.
+
+create table ${testName2}_lineitem (
+  L_ORDERKEY      INTEGER       NOT NULL,
+  L_PARTKEY       INTEGER       NOT NULL,
+  L_SUPPKEY       INTEGER       NOT NULL,
+  L_LINENUMBER    INTEGER       NOT NULL,
+  L_QUANTITY      DECIMAL(15,2) NOT NULL,
+  L_EXTENDEDPRICE DECIMAL(15,2) NOT NULL,
+  L_DISCOUNT      DECIMAL(15,2) NOT NULL,
+  L_TAX           DECIMAL(15,2) NOT NULL,
+  L_RETURNFLAG    CHAR(1)       NOT NULL,
+  L_LINESTATUS    CHAR(1)       NOT NULL,
+  L_SHIPDATE      DATE          NOT NULL,
+  L_COMMITDATE    DATE          NOT NULL,
+  L_RECEIPTDATE   DATE          NOT NULL,
+  L_SHIPINSTRUCT  CHAR(25)      NOT NULL,
+  L_SHIPMODE      CHAR(10)      NOT NULL,
+  L_COMMENT       VARCHAR(44)   NOT NULL
+);
+success
+create index ${testName2}_IxL_ORDERKEY on ${testName2}_lineitem (L_ORDERKEY);
+affected: 0
+load ${testName2}_lineitem "../DATA/TPCH/lineitem10k.csv";
+success
+
+create table ${testName2}_nation (
+  N_NATIONKEY  INTEGER      NOT NULL,
+  N_NAME       CHAR(25)     NOT NULL,
+  N_REGIONKEY  INTEGER      NOT NULL,
+  N_COMMENT    VARCHAR(152)
+);
+success
+create index ${testName2}_IxN_NATIONKEY on ${testName2}_nation (N_NATIONKEY);
+affected: 0
+create index ${testName2}_IxN_REGIONKEY on ${testName2}_nation (N_REGIONKEY);
+affected: 0
+load ${testName2}_nation "../DATA/TPCH/nation.tbl" <field_delimiter> = "|";
+success
+create table ${testName2}_supplier (
+  S_SUPPKEY    INTEGER       NOT NULL,
+  S_NAME       CHAR(25)      NOT NULL,
+  S_ADDRESS    VARCHAR(40)   NOT NULL,
+  S_NATIONKEY  INTEGER       NOT NULL,
+  S_PHONE      CHAR(15)      NOT NULL,
+  S_ACCTBAL    DECIMAL(15,2) NOT NULL,
+  S_COMMENT    VARCHAR(101)  NOT NULL
+);
+success
+create index ${testName2}_IxS_SUPPKEY on ${testName2}_supplier (S_SUPPKEY);
+affected: 0
+load ${testName2}_supplier "../DATA/TPCH/supplier_2k.tbl" <field_delimiter> = "|";
+success
+
+// a condition in every branch, and two columns compared with constants in every branch
+select count(*), sum(l_quantity) from ${testName2}_lineitem
+ where (l_returnflag = 'A' and l_shipmode in ('AIR', 'MAIL') and l_quantity < 10)
+    or (l_returnflag = 'R' and l_shipmode = 'SHIP' and l_quantity < 10);
+rows: (206, 1043.00)
+
+// each branch compares a different column: only the shared condition is implied
+select count(*), sum(l_quantity) from ${testName2}_lineitem
+ where (l_returnflag = 'A' and l_quantity < 5) or (l_shipmode = 'AIR' and l_quantity < 5);
+rows: (267, 657.00)
+
+// three branches, constants on both sides of =, next to another member of the AND
+select count(*) from ${testName2}_lineitem
+ where l_orderkey < 100
+   and ((l_returnflag = 'A' and l_shipmode = 'AIR') or ('MAIL' = l_shipmode and l_returnflag = 'N')
+        or (l_returnflag = 'R' and l_shipmode in ('AIR', 'RAIL')));
+rows: (23)
+
+// a column missing from one branch, different bounds: nothing is implied
+select count(*) from ${testName2}_lineitem where (l_returnflag = 'A' and l_quantity < 10) or (l_quantity < 3);
+rows: (748)
+
+// an OR under NOT is not a member of the AND
+select count(*) from ${testName2}_lineitem where not ((l_returnflag = 'A' and l_quantity < 10) or (l_returnflag = 'R' and l_quantity < 10));
+rows: (9114)
+
+// TPC-H Q7: the nations of two tables
+select n1.n_name, n2.n_name from ${testName2}_nation n1, ${testName2}_nation n2
+ where n2.n_regionkey = n1.n_regionkey
+   and ((n1.n_name = 'FRANCE' and n2.n_name = 'GERMANY') or (n1.n_name = 'GERMANY' and n2.n_name = 'FRANCE'))
+ order by n1.n_name;
+ordered rows:
+  ('FRANCE', 'GERMANY')
+  ('GERMANY', 'FRANCE')
+
+select n1.n_name, n2.n_name, count(*)
+  from ${testName2}_supplier, ${testName2}_nation n1, ${testName2}_nation n2
+ where s_nationkey = n1.n_nationkey and n2.n_regionkey = n1.n_regionkey
+   and ((n1.n_name = 'FRANCE' and n2.n_name = 'GERMANY') or (n1.n_name = 'GERMANY' and n2.n_name = 'FRANCE'))
+ group by n1.n_name, n2.n_name
+ order by n1.n_name;
+ordered rows:
+  ('FRANCE', 'GERMANY', 78)
+  ('GERMANY', 'FRANCE', 86)
+
+// branches over the columns of two joined tables
+select count(*) from ${testName2}_lineitem, ${testName2}_supplier
+ where l_suppkey = s_suppkey
+   and ((s_nationkey = 7 and l_shipmode = 'AIR') or (s_nationkey = 6 and l_shipmode = 'TRUCK')
+        or (l_shipmode = 'AIR' and s_nationkey = 6));
+rows: (37)
+
+// The added "column IN (constants)" can be over DATE, TIME and TIMESTAMP columns
+// (the code generator had no IN for these types), and over a column that is
+// NULL in some rows (IN on a NULL value left the list on the stack of the
+// expression, so the rest of an AND read the wrong values). The expected rows
+// were read off DATA/Transliterate/date.csv by hand.
+
+create table ${testName2}_datums (
+int_col0   INTEGER,
+int_col1   INTEGER,
+bol_col2   BOOLEAN,
+bol_col3   BOOLEAN,
+dte_col4   DATE,
+dte_col5   DATE,
+dec_col6   DECIMAL(19,2),
+dec_col7   DECIMAL(19,2),
+flt_col8   FLOAT,
+flt_col9   FLOAT,
+tme_col10  TIME,
+tme_col11  TIME,
+tsp_col12  TIMESTAMP,
+tsp_col13  TIMESTAMP,
+vch_col14  VARCHAR(32),
+vch_col15  VARCHAR(32)
+);
+success
+load ${testName2}_datums "../DATA/Transliterate/date.csv" ;
+success
+
+select int_col0 from ${testName2}_datums where dte_col4 in (DATE '2041-01-01', DATE '2042-01-19') order by int_col0;
+ordered rows:
+  (1)
+  (7)
+  (10)
+  (11)
+
+select int_col0 from ${testName2}_datums where dte_col4 = DATE '2047-01-01' or dte_col4 = DATE '2041-01-10';
+rows: (9)
+
+select int_col0 from ${testName2}_datums where int_col0 > 2 and dte_col4 in (DATE '2041-01-01', DATE '1998-11-02') order by int_col0;
+ordered rows:
+  (5)
+  (7)
+
+select int_col0 from ${testName2}_datums where not (dte_col4 in (DATE '2041-01-01')) and int_col0 < 5 order by int_col0;
+ordered rows:
+  (2)
+  (4)
+
+select int_col0 from ${testName2}_datums where tsp_col12 in (TIMESTAMP '1944-01-01 12:00:00', TIMESTAMP '2000-01-01 00:00:00') order by int_col0;
+ordered rows:
+  (10)
+  (11)
+
+select int_col0 from ${testName2}_datums where tme_col10 in (TIME '10:23:31') and int_col0 > 2 order by int_col0;
+ordered rows:
+  (3)
+  (5)
+  (9)
+
+select int_col0 from ${testName2}_datums where int_col1 in (1000, 4000) and int_col0 < 5 order by int_col0;
+ordered rows:
+  (1)
+  (4)
+
+select int_col0 from ${testName2}_datums
+ where (dte_col4 = DATE '2041-01-01' and int_col0 < 5) or (dte_col4 = DATE '1998-11-02' and int_col0 < 5) or int_col0 is null
+ order by int_col0;
+ordered rows:
+  (1)

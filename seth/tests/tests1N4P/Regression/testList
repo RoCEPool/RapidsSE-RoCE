@@ -14,3 +14,4 @@ subqueryOrderBy.test
 aggregateDistinct.test
 derivedTableSubquery.test
 avgOverAggregate.test
+orFactor.test

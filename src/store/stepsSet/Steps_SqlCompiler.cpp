@@ -34,6 +34,7 @@
 #include "PlanOperand.hpp"
 
 #include "AggregateSplit.hpp"
+#include "OrFactor.hpp"
 #include "NameValidator.hpp"
 #include "ExprValidator.hpp"
 #include "SetOpValidator.hpp"
@@ -200,6 +201,10 @@ void Step::vSqlCompilerCorrBySquash(void) {
     // DISTINCT aggregates become two aggregations here, before the plan is
     // partitioned, so that the lower one is partitioned like any GROUP BY.
     AggregateSplit::vDistinctSplit(pPlanRoot);
+
+    // Conditions that every branch of an OR in a filter implies, added to the
+    // filter so that they can be applied to a table before the joins.
+    OrFactor::vOrFactor(pPlanRoot);
 
   } catch (Parser::SqlException& e) {
     Grid* pGrid = AM::pGrid();
