@@ -198,10 +198,12 @@ void XF_FLATTEN::vFold_subQuery(CardIter* pCI, Stz* szFoldNm, eCK eCardWithSQ)
   // pCI->PRINTBOARD_dbg();
 
   // A sub-query of this inner query that is already folded into it (an IN
-  // sub-query in its WHERE, folded as a join) put its cards in front of the
-  // <correlation>: put the <correlation> first again, and drop the <fold>
-  // left in front of every <from> (join ordering has moved the folded
-  // sub-query's table after it, so it ends nothing).
+  // sub-query in its WHERE) may have left a <fold> in front of every <from>:
+  // folded as a join, join ordering has moved the sub-query's table after the
+  // <fold>, so it ends nothing; drop it. The <correlation> must be the first
+  // card, as only the cards after it are copied. (A folded IN with GROUP BY
+  // keeps its <fold>, after its own cards: that <fold> is inside the inner
+  // query, which ends at the <fold> made here, Flat.m_p_fold_current.)
   {
     Kid xDeck(pCI->E.p_deck);
     Card* p_correlation = nullptr;
@@ -211,7 +213,7 @@ void XF_FLATTEN::vFold_subQuery(CardIter* pCI, Stz* szFoldNm, eCK eCardWithSQ)
         break;
       }
     }
-    if (p_correlation && pCI->E.p_deck->pGetChild(0) != p_correlation) {
+    if (p_correlation) {
       Kid xFold(pCI->E.p_deck);
       while (xFold.bEach()) {
         if (CK_o_FROM == xFold.eChild())
@@ -219,7 +221,8 @@ void XF_FLATTEN::vFold_subQuery(CardIter* pCI, Stz* szFoldNm, eCK eCardWithSQ)
         if (CK_o_FOLD == xFold.eChild())
           xFold.vDelete();
       }
-      pCI->E.p_deck->vRotateFirst(p_correlation);
+      if (pCI->E.p_deck->pGetChild(0) != p_correlation)
+        pCI->E.p_deck->vRotateFirst(p_correlation);
     }
   }
 
@@ -244,10 +247,31 @@ void XF_FLATTEN::vFold_subQuery(CardIter* pCI, Stz* szFoldNm, eCK eCardWithSQ)
   // 5) add <fold> (before MQ)
   pCI->E.p_fold = Card_Fold::pCraft_fold(szFoldNm, pBoard_inner->i_Board());
   pCI->Flat.m_p_fold_current = pCI->E.p_fold;
-  pCI->E.p_deck->vPushChild(pCI->E.p_fold);
+  // When this outer query is itself a correlated sub-query, its <correlation>
+  // stays in front (after the <subquery> cards that come before it): the inner
+  // query and the <fold> go after it, so that the <fold> is followed by the
+  // outer query's own cards.
+  Card* p_correlation_outer = nullptr;
+  for (i8 i_Main = 0; i_Main < pCI->E.p_deck->nChildCards(); i_Main++) {
+    Card* p_card = pCI->E.p_deck->pGetChild(i_Main);
+    if (p_card->bIsCard(CK_o_CORRELATION)) {
+      p_correlation_outer = p_card;
+      break;
+    }
+    if (p_card->bIsCard(CK_o_FROM) || p_card->bIsCard(CK_o_FOLD))
+      break;
+  }
+
+  if (p_correlation_outer)
+    pCI->E.p_deck->vInsertChildAfter(pCI->E.p_fold, p_correlation_outer);
+  else
+    pCI->E.p_deck->vPushChild(pCI->E.p_fold);
 
   // 6) copy up inner (add before fold)
-  pCI->E.p_deck->vPushChild(pCI->Flat.m_pCopy_inner);
+  if (p_correlation_outer)
+    pCI->E.p_deck->vInsertChildAfter(pCI->Flat.m_pCopy_inner, p_correlation_outer);
+  else
+    pCI->E.p_deck->vPushChild(pCI->Flat.m_pCopy_inner);
   pCI->E.p_deck->vRemoveChildLeavingSubs(pCI->Flat.m_pCopy_inner);
   DELETE_CARD(pCI->Flat.m_pCopy_inner);
 
@@ -878,9 +902,13 @@ bool XF_FLATTEN::bSnap_IQ_crlKey(CardIter* pCI)
   // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
   // the inner query is the part of the deck before the <fold>
+  // (the <fold> being made: an inner query can hold the <fold> of one of its
+  // own sub-queries)
   i8 i_Op_fold = C_UNKNOWN;
   for (i8 i_Main = 0; i_Main < pCI->E.p_deck->nChildCards(); i_Main++) {
-    if (pCI->E.p_deck->pGetChild(i_Main)->bIsCard(CK_o_FOLD)) {
+    Card* p_card = pCI->E.p_deck->pGetChild(i_Main);
+    if (p_card->bIsCard(CK_o_FOLD) &&
+        (!pCI->Flat.m_p_fold_current || p_card == pCI->Flat.m_p_fold_current)) {
       i_Op_fold = i_Main;
       break;
     }
@@ -940,7 +968,7 @@ void XF_FLATTEN::vPromote_IQ_aggreg_To_gbyAgg_crlKey(CardIter* pCI)
   pCI->vClearRegisters();
 
   pCI->vBeginEach();
-  RASSERT(pCI->bEachOp_break(CK_o_AGGREG));
+  RASSERT(pCI->bEachOp_break_fold_current(CK_o_AGGREG));
   for (i8 i_agg = 0; i_agg < 3; i_agg++) {
 
     pCI->E.p_Op->vCard(CK_o_GBYAGG);

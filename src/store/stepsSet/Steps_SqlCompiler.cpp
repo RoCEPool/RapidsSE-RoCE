@@ -965,6 +965,8 @@ void Step::vSqlCompilerParser(void)
             vTrace("CorrSemiJoin: %s\n"_Stz, sRewritten.c_str());
         }
       } catch (...) {
+        if (AM::JOB::bHasTag("<optimiser_trace>"_Stz))
+          vTrace("CorrSemiJoin: planning the rewritten statement failed\n"_Stz);
       }
       delete pPlanner2;
     }

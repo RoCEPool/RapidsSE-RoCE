@@ -1,5 +1,5 @@
 /*============================================================================*/
-/* CorrSemiJoin.cpp - outer IN restrictions copied into correlated sub-queries */
+/* CorrSemiJoin.cpp - outer key restrictions copied into correlated sub-queries */
 /*============================================================================*/
 //
 //   select ps_suppkey from partsupp
@@ -10,19 +10,35 @@
 //
 // The run-time optimiser computes a correlated sub-query once for every value
 // of its correlation key (a GROUP BY over the whole inner table) and joins the
-// result with the outer query. The outer query only needs the keys of its rows
-// that pass the rest of its filter, here the parts named 'forest%'. When the
-// sub-query is a member of the AND of a filter that also has "outer IN (S)",
-// and the sub-query is correlated by "inner = outer" in the AND of its WHERE,
-// "inner IN (S)" is added to that WHERE:
+// result with the outer query. DuckDB first takes the distinct keys of the
+// outer rows (its "delim" join) and computes the sub-query for those keys only.
+// The same is done here in SQL: when the sub-query is an operand of a
+// comparison in the AND of a filter and is correlated by "inner = outer" in the
+// AND of its WHERE, "inner IN (K)" is added to that WHERE, with K a set of keys
+// that contains the outer keys the filter can keep:
 //
-//      ... where (l_partkey = ps_partkey and ...) and lineitem.l_partkey in
-//                (select p_partkey from part where p_name like 'forest%')
+//   1. the AND has "outer IN (S)", S not correlated: K is S (Q20);
+//   2. otherwise the AND has conditions on the outer column's table alone,
+//      compared with constants: K is the keys of that table that pass them
+//      (Q17: p_brand, p_container; Q2: p_size, p_type).
 //
-// For an outer row with outer IN (S) TRUE, the inner rows that the sub-query
-// uses have inner = outer, so inner IN (S) is TRUE for them: its value is the
-// same. Any other outer row is rejected by the filter whatever the sub-query
-// returns. The rows of the statement do not change.
+// K is written as "(select k.c from <table> k where ... group by k.c)" when S
+// (or the table) is one table with such conditions: the optimiser folds an IN
+// with GROUP BY as a stream of distinct keys that drives an index join into the
+// inner table (as Q18's IN), so the sub-query reads only the rows of those
+// keys. The table gets an alias of its own (csj_kN), apart from other scans of
+// it in the statement.
+//
+//      ... where (l_partkey = p_partkey) and lineitem.l_partkey in
+//          (select csj_k1.p_partkey from rapids.public.part csj_k1
+//            where csj_k1.p_brand = 'Brand#23' and csj_k1.p_container = 'MED BOX'
+//            group by csj_k1.p_partkey)                                 (Q17)
+//
+// For an outer row that the filter keeps, outer is in K, and the inner rows
+// that the sub-query uses have inner = outer, so inner IN (K) is TRUE for them:
+// the sub-query has the same value. Any other outer row is rejected by the
+// filter whatever the sub-query returns. The rows of the statement do not
+// change.
 //
 // The change is made to the text of the statement, which is then planned
 // again: the plan of a sub-query is made from its text, and the text of every
@@ -57,6 +73,10 @@
 #include "GtExpr.hpp"
 #include "GeExpr.hpp"
 #include "InExpr.hpp"
+#include "LikeExpr.hpp"
+#include "BetweenExpr.hpp"
+#include "LiteralExpr.hpp"
+#include "ProjectedColumn.hpp"
 #include "ColumnRef.hpp"
 #include "TableScanOp.hpp"
 #include "TableRef.hpp"
@@ -74,14 +94,14 @@ static const i8 C_MAX_REWRITES = 4;
 /*----------------------------------------------------------------------------*/
 b1 CorrSemiJoin::bRewrite(const std::string& sSql, const PlanNode* pGraphTemplate, std::string& sOut)
 {
-  // a correlated sub-query and an IN sub-query: at least three SELECTs
+  // a statement and a correlated sub-query: at least two SELECTs
   std::string sLower(sSql);
   for (auto& c : sLower)
     c = (char)tolower((unsigned char)c);
   i8 nSelect = 0;
   for (size_t i = sLower.find("select"); i != std::string::npos; i = sLower.find("select", i + 1))
     nSelect++;
-  if (nSelect < 3)
+  if (nSelect < 2)
     return false;
 
   std::string sCurrent(sSql);
@@ -212,6 +232,87 @@ static void vInnerAliases(QueryNode* pNode, std::set<std::string>& xAliases)
   delete pIter;
 }
 
+// true when the term is a condition on columns of one table only, compared
+// with constants: =, <>, <, <=, >, >=, LIKE, IN (list) or BETWEEN
+static b1 bOnlyColumnsOf(QueryNode* pNode, QueryNode* pColumnOfTable, b1& bHasColumn)
+{
+  if (SubqueryRefExpr::bIsOfType(pNode))
+    return false;
+  if (ColumnRef::bIsOfType(pNode)) {
+    bHasColumn = true;
+    return sLowered(szTableOf(pNode)) == sLowered(szTableOf(pColumnOfTable)) &&
+           sLowered(ColumnRef::szTable(pNode)) == sLowered(ColumnRef::szTable(pColumnOfTable));
+  }
+  PlanNodeIter* pIter = pNode->pNewChildrenIter();
+  b1 bOk = true;
+  while (pIter->bHasNext() && bOk) {
+    QueryNode* pChild = _pQueryNode(pIter->pNext());
+    if (!pChild->szType())
+      continue;
+    if (LiteralExpr::bIsOfType(pChild))
+      continue;
+    if (ColumnRef::bIsOfType(pChild))
+      bOk = bOnlyColumnsOf(pChild, pColumnOfTable, bHasColumn);
+    else
+      bOk = false;
+  }
+  delete pIter;
+  return bOk;
+}
+
+static b1 bTableCondition(QueryNode* pTerm, QueryNode* pColumnOfTable)
+{
+  if (!(EqExpr::bIsOfType(pTerm) || NeExpr::bIsOfType(pTerm) || LtExpr::bIsOfType(pTerm) ||
+        LeExpr::bIsOfType(pTerm) || GtExpr::bIsOfType(pTerm) || GeExpr::bIsOfType(pTerm) ||
+        LikeExpr::bIsOfType(pTerm) || InExpr::bIsOfType(pTerm) || BetweenExpr::bIsOfType(pTerm)))
+    return false;
+  b1 bHasColumn = false;
+  return bOnlyColumnsOf(pTerm, pColumnOfTable, bHasColumn) && bHasColumn;
+}
+
+
+// "(select K.c from <catalog.schema.table> K where <conditions> group by K.c)":
+// the distinct keys of a table that pass its conditions. The table gets an
+// alias of its own, so that it is not the same table as another scan of it in
+// the statement. pKeyCol is a column of the table; the conditions are columns
+// of the table compared with constants (bTableCondition).
+static i8 giKeySetAlias = 0;
+
+static b1 bKeySet(QueryNode* pKeyCol, QueryNodeList* pConditions, PlanNode* pRootNode, std::string& sOut)
+{
+  Stz* szCatalog = ColumnRef::szCatalog(pKeyCol);
+  Stz* szSchema = ColumnRef::szSchema(pKeyCol);
+  Stz* szTable = ColumnRef::szTable(pKeyCol);
+  Stz* szColumn = ColumnRef::szColumn(pKeyCol);
+  if (!szCatalog || !szSchema || !szTable || !szColumn)
+    return false;
+  std::string sTable = std::string(szCatalog->azChar()) + "." + szSchema->azChar() + "." + szTable->azChar();
+  std::string sAlias = "csj_k" + std::to_string(++giKeySetAlias);
+  std::string sPrefix = sTable + ".";
+
+  std::string sConditions;
+  for (i8 k = 0; k < pConditions->nItems(); k++) {
+    s2K sDescr;
+    Expr::vDescribe(pConditions->pGet(k), sDescr, pRootNode);
+    std::string sText(sDescr.szStz()->azChar());
+    if (sText.find("''") != std::string::npos)
+      return false;
+    for (size_t i = sText.find(sPrefix); i != std::string::npos; i = sText.find(sPrefix, i + sAlias.size() + 1))
+      sText.replace(i, sPrefix.size(), sAlias + ".");
+    if (sText.find(sTable) != std::string::npos)
+      return false;
+    sConditions += (sConditions.empty() ? "" : " and ") + sText;
+  }
+
+  std::string sKey = sAlias + "." + szColumn->azChar();
+  sOut = "(select " + sKey + " from " + sTable + " " + sAlias +
+         (sConditions.empty() ? std::string() : " where " + sConditions) + " group by " + sKey + ")";
+  return true;
+}
+
+// the one projected column of a sub-query that is one SELECT, or nullptr
+static QueryNode* pProjectedColumnOf(QueryNode* pExprSubquery);
+
 // the WHERE of a sub-query that is one SELECT: exprSubquery/mainSubquery/
 // selectMarker/(projectOp|aggregateOp)/filterOp
 QueryNode* CorrSemiJoin::pWhereOf(QueryNode* pExprSubquery)
@@ -303,7 +404,13 @@ b1 CorrSemiJoin::bTryFilter(QueryNode* pFilterOp, PlanNode* pRootNode, const std
       if (bHasIn)
         continue;
 
-      // "outer IN (S)", S not correlated, in the outer AND
+      Stz* szAlias = szTableOf(pInnerCol);
+      Stz* szColumn = ColumnRef::szColumn(pInnerCol);
+      if (!szAlias || !szColumn || szAlias->nLength() == 0 || szColumn->nLength() == 0)
+        continue;
+      std::string sInner = std::string(szAlias->azChar()) + "." + szColumn->azChar();
+
+      // 1. "outer IN (S)", S not correlated, in the outer AND: the keys are S
       for (i8 k = 0; k < pTerms->nItems() && !bDone; k++) {
         QueryNode* pIn = pTerms->pGet(k);
         if (!InExpr::bIsOfType(pIn) || !Expr::bIsSymbolicallyEqual(InExpr::pLeftExpr(pIn), pOuter))
@@ -315,14 +422,55 @@ b1 CorrSemiJoin::bTryFilter(QueryNode* pFilterOp, PlanNode* pRootNode, const std
         if (!pS || SubqueryMarker::bIsCorrelated(pS) || !SubqueryMarker::szSqlText(pS))
           continue;
 
-        Stz* szAlias = szTableOf(pInnerCol);
-        Stz* szColumn = ColumnRef::szColumn(pInnerCol);
-        if (!szAlias || !szColumn || szAlias->nLength() == 0 || szColumn->nLength() == 0)
-          continue;
-        std::string sCondition = std::string(szAlias->azChar()) + "." + szColumn->azChar() +
-                                 " in (" + SubqueryMarker::szSqlText(pS)->azChar() + ")";
+        // S as a key set of its own (grouped, its table under an alias of its
+        // own) when it is one table with conditions on constants; else S as
+        // it is written
+        std::string sKeys;
+        QueryNode* pKeyCol = pProjectedColumnOf(pS);
+        QueryNode* pWhereS = pWhereOf(pS);
+        std::set<std::string> xTablesS;
+        {
+          QueryNode* pMainS = pChildOfType(pS, &MainSubquery::bIsOfType);
+          QueryNode* pSelectS = pMainS ? pChildOfType(pMainS, &SelectMarker::bIsOfType) : nullptr;
+          if (pSelectS)
+            vInnerAliases(pSelectS, xTablesS);
+        }
+        if (pKeyCol && ColumnRef::bIsOfType(pKeyCol) && xTablesS.size() == 1) {
+          QueryNodeList* pCondS = new QueryNodeList();
+          b1 bAll = true;
+          if (pWhereS) {
+            vFlattenAnd(FilterOp::pFilterExpr(pWhereS), pCondS);
+            for (i8 c = 0; c < pCondS->nItems() && bAll; c++)
+              bAll = bTableCondition(pCondS->pGet(c), pKeyCol);
+          }
+          if (!bAll || !bKeySet(pKeyCol, pCondS, pRootNode, sKeys))
+            sKeys.clear();
+          pCondS->vRemoveAll();
+          delete pCondS;
+        }
+        std::string sS(SubqueryMarker::szSqlText(pS)->azChar());
+        std::string sCondition = sInner + " in " + (sKeys.empty() ? "(" + sS + ")" : sKeys);
         bDone = bSplice(sSql, szSubqueryText->azChar(), sCondition, sOut);
       }
+      if (bDone)
+        break;
+
+      // 2. otherwise the keys of the outer table that pass its own conditions
+      //    in the outer AND (DuckDB takes the keys of the whole outer query)
+      QueryNodeList* pCondO = new QueryNodeList();
+      for (i8 k = 0; k < pTerms->nItems(); k++) {
+        QueryNode* pCond = pTerms->pGet(k);
+        if (pCond != pTerm && bTableCondition(pCond, pOuter))
+          pCondO->vAppend(pCond);
+      }
+      std::string sKeys;
+      b1 bKeys = pCondO->nItems() > 0 && bKeySet(pOuter, pCondO, pRootNode, sKeys);
+      pCondO->vRemoveAll();
+      delete pCondO;
+      if (!bKeys)
+        continue;
+      std::string sCondition = sInner + " in " + sKeys;
+      bDone = bSplice(sSql, szSubqueryText->azChar(), sCondition, sOut);
     }
     pInner->vRemoveAll();
     delete pInner;
@@ -405,3 +553,28 @@ b1 CorrSemiJoin::bSplice(const std::string& sSql, const std::string& sSubquery,
   sOut = sSql.substr(0, iAt) + sNew + sSql.substr(iAt + sSubquery.size());
   return true;
 }
+
+
+static QueryNode* pProjectedColumnOf(QueryNode* pExprSubquery)
+{
+  QueryNode* pMain = pChildOfType(pExprSubquery, &MainSubquery::bIsOfType);
+  QueryNode* pSelect = pMain ? pChildOfType(pMain, &SelectMarker::bIsOfType) : nullptr;
+  QueryNode* pProject = pSelect ? pChildOfType(pSelect, &ProjectOp::bIsOfType) : nullptr;
+  if (!pProject)
+    return nullptr;
+  QueryNode* pFound = nullptr;
+  i8 nFound = 0;
+  auto fVisitor = [&](PlanNode* pNode, s2K& sPath, i8 iDepth, void* pvArg) -> GraphNav::eWalkCtrl {
+    UNUSED(sPath);
+    UNUSED(iDepth);
+    UNUSED(pvArg);
+    if (pNode->szType() && ProjectedColumn::bIsOfType(pNode)) {
+      nFound++;
+      pFound = ProjectedColumn::pExprNode(_pQueryNode(pNode));
+    }
+    return GraphNav::WALK_CONTINUE;
+  };
+  GraphNav::bGlobalWalk(pProject, true, true, fVisitor, nullptr);
+  return nFound == 1 ? pFound : nullptr;
+}
+

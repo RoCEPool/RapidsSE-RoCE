@@ -1,5 +1,5 @@
 /*============================================================================*/
-/* CorrSemiJoin.hpp - outer IN restrictions copied into correlated sub-queries */
+/* CorrSemiJoin.hpp - outer key restrictions copied into correlated sub-queries */
 /*============================================================================*/
 #pragma once
 
@@ -18,9 +18,9 @@ namespace Parser
 
   public:
     // When the statement has a sub-query correlated by "inner = outer" in a
-    // comparison of the AND of a filter, and the same AND has "outer IN
-    // (sub-query S)" with S not correlated, returns in sOut the statement
-    // with "inner IN (S)" added to the WHERE of the correlated sub-query.
+    // comparison of the AND of a filter, and the same AND restricts outer (by
+    // "outer IN (S)", or by conditions on outer's table), returns in sOut the
+    // statement with "inner IN (keys)" added to the WHERE of the sub-query.
     // Returns false when there is nothing to add (sOut is then undefined).
     static b1 bRewrite(const std::string& sSql, const PlanNode* pGraphTemplate, std::string& sOut);
 
