@@ -1,0 +1,168 @@
+# TPC-H SF1 correctness of RapidsSE, on every change and once a day.
+#
+# Builds the engine (optimised), generates the SF1 data set with the DBGEN of this repository,
+# runs the 22 queries through RapidsSE and through DuckDB on the same machine and compares the
+# rows, then runs every query again with each optimisation of the run-time optimiser switched
+# off (the result must not change). The job fails unless everything passes. The matrix, with the times of both engines, is the
+# job summary; plans, logs and rows of every query are the artifact.
+name: tpch-correctness
+
+on:
+  workflow_dispatch:
+    inputs:
+      rounds:
+        description: "Rounds (3 for the stability run)"
+        default: "1"
+  schedule:
+    - cron: "17 18 * * *"        # daily, 03:17 JST
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "sen/**"
+      - "commands/**"
+      - "thirdparty/**"
+      - "tests/tpch_sf1_correctness/**"
+      - ".github/workflows/tpch-correctness.yml"
+  pull_request:
+    paths:
+      - "src/**"
+      - "sen/**"
+      - "commands/**"
+      - "thirdparty/**"
+      - "tests/tpch_sf1_correctness/**"
+      - ".github/workflows/tpch-correctness.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tpch-correctness-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sf1:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      GIT_LFS_SKIP_SMUDGE: "1"
+      TPCH_SF1_DATA: /tmp/tpch_sf1
+      TPCH_SE_PARTITIONS: "2"
+      TPCH_SE_THREADS: "4"
+      TPCH_BUILD_NOTE: "RapidsSE built with -O2; its generated query code with -O3."
+      BUILD_FLAGS: "-O2"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # the build takes its version from the tags
+      - name: Files kept in LFS that the build and the client need
+        run: git lfs pull --include="shell/**,thirdparty/**"
+      - name: Machine
+        run: |
+          nproc; free -g | sed -n 2p; df -h /dev/shm | tail -1; gcc --version | head -1; java -version 2>&1 | head -1
+      - name: Third-party libraries (cached)
+        uses: actions/cache@v4
+        with:
+          path: |
+            thirdparty/antlr/lib
+            thirdparty/antlr/include
+            thirdparty/thrift/lib
+            thirdparty/thrift/include
+            thirdparty/thrift/bin
+            thirdparty/thrift/boost_1_80_0
+          key: thirdparty-${{ runner.os }}-gcc13-${{ hashFiles('thirdparty/antlr/Makefile', 'thirdparty/thrift/Makefile', 'thirdparty/thrift/configureThrift.sh', 'thirdparty/antlr/.gitattributes') }}-v1
+      - name: Build RapidsSE
+        run: |
+          cd src
+          make -j "$(nproc)" \
+            CMAKE_ARGS="-DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DANTLR_BUILD_CPP_TESTS=OFF" \
+            CPPFLAGS="-std=c++17 -w $BUILD_FLAGS -D__LINUX__" CFLAGS="-w $BUILD_FLAGS" > "$RUNNER_TEMP/build.log" 2>&1 \
+            || { grep -n -B3 -A3 -E '\*\*\*|error:|Error [0-9]|fatal error|No rule|command not found|CMake Error' "$RUNNER_TEMP/build.log" | grep -v -- '-Werror' | head -150; exit 1; }
+          ls -la ../bin/rapidsse
+      - name: DuckDB (the reference)
+        run: pip install --break-system-packages duckdb
+      - name: TPC-H SF1, 22 queries, RapidsSE against DuckDB
+        id: correctness
+        run: |
+          python3 tests/tpch_sf1_correctness/scripts/run_all.py --reference duckdb \
+            --rounds "${{ github.event.inputs.rounds || '1' }}"
+      - name: Optimiser on/off equivalence (every query with every optimisation switched off)
+        id: equivalence
+        if: success() || steps.correctness.conclusion == 'failure'
+        run: python3 tests/tpch_sf1_correctness/scripts/run_optimiser_equivalence.py
+      - name: Matrix
+        if: always()
+        run: |
+          f=$(ls -d tests/tpch_sf1_correctness/reports/2*/ 2>/dev/null | tail -1)matrix.md
+          if [ -f "$f" ]; then cat "$f" >> "$GITHUB_STEP_SUMMARY"; cat "$f"; else echo "no matrix was written" >> "$GITHUB_STEP_SUMMARY"; fi
+          e=tests/tpch_sf1_correctness/reports/OPTIMISER_EQUIVALENCE.md
+          if [ -f "$e" ]; then { echo; cat "$e"; } >> "$GITHUB_STEP_SUMMARY"; cat "$e"; fi
+      - name: Engine log when something went wrong
+        if: failure()
+        run: |
+          for f in tests/tpch_sf1_correctness/reports/2*/round1/node.log; do [ -f "$f" ] && tail -40 "$f"; done || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tpch-sf1-correctness-report
+          path: |
+            tests/tpch_sf1_correctness/reports/2*/
+            tests/tpch_sf1_correctness/reports/OPTIMISER_EQUIVALENCE.md
+            !tests/tpch_sf1_correctness/reports/2*/round*/node.log
+            ${{ runner.temp }}/build.log
+          retention-days: 30
+
+  # The same 22 queries with other partition counts of the node. Once a day and on request.
+  partitions:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        partitions: [1, 4, 8]
+    env:
+      GIT_LFS_SKIP_SMUDGE: "1"
+      TPCH_SF1_DATA: /tmp/tpch_sf1
+      TPCH_SE_PARTITIONS: ${{ matrix.partitions }}
+      TPCH_SE_THREADS: "4"
+      TPCH_BUILD_NOTE: "RapidsSE built with -O2; its generated query code with -O3."
+      BUILD_FLAGS: "-O2"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: git lfs pull --include="shell/**,thirdparty/**"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            thirdparty/antlr/lib
+            thirdparty/antlr/include
+            thirdparty/thrift/lib
+            thirdparty/thrift/include
+            thirdparty/thrift/bin
+            thirdparty/thrift/boost_1_80_0
+          key: thirdparty-${{ runner.os }}-gcc13-${{ hashFiles('thirdparty/antlr/Makefile', 'thirdparty/thrift/Makefile', 'thirdparty/thrift/configureThrift.sh', 'thirdparty/antlr/.gitattributes') }}-v1
+      - name: Build RapidsSE
+        run: |
+          cd src
+          make -j "$(nproc)" \
+            CMAKE_ARGS="-DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DANTLR_BUILD_CPP_TESTS=OFF" \
+            CPPFLAGS="-std=c++17 -w $BUILD_FLAGS -D__LINUX__" CFLAGS="-w $BUILD_FLAGS" > "$RUNNER_TEMP/build.log" 2>&1 \
+            || { grep -n -B3 -A3 -E '\*\*\*|error:|Error [0-9]|fatal error' "$RUNNER_TEMP/build.log" | grep -v -- '-Werror' | head -150; exit 1; }
+      - run: pip install --break-system-packages duckdb
+      - name: TPC-H SF1 with ${{ matrix.partitions }} partition(s)
+        run: python3 tests/tpch_sf1_correctness/scripts/run_all.py --reference duckdb
+      - name: Matrix
+        if: always()
+        run: |
+          f=$(ls -d tests/tpch_sf1_correctness/reports/2*/ 2>/dev/null | tail -1)matrix.md
+          if [ -f "$f" ]; then cat "$f" >> "$GITHUB_STEP_SUMMARY"; fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tpch-sf1-correctness-report-p${{ matrix.partitions }}
+          path: |
+            tests/tpch_sf1_correctness/reports/2*/
+            !tests/tpch_sf1_correctness/reports/2*/round*/node.log
+          retention-days: 30

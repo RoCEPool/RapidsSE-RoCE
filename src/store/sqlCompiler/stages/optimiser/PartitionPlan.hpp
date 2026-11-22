@@ -44,6 +44,9 @@ namespace Parser
     static void vPartitionFilterOp(       QueryNode* pNode, GraphChains* pChains, QueryNodeStack* pStmtSectionStack, PlanNode* pRootNode);
     static void vPartitionLimitOp(        QueryNode* pNode, GraphChains* pChains, QueryNodeStack* pStmtSectionStack, PlanNode* pRootNode);
     static void vPartitionOrderOp(        QueryNode* pNode, GraphChains* pChains, QueryNodeStack* pStmtSectionStack, PlanNode* pRootNode);
+    static void vExpandAvg(QueryNode* pOp, PlanNode* pRootNode);
+    static void vExpandAvgInProperties(QueryNode* pOp, PlanNode* pRootNode);
+
     static void vPartitionProjectOp(      QueryNode* pNode, GraphChains* pChains, QueryNodeStack* pStmtSectionStack, PlanNode* pRootNode);
     static void vPartitionUnionOp(        QueryNode* pNode, GraphChains* pChains, QueryNodeStack* pStmtSectionStack, PlanNode* pRootNode);
     static void vPartitionJoinOp(         QueryNode* pNode, GraphChains* pChains, QueryNodeStack* pStmtSectionStack, PlanNode* pRootNode);

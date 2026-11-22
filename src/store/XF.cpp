@@ -129,6 +129,29 @@ void XF::vXF(CardIter* pCI)
 /*----------------------------------------------------------------------------*/
 
 /*----------------------------------------------------------------------------*/
+/* optimisations that a job can switch off                                    */
+/*----------------------------------------------------------------------------*/
+// The transformations of phase 3 that only make a plan cheaper can be left
+// out, one at a time or all together, with a job tag:
+//   /optimiser_off_<name>      e.g. /optimiser_off_early_projection
+//   /optimiser_off_all
+// The result of a query must not depend on them: the equivalence test
+// (tests/tpch_sf1_correctness, --optimiser-off) runs every query with and
+// without. The names are the transformation names in lower case:
+//   scan_to_indexscan, cut_sort, early_projection, reduce_gbyagg_key,
+//   static_calc, max_to_top, aggreg_to_sort_ordagg, sortdesc_limit_to_top,
+//   sort_limit_all_levels, early_filter, late_projection, duplicate_filter
+static bool bOptimisationOff(const char* szName)
+{
+  if (AM::JOB::bHasTag("<optimiser_off_all>"_Stz))
+    return true;
+
+  s256 sTag;
+  sTag.vSprint("<optimiser_off_%s>"_Stz, szName);
+  return AM::JOB::bHasTag(sTag.szStz());
+}
+
+/*----------------------------------------------------------------------------*/
 /* apply transformations                                                      */
 /*----------------------------------------------------------------------------*/
 void XF::vTransform(void)
@@ -212,23 +235,35 @@ void XF::vTransform(void)
   RASSERT(m_pCI->bEachBoard());                        //
                                                        //
   XF_Optimise_from_To_OP::vOptimise(m_pCI);            //
-  XF_Optimise_scan_To_indexScan::vOptimise(m_pCI);     //
+  if (! bOptimisationOff("scan_to_indexscan"))
+    XF_Optimise_scan_To_indexScan::vOptimise(m_pCI);
   XF_Optimise_Derive_streamKey::vOptimise(m_pCI);      //
-  XF_Optimise_Cut_sort::vOptimise(m_pCI);              //
+  if (! bOptimisationOff("cut_sort"))
+    XF_Optimise_Cut_sort::vOptimise(m_pCI);
   //XF_Optimise_gbyAgg_To_ordAgg::vOptimise(m_pCI);    //
   XF_Optimise_Cull_bound::vOptimise(m_pCI);            //
   XF_Prolog_Analyse_emit::vAnalyse(m_pCI);             //
   XF_Utility::vVerify_dic(m_pCI);               //
-  XF_Optimise_Early_projection::vOptimise(m_pCI);      //
-  XF_Optimise_Reduce_gbyAgg_key::vOptimise(m_pCI);     //
-  XF_Optimise_Static_calc::vOptimise(m_pCI);           //
-  XF_Optimise_max_To_top::vOptimise(m_pCI);            //
-  XF_Optimise_aggreg_To_sort_ordAgg::vOptimise(m_pCI); //
-  XF_Optimise_sortDesc_limit_to_top::vOptimise(m_pCI); //
-  XF_Optimise_sort_limit_All_Levels::vOptimise(m_pCI); //
-  XF_Optimise_Early_filter::vOptimise(m_pCI);          //
-  XF_Optimise_Late_projection::vOptimise(m_pCI);       //
-  XF_Optimise_Duplicate_filter::vOptimise(m_pCI);      //
+  if (! bOptimisationOff("early_projection"))
+    XF_Optimise_Early_projection::vOptimise(m_pCI);
+  if (! bOptimisationOff("reduce_gbyagg_key"))
+    XF_Optimise_Reduce_gbyAgg_key::vOptimise(m_pCI);
+  if (! bOptimisationOff("static_calc"))
+    XF_Optimise_Static_calc::vOptimise(m_pCI);
+  if (! bOptimisationOff("max_to_top"))
+    XF_Optimise_max_To_top::vOptimise(m_pCI);
+  if (! bOptimisationOff("aggreg_to_sort_ordagg"))
+    XF_Optimise_aggreg_To_sort_ordAgg::vOptimise(m_pCI);
+  if (! bOptimisationOff("sortdesc_limit_to_top"))
+    XF_Optimise_sortDesc_limit_to_top::vOptimise(m_pCI);
+  if (! bOptimisationOff("sort_limit_all_levels"))
+    XF_Optimise_sort_limit_All_Levels::vOptimise(m_pCI);
+  if (! bOptimisationOff("early_filter"))
+    XF_Optimise_Early_filter::vOptimise(m_pCI);
+  if (! bOptimisationOff("late_projection"))
+    XF_Optimise_Late_projection::vOptimise(m_pCI);
+  if (! bOptimisationOff("duplicate_filter"))
+    XF_Optimise_Duplicate_filter::vOptimise(m_pCI);
   //
   m_pCI->vEndPhase();                                  //
                                                        //

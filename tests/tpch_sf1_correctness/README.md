@@ -104,8 +104,40 @@ rounds on every row once it has outgrown the mantissa, with a random error of ab
 SF1. That is inside the 0.01 tolerance, but it is not an exact sum. An exact one needs a wider
 accumulator for SUM, which is not implemented.
 
+## Optimiser on/off equivalence
+
+The run-time optimiser cannot be switched off as a whole: flattening the sub-queries and laying
+out the stages is what makes a pipeline executable. The transformations that only make a plan
+cheaper can be switched off per job, with the tags `/optimiser_off_<name>` and
+`/optimiser_off_all` (`src/store/XF.cpp`): scan_to_indexscan, cut_sort, early_projection,
+reduce_gbyagg_key, static_calc, max_to_top, aggreg_to_sort_ordagg, sortdesc_limit_to_top,
+sort_limit_all_levels, early_filter, late_projection, duplicate_filter.
+
+    python3 tests/tpch_sf1_correctness/scripts/run_optimiser_equivalence.py
+
+runs each of the 22 queries normally and with every switch (308 executions) and compares the
+rows with the reference by the rules above. It writes `reports/OPTIMISER_EQUIVALENCE.md`.
+It needs more memory than the correctness test (plans without early projection carry every
+column); on a machine with 8 GB the node is killed for memory part of the way. CI has 16 GB.
+
+## Continuous integration
+
+`.github/workflows/tpch-correctness.yml` builds the engine with `-O2` and runs, on every pull
+request and push to `main` that touches the source or this test, once a day, and on request:
+
+* the correctness test against DuckDB on the same machine (one round; `rounds: 3` on request),
+* the optimiser on/off equivalence test,
+* once a day and on request, the correctness test with 1, 4 and 8 partitions.
+
+The job fails unless everything passes. The matrix is the job summary; plans, logs and rows are
+the artifact. The matrix has a table with the time per query of RapidsSE and of DuckDB on that
+machine. `.github/workflows/tpch-reference.yml` keeps the committed DuckDB reference current.
+
 ## Configuration that is run
 
+`TPCH_SE_PARTITIONS` and `TPCH_SE_THREADS` set the partitions and threads of the node (default
+2 and 2; CI uses 4 threads). Verified with 1, 2 and 4 partitions.
+
 One node, two partitions, two threads; `orders` partitioned on `O_CUSTKEY`, `region` and
-`nation` replicated (see `schema.sql`). Other partition counts, several nodes and the RoCEPool
-backend are not covered by this test yet.
+`nation` replicated (see `schema.sql`). Several nodes and the RoCEPool backend are not covered by
+this test yet.

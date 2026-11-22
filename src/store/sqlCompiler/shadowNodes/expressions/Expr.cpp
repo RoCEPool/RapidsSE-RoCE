@@ -885,6 +885,56 @@ QueryNodeList* Expr::pAggregateExprs(QueryNode* pExpr, b1 bDescendAggregates)
 }
 
 /*----------------------------------------------------------------------------*/
+/* Replaces every AVG(x) in pExpr with SUM(x) / COUNT(x).                     */
+/* The execution engine has no AVG. An aggregation that is split over the     */
+/* partitions gets its AVG replaced by vSuperAggregate; one that runs at the  */
+/* origin only (its input is a derived table, or the rows of another          */
+/* aggregation) was passed on with the AVG in it and returned a wrong value.  */
+/*----------------------------------------------------------------------------*/
+void Expr::vExpandAvg(QueryNode* pExpr, PlanNode* pRootNode)
+{
+  _static_
+  ASSERT(pExpr);
+
+  QueryNodeList* pAggList = Expr::pAggregateExprs(pExpr, false);
+
+  while (pAggList->nItems() > 0) {
+    QueryNode* pAgg = pAggList->pPop();
+    if (!AvgExpr::bIsOfType(pAgg)) {
+      continue;
+    }
+    ASSERT(pAgg->nChildren() == 1);
+    QueryNode* pChildExpr = _pQueryNode(pAgg->pFirstChild());
+
+    QueryNode* pNumerator   = SumExpr::pCreate(false, pChildExpr->pDeepCopy(true));
+    QueryNode* pDenominator = CountExpr::pCreate(false, false, pChildExpr->pDeepCopy(true));
+
+    // The types as in vSuperAggregate: the result has the type of the AVG
+    TypeId xAvgTypeId = Expr::xTypeId(pAgg, pRootNode);
+    eCT eAvgType = xAvgTypeId.eCTVal();
+
+    if (Expr::xTypeId(pNumerator, pRootNode) != xAvgTypeId) {
+      QueryNode* pCastExpr = CastExpr::pCoerceTo(xAvgTypeId, pNumerator, pRootNode);
+      delete pNumerator;
+      pNumerator = pCastExpr;
+    }
+    if (Expr::xTypeId(pDenominator, pRootNode) != xAvgTypeId &&
+        eAvgType != CT_INTERVAL_DT &&
+        eAvgType != CT_INTERVAL_YM ) {
+      QueryNode* pCastExpr = CastExpr::pCoerceTo(xAvgTypeId, pDenominator, pRootNode);
+      delete pDenominator;
+      pDenominator = pCastExpr;
+    }
+
+    QueryNode* pDivExpr = DivisionExpr::pCreate(pNumerator, pDenominator);
+    pAgg->vTransmogrifyTo(pDivExpr, true);
+    ASSERT(DivisionExpr::bIsOfType(pAgg));
+    delete pDivExpr;
+  }
+  delete pAggList;
+}
+
+/*----------------------------------------------------------------------------*/
 /* Changes the existing expression in place to support super-aggregation of   */
 /* partitioned aggregate expressions.                                         */
 /*----------------------------------------------------------------------------*/

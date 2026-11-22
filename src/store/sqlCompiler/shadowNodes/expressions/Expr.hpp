@@ -124,6 +124,10 @@ namespace Parser
     // super-aggregation of partitioned aggregate expressions.
     static void vSuperAggregate(QueryNode* pExpr, PlanNode* pRootNode);
 
+    // Replaces every AVG(x) in pExpr with SUM(x) / COUNT(x), for an aggregation
+    // that runs at one level only (the execution engine has no AVG).
+    static void vExpandAvg(QueryNode* pExpr, PlanNode* pRootNode);
+
     // Modifies subexpressions by promoting/casting data types so that they
     // are type compatible with this expression. Modifies the expression
     // tree in place.
