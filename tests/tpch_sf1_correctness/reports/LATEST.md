@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Commit | `95229d8680b294255216fb70846cd1d8f0316712 + uncommitted changes in src/` |
+| Commit | `95229d8680b294255216fb70846cd1d8f0316712 + the source change of pull request #24` |
 | Run | 2026-11-22 15:27:12 JST, 2 round(s) |
 | Engine | RapidsSE `bin/rapidsse`, 1 node, 2 partitions, 2 threads |
 | Data | TPC-H scale factor 1, dbgen 2.17.0 (dbgen/ of this repository), checksums pinned in `reference/dataset.json` |
