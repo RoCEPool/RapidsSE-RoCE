@@ -41,6 +41,11 @@ namespace STORE
     static void vBuildSclGccCompileCommand(LibInfo* pLibInfo);
     static void vBuildSclClangCompileCommand(LibInfo* pLibInfo);
     static bool bCompileSrc(LibInfo* pLibInfo);
+
+    // cache of compiled libraries, by the text of the source and the compile command
+    static bool bCacheKey(LibInfo* pLibInfo, char* azKey, size_t nKey);
+    static bool bCacheFetch(LibInfo* pLibInfo, const char* azKey);
+    static void vCacheStore(LibInfo* pLibInfo, const char* azKey);
   };
 } // STORE
 

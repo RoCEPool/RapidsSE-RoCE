@@ -8,7 +8,9 @@ sub-queries and laying out the stages is what makes a pipeline executable). What
 off are the transformations that only make a plan cheaper, with the job tags
 /optimiser_off_<name> and /optimiser_off_all (src/store/XF.cpp). This script runs each of the
 22 queries with every switch and compares the rows with the reference, by the rules of the
-correctness test. It writes reports/OPTIMISER_EQUIVALENCE.md and exits 0 only when every
+correctness test. It also runs each query once with /optimiser_validate (every card is checked
+after every transformation, not only at the end of each phase). It writes
+reports/OPTIMISER_EQUIVALENCE.md and exits 0 only when every
 combination passes.
 """
 import argparse, json, os, sys, time
@@ -45,10 +47,10 @@ def main():
         stmt = open(os.path.join(c.QUERIES, 'q%s.sql' % q)).read().strip().rstrip(';')
         want = c.load_rows(os.path.join(c.EXPECTED, 'q%s.csv' % q))
         res[q] = {}
-        for sw in ['on'] + switches:
+        for sw in ['on', 'validate'] + switches:
             if not se.alive():
                 se.start(a.data_dir, node_log)
-            tag = '' if sw == 'on' else '/optimiser_off_%s\n' % sw
+            tag = '' if sw == 'on' else '/optimiser_validate\n' if sw == 'validate' else '/optimiser_off_%s\n' % sw
             rc, out, dt = se.shell(tag + stmt + ';', a.timeout)
             err = se.error_of(out)
             if not se.alive():
@@ -65,14 +67,15 @@ def main():
     se.stop()
 
     bad = [(q, sw, r) for q in res for sw, r in res[q].items() if r[0] != 'PASS']
-    cols = ['on'] + switches
+    cols = ['on', 'validate'] + switches
     md = ['# Optimiser on/off equivalence: %s' % ('all combinations PASS' if not bad else '%d combination(s) FAIL' % len(bad)),
           '', '| | |', '|---|---|', '| Commit | `%s` |' % c.git_commit(),
           '| Run | %s |' % time.strftime('%Y-%m-%d %H:%M:%S %Z'),
           '| Engine | RapidsSE, 1 node, %d partitions, %d threads, TPC-H SF1 |' % (se.PARTITIONS, se.THREADS),
           '| Reference | %s |' % src['engine'], '',
           'Every cell is one execution of the query with the job tag `/optimiser_off_<column>`; `on` is the '
-          'normal run. The rows are compared with the reference by the rules of the correctness test. '
+          'normal run; `validate` is the normal run with every card checked after every transformation '
+          '(`/optimiser_validate`), which the optimiser otherwise only does at the end of each phase. The rows are compared with the reference by the rules of the correctness test. '
           'The number is the wall time in ms (it includes the start of the client).', '',
           '| Query | ' + ' | '.join(cols) + ' |', '|---|' + '---:|' * len(cols)]
     for q in res:

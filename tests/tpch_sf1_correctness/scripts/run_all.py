@@ -74,7 +74,8 @@ def matrix(rounds, info, src, out_dir, duck_ms=None):
     if duck_ms:
         over = last.get('client_overhead_ms') or 0
         md += ['', '## Time against DuckDB on the same machine', '',
-               'RapidsSE: wall time of the last round minus the client overhead (%d ms). DuckDB %s: best of '
+               'RapidsSE: wall time of the last round minus the client overhead (%d ms); the query ran just '
+               'before with the optimiser trace, so its compiled code comes from the cache. DuckDB %s: best of '
                'three executions in process, %d threads. %s' % (over, src['engine'].split()[-1], os.cpu_count(),
                                                                os.environ.get('TPCH_BUILD_NOTE', '')), '',
                '| Query | RapidsSE ms | DuckDB ms | RapidsSE / DuckDB |', '|---|---:|---:|---:|']

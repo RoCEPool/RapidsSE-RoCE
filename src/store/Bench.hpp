@@ -87,7 +87,7 @@ namespace STORE
 
     i8   nTransformPrint_inc(void);
 
-    void vValidate(CardIter* pCI);
+    void vValidate(CardIter* pCI, bool bDeep = true);
 
   private:
     Footer* aFooter(void);

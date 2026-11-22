@@ -76,9 +76,44 @@ The engine also has a build-in path for tcc (`CompileLib`, `CB_TCC`), which is n
 For Q2, Q11 and Q8 the execution is under 1 s: their distance to DuckDB is almost all fixed
 cost (optimiser and C compile). For Q20 and Q7 it is the plan.
 
+## After the first two changes
+
+1. **Validation at the end of each phase.** `CardIter::vValidateBench` clears the marks of the
+   cards after every transformation as before, but checks every card only at the end of each
+   phase and at the end of the optimiser. The job tag `/optimiser_validate` restores the check
+   after every transformation; the equivalence test runs every query with it.
+2. **Cache of compiled query code.** `CompileLib` keeps the library compiled from a source in
+   `queryLibs/cache/<build>/`, keyed by a 128-bit hash of the source and of the compile command.
+   The same query (same text, same constants) is not compiled again. A library is copied, not
+   linked, for each job (the code keeps state in static variables). The directory belongs to one
+   build of the engine; the directories of other builds are removed when the node starts. Job tag
+   `/noCompileCache` bypasses it.
+
+Same machine and build as above, 22 queries, cache emptied first:
+
+| Phase | Before | First run | Repeated run |
+|---|---:|---:|---:|
+| Run-time optimiser | 35 531 | 9 048 | 9 239 |
+| C compile | 33 289 | 32 264 | 14 |
+| Execution | 53 945 | 55 421 | 53 881 |
+| **Wall** | **148 640** | **121 342** | **86 952** |
+
+The five queries furthest from DuckDB (wall ms; optimiser; C compile):
+
+| Query | Before | First run | Repeated run |
+|---|---|---|---|
+| Q2 | 8 421; 3 544; 3 210 | 6 035; 815; 3 481 | 2 454; 788; 1 |
+| Q20 | 15 528; 2 275; 1 582 | 14 323; 436; 1 584 | 13 011; 484; 1 |
+| Q11 | 4 859; 1 572; 1 859 | 3 461; 393; 1 584 | 1 740; 378; 1 |
+| Q7 | 11 398; 2 958; 2 121 | 8 527; 605; 1 863 | 6 454; 566; 1 |
+| Q8 | 8 606; 4 116; 2 116 | 5 621; 1 221; 2 146 | 3 489; 1 404; 1 |
+
+What is left: the C compile of a query that has not run before (27 % of the first run), the
+execution, above all the plans of Q20 and Q7, and the client (about 0.9 s per query, most of it
+the start of the JDBC client of the test, not the engine).
+
 ## Not yet measured
 
-* The same breakdown with the `-O2` build (the optimiser is C++ of the engine and gets faster;
-  the C compile and the generated code do not change). The CI job now records it.
+* The same breakdown with the `-O2` build. The CI job records it on every run.
 * Execution time per stage and per operator (Q9, Q19, Q18, Q1).
 * How much of the client column is the JDBC client start (about 0.6 to 1 s per query).

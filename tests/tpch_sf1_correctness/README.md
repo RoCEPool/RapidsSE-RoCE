@@ -120,13 +120,24 @@ rows with the reference by the rules above. It writes `reports/OPTIMISER_EQUIVAL
 It needs more memory than the correctness test (plans without early projection carry every
 column); on a machine with 8 GB the node is killed for memory part of the way. CI has 16 GB.
 
+## Where the time goes
+
+    python3 tests/tpch_sf1_correctness/scripts/phase_times.py --clear-cache --repeat 2
+
+runs every query with the job tag `/phaseTimes` and writes `reports/PHASE_TIMES.md`: per
+query the time of the client, the SQL compiler, the run-time optimiser, the C compile of the
+generated code and the execution, for the first run (compiled code not cached) and the repeated
+one. `reports/PERFORMANCE_ANALYSIS.md` is the analysis.
+
 ## Continuous integration
 
 `.github/workflows/tpch-correctness.yml` builds the engine with `-O2` and runs, on every pull
 request and push to `main` that touches the source or this test, once a day, and on request:
 
 * the correctness test against DuckDB on the same machine (one round; `rounds: 3` on request),
-* the optimiser on/off equivalence test,
+* the optimiser on/off equivalence test (including one run of every query with
+  `/optimiser_validate`),
+* the phase breakdown (`phase_times.py`),
 * once a day and on request, the correctness test with 1, 4 and 8 partitions.
 
 The job fails unless everything passes. The matrix is the job summary; plans, logs and rows are

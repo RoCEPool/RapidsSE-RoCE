@@ -3,6 +3,12 @@
 /*============================================================================*/
 
 #include <dlfcn.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <dirent.h>
+#include <string>
 #include "BASE.h"
 #include "CompileLib.hpp"
 #include "LibInfo.hpp"
@@ -11,12 +17,21 @@
 #include "SysCall.hpp"
 
 #include "ExtendedText.hpp"
+#include "AM.hpp"
+#include <string.h>
 
 using namespace STORE;
 
 static Stz* C_QUERYLIBS_PATH = "../queryLibs"_Stz;
 static Stz* C_QUERYLIBS_SRC  = "../queryLibs/src"_Stz;
 static Stz* C_QUERYLIBS_BIN  = "../queryLibs/bin"_Stz;
+
+// Compiled libraries are kept here, one directory per build of the engine (the
+// code includes the headers of the engine, so a library is valid only for the
+// build that compiled it). See CompileLib::bCacheFetch.
+static const char* C_QUERYLIBS_CACHE = "../queryLibs/cache";
+static std::string gsCacheDir;            // C_QUERYLIBS_CACHE/<build>, set by bInit
+static const int   C_CACHE_MAX_FILES = 2000;
 
 static Stz* C_STARTUP_DIRS[] = {
     C_QUERYLIBS_PATH,
@@ -113,6 +128,37 @@ bool CompileLib::bInit()
   //       or clang are installed with it. We would probably prefer this
   //       over the built-in gcc version.
 #endif
+
+  // The cache directory of this build: the identity of the executable
+  {
+    struct stat xExe;
+    char azBuild[96];
+    if (stat("/proc/self/exe", &xExe) == 0)
+      snprintf(azBuild, sizeof(azBuild), "%llx-%llx-%llx", (unsigned long long) xExe.st_ino,
+               (unsigned long long) xExe.st_size, (unsigned long long) xExe.st_mtime);
+    else
+      snprintf(azBuild, sizeof(azBuild), "%s", __DATE__ "-" __TIME__);
+    for (char* p = azBuild; *p; p++) if (*p == ' ' || *p == ':') *p = '_';
+    mkdir(C_QUERYLIBS_CACHE, 0755);
+    // the libraries of other builds can never be used again
+    if (DIR* pDir = opendir(C_QUERYLIBS_CACHE)) {
+      while (struct dirent* pEnt = readdir(pDir)) {
+        if (pEnt->d_name[0] == '.' || strcmp(pEnt->d_name, azBuild) == 0)
+          continue;
+        std::string sOld = std::string(C_QUERYLIBS_CACHE) + "/" + pEnt->d_name;
+        if (DIR* pOld = opendir(sOld.c_str())) {
+          while (struct dirent* pF = readdir(pOld))
+            if (pF->d_name[0] != '.')
+              unlink((sOld + "/" + pF->d_name).c_str());
+          closedir(pOld);
+        }
+        rmdir(sOld.c_str());
+      }
+      closedir(pDir);
+    }
+    gsCacheDir = std::string(C_QUERYLIBS_CACHE) + "/" + azBuild;
+    mkdir(gsCacheDir.c_str(), 0755);
+  }
 
   // Check that the default compiler exists. SE will fail early if it cannot be found.
   s48K sStdOut;
@@ -238,6 +284,16 @@ bool CompileLib::bCompile(ExtendedText* pSource, Stz* szDynLibNm, LibInfo* pLibI
       NEVER_REACH
   }
 
+  // A library compiled earlier from the same source with the same command
+  // (TPC-H SF1: 0.5 to 3 s of gcc per query)
+  char azKey[64] = "";
+  bool bCacheable = bCacheKey(pLibInfo, azKey, sizeof(azKey));
+  if (bCacheable && bCacheFetch(pLibInfo, azKey)) {
+    if (pLibInfo->m_bCollectStats)
+      pLibInfo->m_uCompileNanos = Hardware::uReadClock() - uStartTime;
+    return true;
+  }
+
   // Execute the compile command
 
   if (!bCompileSrc(pLibInfo)) {
@@ -264,6 +320,9 @@ bool CompileLib::bCompile(ExtendedText* pSource, Stz* szDynLibNm, LibInfo* pLibI
 
   // Check that the library exists
   ASSERT(File::bExists(pLibInfo->m_sDynLibPath.szStz()));
+
+  if (bCacheable)
+    vCacheStore(pLibInfo, azKey);
 
   if (pLibInfo->m_bCollectStats) {
     pLibInfo->m_uCompileNanos = Hardware::uReadClock() - uStartTime;
@@ -997,6 +1056,116 @@ bool CompileLib::bCompileSrc(LibInfo* pLibInfo)
   }
 
   return true;
+}
+
+/*----------------------------------------------------------------------------*/
+/* cache of compiled libraries                                                */
+/*----------------------------------------------------------------------------*/
+// The key is a 128-bit hash (two FNV-1a variants) of the source file and of the
+// compile command with the base name of this job taken out. The library is a pure
+// function of these and of the build of the engine (the cache directory).
+// Not used with the job tag <noCompileCache>, nor when the directory is missing.
+bool CompileLib::bCacheKey(LibInfo* pLibInfo, char* azKey, size_t nKey)
+{
+  if (gsCacheDir.empty() || AM::JOB::bHasTag("<noCompileCache>"_Stz))
+    return false;
+
+  unsigned long long h1 = 1469598103934665603ULL, h2 = 7809847782465536322ULL;
+  auto fAdd = [&](const unsigned char* p, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+      h1 = (h1 ^ p[i]) * 1099511628211ULL;
+      h2 = (h2 ^ (p[i] + 0x9e)) * 0x100000001b3ULL + (h2 >> 29);
+    }
+  };
+
+  // the command, with the base name of this job taken out
+  std::string sCmd(pLibInfo->m_sCompileCmd.azChar());
+  std::string sBase(pLibInfo->m_sBaseName.azChar());
+  if (!sBase.empty())
+    for (size_t at = sCmd.find(sBase); at != std::string::npos; at = sCmd.find(sBase, at))
+      sCmd.replace(at, sBase.size(), "@");
+  fAdd((const unsigned char*) sCmd.data(), sCmd.size());
+
+  int fd = open(pLibInfo->m_sSrcFilePath.azChar(), O_RDONLY);
+  if (fd < 0)
+    return false;
+  unsigned char aBuf[65536];
+  ssize_t n;
+  while ((n = read(fd, aBuf, sizeof(aBuf))) > 0)
+    fAdd(aBuf, (size_t) n);
+  close(fd);
+  if (n < 0)
+    return false;
+
+  snprintf(azKey, nKey, "%016llx%016llx", h1, h2);
+  return true;
+}
+
+static bool bCopyFile(const char* azFrom, const char* azTo)
+{
+  int fdIn = open(azFrom, O_RDONLY);
+  if (fdIn < 0)
+    return false;
+  int fdOut = open(azTo, O_WRONLY | O_CREAT | O_TRUNC, 0755);
+  if (fdOut < 0) {
+    close(fdIn);
+    return false;
+  }
+  char aBuf[65536];
+  ssize_t n;
+  bool bOk = true;
+  while ((n = read(fdIn, aBuf, sizeof(aBuf))) > 0)
+    if (write(fdOut, aBuf, (size_t) n) != n) { bOk = false; break; }
+  if (n < 0) bOk = false;
+  close(fdIn);
+  if (close(fdOut) != 0) bOk = false;
+  return bOk;
+}
+
+// A copy, not a link: dlopen() would hand two jobs that load the same file one
+// image, and the code of a job keeps state in its static variables.
+bool CompileLib::bCacheFetch(LibInfo* pLibInfo, const char* azKey)
+{
+  std::string sCached = gsCacheDir + "/" + azKey + "." + C_LIB_EXT->azChar();
+  if (access(sCached.c_str(), R_OK) != 0)
+    return false;
+  if (!bCopyFile(sCached.c_str(), pLibInfo->m_sDynLibPath.azChar())) {
+    unlink(pLibInfo->m_sDynLibPath.azChar());
+    return false;
+  }
+  return true;
+}
+
+// Written under a temporary name and renamed: other jobs only ever see whole files.
+void CompileLib::vCacheStore(LibInfo* pLibInfo, const char* azKey)
+{
+  static int iStored = 0;
+  if (++iStored % 100 == 0) {
+    // keep the directory bounded: when it is full, empty it
+    int nFiles = 0;
+    if (DIR* pDir = opendir(gsCacheDir.c_str())) {
+      while (struct dirent* pEnt = readdir(pDir))
+        if (pEnt->d_name[0] != '.') nFiles++;
+      closedir(pDir);
+    }
+    if (nFiles > C_CACHE_MAX_FILES) {
+      if (DIR* pDir = opendir(gsCacheDir.c_str())) {
+        while (struct dirent* pEnt = readdir(pDir))
+          if (pEnt->d_name[0] != '.')
+            unlink((gsCacheDir + "/" + pEnt->d_name).c_str());
+        closedir(pDir);
+      }
+    }
+  }
+
+  std::string sFinal = gsCacheDir + "/" + azKey + "." + C_LIB_EXT->azChar();
+  char azTmp[64];
+  snprintf(azTmp, sizeof(azTmp), ".tmp.%d.%d", (int) getpid(), iStored);
+  std::string sTmp = sFinal + azTmp;
+  if (bCopyFile(pLibInfo->m_sDynLibPath.azChar(), sTmp.c_str()))
+    rename(sTmp.c_str(), sFinal.c_str());
+  else
+    unlink(sTmp.c_str());
 }
 
 /*============================================================================*/
