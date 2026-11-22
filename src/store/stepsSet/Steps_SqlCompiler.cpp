@@ -35,6 +35,7 @@
 
 #include "AggregateSplit.hpp"
 #include "OrFactor.hpp"
+#include "CorrSemiJoin.hpp"
 #include "NameValidator.hpp"
 #include "ExprValidator.hpp"
 #include "SetOpValidator.hpp"
@@ -946,6 +947,28 @@ void Step::vSqlCompilerParser(void)
   }
 
   ASSERT(pPlanRoot);
+
+  // The restriction of the outer query on the key of a correlated sub-query,
+  // copied into the sub-query (CorrSemiJoin.cpp): the statement is planned
+  // again from the changed text. If that fails, the plan of the original
+  // statement stays.
+  if (!AM::JOB::bHasTag("<optimiser_off_corr_semijoin>"_Stz)) {
+    std::string sRewritten;
+    if (Parser::CorrSemiJoin::bRewrite(std::string(sSqlStatement.szStz()->azChar()), pGraphTemplate, sRewritten)) {
+      Parser::SqlPlanner* pPlanner2 = new Parser::SqlPlanner();
+      try {
+        Parser::PlanNode* pPlanRoot2 = pPlanner2->plan((Stz*)sRewritten.c_str(), pGraphTemplate);
+        if (pPlanRoot2) {
+          delete pPlanRoot;
+          pPlanRoot = pPlanRoot2;
+          if (AM::JOB::bHasTag("<optimiser_trace>"_Stz))
+            vTrace("CorrSemiJoin: %s\n"_Stz, sRewritten.c_str());
+        }
+      } catch (...) {
+      }
+      delete pPlanner2;
+    }
+  }
 
   pPlanOperand = new PlanOperand(pPlanRoot);
   m_oDataStack.vPushPtr(pPlanOperand);

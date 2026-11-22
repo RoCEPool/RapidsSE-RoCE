@@ -197,6 +197,32 @@ void XF_FLATTEN::vFold_subQuery(CardIter* pCI, Stz* szFoldNm, eCK eCardWithSQ)
 
   // pCI->PRINTBOARD_dbg();
 
+  // A sub-query of this inner query that is already folded into it (an IN
+  // sub-query in its WHERE, folded as a join) put its cards in front of the
+  // <correlation>: put the <correlation> first again, and drop the <fold>
+  // left in front of every <from> (join ordering has moved the folded
+  // sub-query's table after it, so it ends nothing).
+  {
+    Kid xDeck(pCI->E.p_deck);
+    Card* p_correlation = nullptr;
+    while (xDeck.bEach()) {
+      if (CK_o_CORRELATION == xDeck.eChild()) {
+        p_correlation = xDeck.pChild();
+        break;
+      }
+    }
+    if (p_correlation && pCI->E.p_deck->pGetChild(0) != p_correlation) {
+      Kid xFold(pCI->E.p_deck);
+      while (xFold.bEach()) {
+        if (CK_o_FROM == xFold.eChild())
+          break;
+        if (CK_o_FOLD == xFold.eChild())
+          xFold.vDelete();
+      }
+      pCI->E.p_deck->vRotateFirst(p_correlation);
+    }
+  }
+
   i8 i_dup_from = 0;
   pCI->vBeginEach();
   if (pCI->bEachOp(CK_o_CORRELATION)) {
