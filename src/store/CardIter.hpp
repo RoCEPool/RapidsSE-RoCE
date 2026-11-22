@@ -208,6 +208,7 @@ namespace STORE
     bool bEachOp(eCK eOp);
     bool bEachOp_fold_current(void);
     bool bEachOp_break(eCK eOp, eCK eBreak= CK_o_FOLD);
+    bool bEachOp_break_fold_current(eCK eOp);
     bool bEachOp(eCK eOp, eCK eSub);
     bool bEachOp(eCK eOp, eCK eSub, Stz* szSubFacet);
     bool bEachOp(eCK eOp, eCK eSub1, eCK eSub2);

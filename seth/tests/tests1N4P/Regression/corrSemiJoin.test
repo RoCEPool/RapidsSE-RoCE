@@ -9,9 +9,17 @@
 // sub-query inside a correlated sub-query, which failed with EC_NONE before:
 // the <fold> of the folded IN was taken as the end of the inner query, and the
 // <correlation> card was copied into the outer query.
+// Without an outer IN, the keys of the outer column's table that pass its own
+// conditions are used (TPC-H Q17, Q2). The keys are written with GROUP BY, which
+// the optimiser folds as a stream that drives an index join into the inner
+// table; folding such an IN inside a correlated sub-query failed before
+// (EC_NOT_IMPLEMENTED: its <fold> was taken as the end of the inner query, and
+// the outer correlated column was looked up in the IN's table).
 // The queries check that the rows do not change: the plain case, a sub-query
-// with its own conditions, an IN written in the sub-query by hand, and NOT IN
-// (nothing is added). TPC-H Q20 itself is checked by the SF1 correctness test.
+// with its own conditions, an IN written in the sub-query by hand (also with
+// GROUP BY), NOT IN (nothing is added), and keys from the outer table's own
+// conditions (=, LIKE, >). TPC-H Q2, Q17 and Q20 are checked by the SF1
+// correctness test.
 // The expected rows were computed from DATA/TPCH (lineitem10k.csv,
 // supplier_2k.tbl, nation.tbl) with SQLite, independently of RapidsSE.
 
@@ -89,3 +97,19 @@ rows: (10)
 // NOT IN: nothing is added
 select count(*) from ${testName2}_supplier where s_suppkey not in (select n_nationkey from ${testName2}_nation where n_regionkey <> 1) and s_acctbal > (select 0.05 * sum(l_extendedprice) from ${testName2}_lineitem where l_suppkey = s_suppkey);
 rows: (759)
+
+// keys from the outer table's own condition
+select count(*) from ${testName2}_supplier where s_nationkey = 7 and s_acctbal > (select 0.05 * sum(l_extendedprice) from ${testName2}_lineitem where l_suppkey = s_suppkey);
+rows: (32)
+
+// keys from the outer table's own conditions, LIKE and a range
+select count(*) from ${testName2}_supplier where s_name like '%1' and s_acctbal > 0 and s_acctbal > (select 0.05 * sum(l_extendedprice) from ${testName2}_lineitem where l_suppkey = s_suppkey);
+rows: (77)
+
+// a grouped IN written inside the correlated sub-query (failed with EC_NOT_IMPLEMENTED)
+select count(*) from ${testName2}_supplier where s_suppkey < 2000 and s_acctbal > (select 0.05 * sum(l_extendedprice) from ${testName2}_lineitem where l_suppkey = s_suppkey and l_suppkey in (select n_nationkey from ${testName2}_nation where n_regionkey <> 1 group by n_nationkey));
+rows: (10)
+
+// keys from the outer table, the sub-query has its own conditions
+select count(*) from ${testName2}_supplier where s_nationkey = 7 and s_acctbal > (select 0.05 * sum(l_extendedprice) from ${testName2}_lineitem where l_suppkey = s_suppkey and l_returnflag = 'R');
+rows: (9)

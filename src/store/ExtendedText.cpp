@@ -110,6 +110,27 @@ void ExtendedText::vConcat(Stz* szStr)
     if (! nBytes_group) {
       // the line group didn't fit into tail buffer
       //   (this would be a single line that is longer than avail bytes)
+      if (pEtxtBuffer->szTextBlock()->nLength() > 0) {
+        b = bAddBuffer();
+        RASSERT(b);
+        continue;
+      }
+
+      // the line is longer than a whole buffer: put as much of it as fits,
+      // ending after a space so that no word is split between buffers, and go
+      // on with the rest of the line in the next buffer
+      i8 nPart = nAvailBytes;
+      for (i8 i = nAvailBytes - 1; i > 0; i--) {
+        if (azBegin_group[i - 1] == ' ') {
+          nPart = i;
+          break;
+        }
+      }
+      b = pEtxtBuffer->bConcat((Stz *) azBegin_group, nPart);
+      RASSERT(b);
+      azBegin_group += nPart;
+      if (! *azBegin_group)
+        break;
       b = bAddBuffer();
       RASSERT(b);
       continue;

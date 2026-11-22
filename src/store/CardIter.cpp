@@ -487,6 +487,12 @@ Card_Expr* CardIter::pBackSearch_expr_For_colNm(Symbol* pSym_term, i8 i_Before)
       }
 
     }
+
+    // the nearest one before i_Before (as pBackSearch_expr_For_col): when the
+    // same column is emitted twice, e.g. by a table of a folded sub-query and by
+    // the same table in this query, the one of this query is meant
+    if (p_expr_col)
+      break;
   }
 
   return p_expr_col;
@@ -885,6 +891,42 @@ bool CardIter::bEachOp_fold_current(void)
       return true;
   }
 
+  return false;
+}
+
+/*----------------------------------------------------------------------------*/
+/* step to the next eOp before the <fold> being made (Flat.m_p_fold_current)  */
+/*----------------------------------------------------------------------------*/
+// Like bEachOp_break(eOp, CK_o_FOLD), but a <fold> that an earlier fold left
+// inside the inner query (a sub-query of the inner query) does not stop it.
+bool CardIter::bEachOp_break_fold_current(eCK eOp)
+{
+  _precondition_( _MAGIC_, _FOOTER_);
+
+  RASSERT(E.xEachOp.bBegun());
+  RASSERT(! E.xEachOp.bEnded());
+
+  RASSERT(Card_OP::bIsOp(eOp));
+
+  E.p_Op = nullptr;
+
+  while (E.xEachOp.bEach()) {
+    Card* p_child = E.xEachOp.pChild();
+    if (p_child->bIsCard(CK_o_FOLD) &&
+        (!Flat.m_p_fold_current || p_child == Flat.m_p_fold_current))
+      return false;
+
+    if (p_child->eCard() != eOp)
+      continue;
+
+    E.p_Op = E.xEachOp.p_op();
+    vFocusOnOp();
+    vMember(E.p_Op->eCard(), E.p_Op);
+    return true;
+  }
+
+  E.p_Op = nullptr;
+  E.xEachOp.vEnded();
   return false;
 }
 
