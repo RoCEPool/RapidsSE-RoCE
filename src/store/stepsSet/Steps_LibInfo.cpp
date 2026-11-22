@@ -53,7 +53,9 @@ void Step::vLibInfoCompile(void)
 
   LibInfo* pLibInfo = * m_pLogicUnit->m_xpLibInfo;
 
+  vPhaseMark("ccompile_start");
   bool bClean = CompileLib::bCompile(pCodeBlock, szDynLibNm, pLibInfo);
+  vPhaseMark("ccompile_end");
 
   if (bClean)
     m_oDataStack.vPushInt(true);

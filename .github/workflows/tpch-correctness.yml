@@ -86,6 +86,10 @@ jobs:
         run: |
           python3 tests/tpch_sf1_correctness/scripts/run_all.py --reference duckdb \
             --rounds "${{ github.event.inputs.rounds || '1' }}"
+      - name: Where the time goes (SQL compile, optimiser, C compile, execution)
+        if: success() || steps.correctness.conclusion == 'failure'
+        continue-on-error: true
+        run: python3 tests/tpch_sf1_correctness/scripts/phase_times.py
       - name: Optimiser on/off equivalence (every query with every optimisation switched off)
         id: equivalence
         if: success() || steps.correctness.conclusion == 'failure'
@@ -95,6 +99,8 @@ jobs:
         run: |
           f=$(ls -d tests/tpch_sf1_correctness/reports/2*/ 2>/dev/null | tail -1)matrix.md
           if [ -f "$f" ]; then cat "$f" >> "$GITHUB_STEP_SUMMARY"; cat "$f"; else echo "no matrix was written" >> "$GITHUB_STEP_SUMMARY"; fi
+          p=tests/tpch_sf1_correctness/reports/PHASE_TIMES.md
+          if [ -f "$p" ]; then { echo; cat "$p"; } >> "$GITHUB_STEP_SUMMARY"; fi
           e=tests/tpch_sf1_correctness/reports/OPTIMISER_EQUIVALENCE.md
           if [ -f "$e" ]; then { echo; cat "$e"; } >> "$GITHUB_STEP_SUMMARY"; cat "$e"; fi
       - name: Engine log when something went wrong
@@ -108,6 +114,7 @@ jobs:
           path: |
             tests/tpch_sf1_correctness/reports/2*/
             tests/tpch_sf1_correctness/reports/OPTIMISER_EQUIVALENCE.md
+            tests/tpch_sf1_correctness/reports/PHASE_TIMES.md
             !tests/tpch_sf1_correctness/reports/2*/round*/node.log
             ${{ runner.temp }}/build.log
           retention-days: 30

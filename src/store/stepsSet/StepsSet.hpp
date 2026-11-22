@@ -1351,6 +1351,9 @@ void vJobIdLastJobIdFetch(void);
   void vOptimiserDissect(void);
   void vOptimiserGet(void);
   void vOptimiserNew(void);
+
+  // diagnostics: with the job tag <phaseTimes>, write the time of a point of the job
+  void vPhaseMark(const char* szPoint);
   void vOptimiserTransform(void);
   void vOptimiserWeave(void);
 

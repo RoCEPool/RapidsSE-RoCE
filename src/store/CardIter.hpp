@@ -277,6 +277,8 @@ namespace STORE
 
     i8   i_Target(void);
     void vTransform(const char* azXfile, const char* azFunc, eXF eXform);
+    static void vXformTimesReset(void);
+    static void vXformTimesTrace(Stz* szJob);
 
     void vUseBoard(Board* pBoard);
     void vUseCard(Card* pCard);
