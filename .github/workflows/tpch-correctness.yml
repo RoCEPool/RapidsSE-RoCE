@@ -2,7 +2,8 @@
 #
 # Builds the engine (optimised), generates the SF1 data set with the DBGEN of this repository,
 # runs the 22 queries through RapidsSE and through DuckDB on the same machine and compares the
-# rows. The job fails unless all 22 pass. The matrix, with the times of both engines, is the
+# rows, then runs every query again with each optimisation of the run-time optimiser switched
+# off (the result must not change). The job fails unless everything passes. The matrix, with the times of both engines, is the
 # job summary; plans, logs and rows of every query are the artifact.
 name: tpch-correctness
 
@@ -81,14 +82,21 @@ jobs:
       - name: DuckDB (the reference)
         run: pip install --break-system-packages duckdb
       - name: TPC-H SF1, 22 queries, RapidsSE against DuckDB
+        id: correctness
         run: |
           python3 tests/tpch_sf1_correctness/scripts/run_all.py --reference duckdb \
             --rounds "${{ github.event.inputs.rounds || '1' }}"
+      - name: Optimiser on/off equivalence (every query with every optimisation switched off)
+        id: equivalence
+        if: success() || steps.correctness.conclusion == 'failure'
+        run: python3 tests/tpch_sf1_correctness/scripts/run_optimiser_equivalence.py
       - name: Matrix
         if: always()
         run: |
           f=$(ls -d tests/tpch_sf1_correctness/reports/2*/ 2>/dev/null | tail -1)matrix.md
           if [ -f "$f" ]; then cat "$f" >> "$GITHUB_STEP_SUMMARY"; cat "$f"; else echo "no matrix was written" >> "$GITHUB_STEP_SUMMARY"; fi
+          e=tests/tpch_sf1_correctness/reports/OPTIMISER_EQUIVALENCE.md
+          if [ -f "$e" ]; then { echo; cat "$e"; } >> "$GITHUB_STEP_SUMMARY"; cat "$e"; fi
       - name: Engine log when something went wrong
         if: failure()
         run: |
@@ -99,6 +107,7 @@ jobs:
           name: tpch-sf1-correctness-report
           path: |
             tests/tpch_sf1_correctness/reports/2*/
+            tests/tpch_sf1_correctness/reports/OPTIMISER_EQUIVALENCE.md
             !tests/tpch_sf1_correctness/reports/2*/round*/node.log
             ${{ runner.temp }}/build.log
           retention-days: 30

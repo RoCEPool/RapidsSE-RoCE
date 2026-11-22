@@ -1,2 +1,3 @@
 # Full runs (rows, plans, logs) stay local or go to CI artifacts; only the newest matrix is committed.
 /2*/
+*node.log

@@ -12,7 +12,11 @@ namespace STORE
 {
   class ExtendedText : public Object
   {
-    static const i8 C_EXTENDEDTEXTBUFFER = 96;
+    // One buffer holds about 3.8 KB. There were 96 of them, the most that fit
+    // a "tiny" object: not enough for the optimised statement of a wide query
+    // when early projection is off (every operator then lists all columns), and
+    // the node stopped on the failed assertion. The object is now a "small" one.
+    static const i8 C_EXTENDEDTEXTBUFFER = (C_SIZE_SMALL_OBJECT - 128) / sizeof(void*);
 
   public:
     i8 m_nBlocks;
