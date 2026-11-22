@@ -74,7 +74,7 @@ jobs:
           make -j "$(nproc)" \
             CMAKE_ARGS="-DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DANTLR_BUILD_CPP_TESTS=OFF" \
             CPPFLAGS="-std=c++17 -w $BUILD_FLAGS -D__LINUX__" CFLAGS="-w $BUILD_FLAGS" > "$RUNNER_TEMP/build.log" 2>&1 \
-            || { grep -n "error" "$RUNNER_TEMP/build.log" | head -40; tail -40 "$RUNNER_TEMP/build.log"; exit 1; }
+            || { grep -n -B3 -A3 -E '\*\*\*|error:|Error [0-9]|fatal error|No rule|command not found|CMake Error' "$RUNNER_TEMP/build.log" | grep -v -- '-Werror' | head -150; exit 1; }
           ls -la ../bin/rapidsse
       - name: DuckDB (the reference)
         run: pip install --break-system-packages duckdb
@@ -90,7 +90,6 @@ jobs:
       - name: Engine log when something went wrong
         if: failure()
         run: |
-          tail -60 "$RUNNER_TEMP/build.log" 2>/dev/null || true
           for f in tests/tpch_sf1_correctness/reports/2*/round1/node.log; do [ -f "$f" ] && tail -40 "$f"; done || true
       - uses: actions/upload-artifact@v4
         if: always()
@@ -99,4 +98,5 @@ jobs:
           path: |
             tests/tpch_sf1_correctness/reports/2*/
             !tests/tpch_sf1_correctness/reports/2*/round*/node.log
+            ${{ runner.temp }}/build.log
           retention-days: 30
