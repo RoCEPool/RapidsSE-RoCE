@@ -25,7 +25,7 @@ def fixes():
     return json.load(open(p)) if os.path.exists(p) else {}
 
 
-def matrix(rounds, info, src, out_dir):
+def matrix(rounds, info, src, out_dir, duck_ms=None):
     fx = fixes()
     last = rounds[-1]
     rows = []
@@ -71,6 +71,24 @@ def matrix(rounds, info, src, out_dir):
         for i, r in enumerate(rounds, 1):
             md.append('| %d | %d/22 | %d |' % (i, sum(1 for d in r['queries'].values() if d['status'] == 'PASS'),
                                               sum(d.get('wall_ms') or 0 for d in r['queries'].values())))
+    if duck_ms:
+        over = last.get('client_overhead_ms') or 0
+        md += ['', '## Time against DuckDB on the same machine', '',
+               'RapidsSE: wall time of the last round minus the client overhead (%d ms). DuckDB %s: best of '
+               'three executions in process, %d threads. %s' % (over, src['engine'].split()[-1], os.cpu_count(),
+                                                               os.environ.get('TPCH_BUILD_NOTE', '')), '',
+               '| Query | RapidsSE ms | DuckDB ms | RapidsSE / DuckDB |', '|---|---:|---:|---:|']
+        tot_r = tot_d = 0
+        for r in rows:
+            q = r['query'][1:]
+            if not r['time_ms'] or q not in duck_ms:
+                continue
+            net = max(int(r['time_ms']) - over, 1)
+            tot_r += net
+            tot_d += duck_ms[q]
+            md.append('| %s | %d | %.0f | %.1f |' % (r['query'], net, duck_ms[q], net / max(duck_ms[q], 0.1)))
+        if tot_d:
+            md.append('| **Total** | **%d** | **%.0f** | **%.1f** |' % (tot_r, tot_d, tot_r / tot_d))
     md += ['', 'Stage columns: Parser, Binder and Logical plan come from `EXPLAIN` (SQL compiler); Optimizer and '
            'Physical plan from the optimised pipeline of the run-time optimiser; Runtime from the execution; '
            'Result from the comparison with the reference. Plans, logs and rows of every query are next to '
@@ -80,7 +98,8 @@ def matrix(rounds, info, src, out_dir):
         {'commit': last['commit'], 'passed': passed, 'total': 22, 'rounds': len(rounds),
          'reference': src['engine'], 'blockers': [r['query'] for r in blockers],
          'status': {r['query']: r['final_status'] for r in rows},
-         'time_ms': {r['query']: r['time_ms'] for r in rows}}, indent=2) + '\n')
+         'time_ms': {r['query']: r['time_ms'] for r in rows},
+         'client_overhead_ms': last.get('client_overhead_ms'), 'duckdb_ms': duck_ms or {}}, indent=2) + '\n')
     return passed
 
 
@@ -107,7 +126,7 @@ def main():
         run_rapidsse.run(rd, a.data_dir, None, a.timeout)
         rounds.append(compare_results.compare_run(rd))
         # the status after every round, so that an interrupted run still leaves its evidence
-        passed = matrix(rounds, info, src, out_dir)
+        passed = matrix(rounds, info, src, out_dir, dict(run_reference.TIMES_MS))
         print('   round %d: %d/22 PASS' % (i, passed))
     c.write(os.path.join(out_dir, 'dataset.json'), json.dumps(info, indent=2) + '\n')
     shutil.copy(os.path.join(out_dir, 'matrix.md'), os.path.join(c.REPORTS, 'LATEST.md'))

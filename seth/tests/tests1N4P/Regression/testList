@@ -13,3 +13,4 @@ existsCorrelated.test
 subqueryOrderBy.test
 aggregateDistinct.test
 derivedTableSubquery.test
+avgOverAggregate.test

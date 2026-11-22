@@ -30,6 +30,8 @@
 #include "JoinOp.hpp"
 
 #include "Expr.hpp"
+#include "ProjectedColumn.hpp"
+#include "AvgExpr.hpp"
 
 
 using namespace Parser;
@@ -429,6 +431,7 @@ void PartitionPlan::vPartitionAggregateOp(QueryNode* pNode, GraphChains* pChains
   } else {
     // Apply to origin only
     QueryNode* pAggregateOp = pNode->pDeepCopy(true, nullptr);
+    vExpandAvg(pAggregateOp, pRootNode);
 
     PlanObject::vSetLocation(pAggregateOp, Parser::Location::LO_ORIGIN);
     vPushOnOriginChain(pAggregateOp, pChains);
@@ -495,6 +498,7 @@ void PartitionPlan::vPartitionFilterOp(QueryNode* pNode, GraphChains* pChains,
   } else {
     // Apply to origin only
     QueryNode* pFilterOp = pNode->pDeepCopy(true, nullptr);
+    vExpandAvgInProperties(pFilterOp, pRootNode);   // a HAVING names the AVG as the aggregation computes it
 
     PlanObject::vSetLocation(pFilterOp, Parser::Location::LO_ORIGIN);
     vPushOnOriginChain(pFilterOp, pChains);
@@ -591,11 +595,57 @@ void PartitionPlan::vPartitionOrderOp(QueryNode* pNode, GraphChains* pChains,
   } else {
     // Apply to origin only
     QueryNode* pOrderOp = pNode->pDeepCopy(true, nullptr);
+    vExpandAvgInProperties(pOrderOp, pRootNode);
 
     PlanObject::vSetLocation(pOrderOp, Parser::Location::LO_ORIGIN);
     vPushOnOriginChain(pOrderOp, pChains);
   }
 
+}
+
+/*----------------------------------------------------------------------------*/
+/* The same for an operator above such an aggregation (HAVING, ORDER BY): it  */
+/* finds the column by its expression, so it has to spell the AVG the same.   */
+/*----------------------------------------------------------------------------*/
+void PartitionPlan::vExpandAvgInProperties(QueryNode* pOp, PlanNode* pRootNode)
+{
+  QueryNodeList* pAvgs = new QueryNodeList();
+
+  auto fCollect = [pAvgs](PlanNode* pNode, s2K& sPath, i8 iDepth, void* pvArg) -> GraphNav::eWalkCtrl {
+    UNUSED(sPath);
+    UNUSED(iDepth);
+    UNUSED(pvArg);
+    if (AvgExpr::bIsOfType(pNode))
+      pAvgs->vAppend(_pQueryNode(pNode));
+    return GraphNav::WALK_CONTINUE;
+  };
+
+  PlanNodeIter* pPropIter = pOp->pNewPropertyIter();
+  while (pPropIter->bHasNext()) {
+    GraphNav::bGlobalWalk(pPropIter->pNext(), true, true, fCollect, nullptr);
+  }
+  delete pPropIter;
+
+  while (pAvgs->nItems() > 0) {
+    Expr::vExpandAvg(pAvgs->pPop(), pRootNode);
+  }
+  delete pAvgs;
+}
+
+/*----------------------------------------------------------------------------*/
+/* An aggregation that runs at the origin only computes its AVGs itself:      */
+/* AVG(x) becomes SUM(x) / COUNT(x) in every column of pOp.                   */
+/*----------------------------------------------------------------------------*/
+void PartitionPlan::vExpandAvg(QueryNode* pOp, PlanNode* pRootNode)
+{
+  ASSERT(ProjectOp::bIsOfType(pOp));
+
+  PlanNodeIter* pIter = ProjectOp::pProjectedColumns(pOp)->pNewChildrenIter();
+  while (pIter->bHasNext()) {
+    QueryNode* pProjCol = _pQueryNode(pIter->pNext());
+    Expr::vExpandAvg(ProjectedColumn::pExprNode(pProjCol), pRootNode);
+  }
+  delete pIter;
 }
 
 /*----------------------------------------------------------------------------*/
@@ -661,6 +711,7 @@ void PartitionPlan::vPartitionProjectOp(QueryNode* pNode, GraphChains* pChains,
   } else { // !bIsPartitionable
     // Apply to origin only
     QueryNode* pProjectOp = pNode->pDeepCopy(true, nullptr);
+    vExpandAvg(pProjectOp, pRootNode);
 
     PlanObject::vSetLocation(pProjectOp, Parser::Location::LO_ORIGIN);
     vPushOnOriginChain(pProjectOp, pChains);

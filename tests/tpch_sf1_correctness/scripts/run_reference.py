@@ -14,8 +14,12 @@ Without --engine, duckdb is used when it can be imported; otherwise the committe
 are kept as they are, and only when there are none, official. source.json records
 which one produced the files and the numeric tolerance that goes with it.
 """
-import argparse, json, os, re, sys
+import argparse, json, os, re, sys, time
 import common as c
+
+# DuckDB's time per query on this machine, filled when DuckDB ran here (not saved with the
+# reference rows: it belongs to a run, not to the reference)
+TIMES_MS = {}
 
 DDL = {
     'region': 'r_regionkey INTEGER, r_name VARCHAR, r_comment VARCHAR',
@@ -62,6 +66,14 @@ def duckdb_reference(data_dir, out):
         sql = re.sub(r"(interval '\d+' day) \(\d+\)", r'\1', sql)   # DuckDB has no interval precision
         rows = [['NULL' if v is None else str(v) for v in r] for r in con.execute(sql).fetchall()]
         c.save_rows(os.path.join(out, 'q%s.csv' % q), rows)
+        # the time of the query on this machine: the best of three more executions
+        best = None
+        for _ in range(3):
+            t0 = time.time()
+            con.execute(sql).fetchall()
+            dt = (time.time() - t0) * 1000
+            best = dt if best is None or dt < best else best
+        TIMES_MS[q] = round(best, 1)
     return {'engine': 'DuckDB ' + duckdb.__version__, 'numeric_tolerance': '0.01'}
 
 

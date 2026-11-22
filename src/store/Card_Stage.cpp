@@ -159,7 +159,11 @@ void Card_Stage::vReinstate_stages_v0(CardIter* pCI)
         (bSawAggOp || bSawIndexJoinOp || bSawProjectOp)) {
        vAddNext(pCI, p_main, i_Main,""_Stz);
       vAddStage(pCI, p_main, i_Main, e_level_running,nStages);
-      bSawAggOp = false;
+      // The new stage holds an aggregation: what follows it starts the next stage.
+      // (This was "false": a <project> behind the second of two aggregations at one
+      // level stayed in the stage of that aggregation, and the generated code did
+      // not compile. Example: sum(q) + 1 over a derived table that groups.)
+      bSawAggOp = true;
       bSawFilterOp = false;
       bSawIndexJoinOp = false;
       bSawProjectOp = false;

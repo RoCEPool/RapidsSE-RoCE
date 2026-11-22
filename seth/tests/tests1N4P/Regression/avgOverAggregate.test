@@ -1,0 +1,104 @@
+/*----------------------------------------------------------------------------*/
+/* avgOverAggregate.test -- AVG in an aggregation that runs at one level only */
+/*----------------------------------------------------------------------------*/
+
+// The execution engine has no AVG: the SQL compiler replaces AVG(x) by SUM(x)
+// and COUNT(x) when it splits an aggregation over the partitions. An
+// aggregation that is not split (its input is a derived table that groups, or
+// the distinct values of AVG(DISTINCT x)) kept the AVG and returned a wrong
+// value: select avg(q) from (select q from t group by q) returned the number
+// of groups. Such an aggregation now computes SUM(x) / COUNT(x) itself, and
+// the HAVING and ORDER BY above it name the AVG the same way.
+// Also covered: an expression over the aggregates of such an aggregation with
+// GROUP BY did not compile (the projection shared the stage of the second
+// aggregation).
+// The expected values were computed from DATA/TPCH/lineitem10k.csv
+// independently of RapidsSE (AVG of a DECIMAL(15,2) has two decimals).
+
+create table ${testName2}_lineitem (
+  L_ORDERKEY      INTEGER       NOT NULL,
+  L_PARTKEY       INTEGER       NOT NULL,
+  L_SUPPKEY       INTEGER       NOT NULL,
+  L_LINENUMBER    INTEGER       NOT NULL,
+  L_QUANTITY      DECIMAL(15,2) NOT NULL,
+  L_EXTENDEDPRICE DECIMAL(15,2) NOT NULL,
+  L_DISCOUNT      DECIMAL(15,2) NOT NULL,
+  L_TAX           DECIMAL(15,2) NOT NULL,
+  L_RETURNFLAG    CHAR(1)       NOT NULL,
+  L_LINESTATUS    CHAR(1)       NOT NULL,
+  L_SHIPDATE      DATE          NOT NULL,
+  L_COMMITDATE    DATE          NOT NULL,
+  L_RECEIPTDATE   DATE          NOT NULL,
+  L_SHIPINSTRUCT  CHAR(25)      NOT NULL,
+  L_SHIPMODE      CHAR(10)      NOT NULL,
+  L_COMMENT       VARCHAR(44)   NOT NULL
+);
+success
+create index ${testName2}_IxL_ORDERKEY on ${testName2}_lineitem (L_ORDERKEY);
+affected: 0
+load ${testName2}_lineitem "../DATA/TPCH/lineitem10k.csv";
+success
+
+// without GROUP BY
+select avg(s) from (select l_orderkey, sum(l_quantity) as s from ${testName2}_lineitem group by l_orderkey) as t;
+rows: (101.72)
+
+// inside an expression
+select avg(s) + 1 from (select l_orderkey, sum(l_quantity) as s from ${testName2}_lineitem group by l_orderkey) as t;
+rows: (102.72)
+
+// with GROUP BY, next to other aggregates
+select l_returnflag, avg(s), count(*), max(s)
+  from (select l_returnflag, l_orderkey, sum(l_quantity) as s from ${testName2}_lineitem group by l_returnflag, l_orderkey) as t
+ group by l_returnflag
+ order by l_returnflag;
+ordered rows:
+  ('A', 56.81, 1079, 209.00)
+  ('N', 99.79, 1327, 303.00)
+  ('R', 57.28, 1086, 215.00)
+
+// in the HAVING and the ORDER BY
+select l_returnflag, count(*)
+  from (select l_returnflag, l_orderkey, sum(l_quantity) as s from ${testName2}_lineitem group by l_returnflag, l_orderkey) as t
+ group by l_returnflag
+having avg(s) > 57
+ order by avg(s) desc;
+ordered rows:
+  ('N', 1327)
+  ('R', 1086)
+
+// an expression over SUM and COUNT of a grouped derived table (did not compile)
+select l_returnflag, sum(s) / count(s) + 1
+  from (select l_returnflag, l_orderkey, sum(l_quantity) as s from ${testName2}_lineitem group by l_returnflag, l_orderkey) as t
+ group by l_returnflag
+ order by l_returnflag;
+ordered rows:
+  ('A', 57.81)
+  ('N', 100.79)
+  ('R', 58.28)
+
+// AVG(DISTINCT x)
+select avg(distinct l_quantity) from ${testName2}_lineitem;
+rows: (25.50)
+
+select l_returnflag, avg(distinct l_quantity)
+  from ${testName2}_lineitem
+ group by l_returnflag
+ order by l_returnflag;
+ordered rows:
+  ('A', 25.50)
+  ('N', 25.50)
+  ('R', 25.50)
+
+// the ordinary, partitioned AVG is unchanged
+select l_returnflag, avg(l_quantity)
+  from ${testName2}_lineitem
+ group by l_returnflag
+ order by l_returnflag;
+ordered rows:
+  ('A', 25.18)
+  ('N', 25.71)
+  ('R', 25.76)
+
+drop table ${testName2}_lineitem;
+success

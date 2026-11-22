@@ -185,9 +185,8 @@ void AggregateSplit::vDistinctSplit(PlanNode *pRootNode)
 /* ProjectOp::bIsPartitionable). NULLs of e form one group, which COUNT/SUM/AVG then */
 /* ignore, as DISTINCT requires.                                              */
 /* MIN and MAX do not depend on DISTINCT; the flag is just dropped.           */
-/* Not handled (reported as not implemented): AVG(DISTINCT), DISTINCT          */
-/* aggregates together with other aggregates in one operator, or over         */
-/* different expressions.                                                     */
+/* Not handled (reported as not implemented): DISTINCT aggregates together    */
+/* with other aggregates in one operator, or over different expressions.      */
 /*----------------------------------------------------------------------------*/
 void AggregateSplit::vSplitDistinctAggregates(QueryNode *pPlanNode, PlanNode *pRootNode)
 {
@@ -220,15 +219,6 @@ void AggregateSplit::vSplitDistinctAggregates(QueryNode *pPlanNode, PlanNode *pR
         else if (MinExpr::bIsOfType(pAgg) || MaxExpr::bIsOfType(pAgg)) {
           AggregateExpr::vClearDistinct(pAgg);
           ++nOther;
-        }
-        else if (AvgExpr::bIsOfType(pAgg)) {
-          // AVG over the rows of another aggregation is not computed correctly yet
-          // (select avg(x) from (select x from t group by x) returns the count)
-          delete pAggs;
-          delete pIter;
-          pDistinct->vRemoveAll();
-          delete pDistinct;
-          SemanticException::vThrowNotImplemented("AVG(DISTINCT ...)"_Stz);
         }
         else {
           pDistinct->vAppend(pAgg);

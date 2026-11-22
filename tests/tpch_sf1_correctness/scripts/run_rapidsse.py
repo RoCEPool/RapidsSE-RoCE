@@ -18,7 +18,8 @@ import common as c
 
 ENV = dict(os.environ, SE_ENV_METACLUE='1', SE_ENV_INTKEY='1', SE_USERNAME='', SE_PASSWORD='')
 PORT = os.environ.get('TPCH_SE_PORT', '9123')
-PARTITIONS = 2
+PARTITIONS = int(os.environ.get('TPCH_SE_PARTITIONS', '2'))   # partitions of the one node
+THREADS = int(os.environ.get('TPCH_SE_THREADS', '2'))
 ENGINE_LOG = os.path.join(c.REPO, 'se.log')
 
 
@@ -47,7 +48,7 @@ def start(data_dir, node_log):
     counts per table."""
     stop()
     log = open(node_log, 'a')
-    subprocess.Popen(['setarch', 'x86_64', '-R', './rapidsse', '--partitionsPerNode', str(PARTITIONS), '--threads', '2',
+    subprocess.Popen(['setarch', 'x86_64', '-R', './rapidsse', '--partitionsPerNode', str(PARTITIONS), '--threads', str(THREADS),
                       '--size', os.environ.get('TPCH_SE_SIZE', '6GB'), '--node', 'n1', '127.0.0.1', '9101', PORT,
                       '--name', 'n1', '--start', '--munged', '--script', '--metadata', '--commands', '../commands',
                       '--cid', '1', '--heartbeat', '239.255.10.10', '9201'],
@@ -161,7 +162,7 @@ def run(out_dir, data_dir=c.DATA, queries=None, timeout=1200):
     os.makedirs(out_dir, exist_ok=True)
     node_log = os.path.join(out_dir, 'node.log')
     res = {'commit': c.git_commit(), 'started': time.strftime('%Y-%m-%d %H:%M:%S %Z'),
-           'node': '1 node, 2 partitions, 2 threads', 'queries': {}}
+           'node': '1 node, %d partitions, %d threads' % (PARTITIONS, THREADS), 'queries': {}}
     if not os.path.exists(os.path.join(c.REPO, 'bin', 'rapidsse')):
         res['blocked'] = 'bin/rapidsse is missing: build the source first'
     else:

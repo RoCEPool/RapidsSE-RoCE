@@ -9,9 +9,9 @@
 //   = select g, count(e) from (select g, e from t group by g, e) group by g
 // The lower one is partitioned and merged like any GROUP BY; the upper one
 // runs on the merged groups.
-// Not implemented, and reported as such: AVG(DISTINCT), DISTINCT aggregates
-// together with other aggregates, DISTINCT aggregates over different
-// expressions.
+// Not implemented, and reported as such: DISTINCT aggregates together with
+// other aggregates, DISTINCT aggregates over different expressions.
+// AVG(DISTINCT x) is in avgOverAggregate.test.
 // The expected rows were computed from DATA/TPCH/orders10k.csv and
 // lineitem10k.csv independently of RapidsSE.
 
@@ -120,9 +120,6 @@ ordered rows:
   ('R', 50, 2415)
 
 // not implemented
-select avg(distinct l_quantity) from ${testName2}_lineitem;
-failure contains: 'not yet implemented'
-
 select count(distinct l_suppkey), count(*) from ${testName2}_lineitem;
 failure contains: 'not yet implemented'
 
