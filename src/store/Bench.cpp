@@ -450,7 +450,7 @@ i8 Bench::nTransformPrint_inc(void)
 /*----------------------------------------------------------------------------*/
 /*                                                                            */
 /*----------------------------------------------------------------------------*/
-void Bench::vValidate(CardIter* pCI)
+void Bench::vValidate(CardIter* pCI, bool bDeep)
 {
   _precondition_(_ADDRESS_,_MAGIC_,CN_BENCH,_FOOTER_);
 
@@ -474,7 +474,8 @@ void Bench::vValidate(CardIter* pCI)
     if (! AM::JOB::bHasTag(C_OPTIMISER_TRACE))
       pBoard->vClearCardMarks();
 
-    pBoard->vValidate(pCI);
+    if (bDeep)
+      pBoard->vValidate(pCI);
 
     if (pBoard->pState()->bHasName(aOH[OH_FLATTEN]))
       break;

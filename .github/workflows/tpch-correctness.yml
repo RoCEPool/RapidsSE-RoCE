@@ -89,7 +89,7 @@ jobs:
       - name: Where the time goes (SQL compile, optimiser, C compile, execution)
         if: success() || steps.correctness.conclusion == 'failure'
         continue-on-error: true
-        run: python3 tests/tpch_sf1_correctness/scripts/phase_times.py
+        run: python3 tests/tpch_sf1_correctness/scripts/phase_times.py --clear-cache --repeat 2
       - name: Optimiser on/off equivalence (every query with every optimisation switched off)
         id: equivalence
         if: success() || steps.correctness.conclusion == 'failure'

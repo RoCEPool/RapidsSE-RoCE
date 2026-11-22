@@ -109,7 +109,7 @@ void XF::vXF(CardIter* pCI)
 			pXF->vTransform_passThru();
 		}
 
-		pCI->vValidateBench();
+		pCI->vValidateBench(true);
 
 		delete pXF;
 	}

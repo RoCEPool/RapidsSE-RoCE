@@ -283,7 +283,11 @@ namespace STORE
     void vUseBoard(Board* pBoard);
     void vUseCard(Card* pCard);
 
-    void vValidateBench(void);
+    // bDeep: also check every card of every board (Board::vValidate). Done at the
+    // end of each phase and at the end of the optimiser; after a single
+    // transformation only with the job tag <optimiser_validate> (or when tracing).
+    // The marks of the cards are cleared either way.
+    void vValidateBench(bool bDeep = false);
     void vValidateChildren(Card* pCard, i8 iDepth);
 
     Stz* szFMT_CAT_LEFT           (void) { return "%s"_Stz; }

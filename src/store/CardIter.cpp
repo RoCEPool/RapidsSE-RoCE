@@ -1384,7 +1384,7 @@ void CardIter::vEndPhase(void)
 
   m_pBench->vEndPhase(this);
 
-  vValidateBench();
+  vValidateBench(true);
 
   RASSERT(0 == nItems());
 }
@@ -2492,11 +2492,18 @@ void CardIter::vUseCard(Card* pCard)
 /*----------------------------------------------------------------------------*/
 /* validate children                                                          */
 /*----------------------------------------------------------------------------*/
-void CardIter::vValidateBench(void)
+void CardIter::vValidateBench(bool bDeep)
 {
   _precondition_(_MAGIC_, _FOOTER_);
 
-  m_pBench->vValidate(this);
+  // The check of every card after every transformation took more time than the
+  // transformations themselves (TPC-H SF1: 20 s of the 35 s of the optimiser for
+  // the 22 queries). It is done at the end of each phase; after each
+  // transformation only when asked for.
+  if (! bDeep)
+    bDeep = AM::JOB::bHasTag("<optimiser_validate>"_Stz) || AM::JOB::bHasTag(C_OPTIMISER_TRACE);
+
+  m_pBench->vValidate(this, bDeep);
 }
 
 /*----------------------------------------------------------------------------*/
