@@ -156,7 +156,9 @@ void Card_StreamPer::vEstStreamCost(CardIter* pCI,
   // nation key) can multiply the stream by thousands and exhaust memory, so
   // rank any sequence whose estimated intermediate result explodes after
   // every sequence that does not.
-  if (bExplodes(p_tableList, p_filtPredList, p_pipeline, p_joinPredList))
+  bool bExplodesEst = false;
+  d8 dEstRowsRead = dEstRows(p_tableList, p_filtPredList, p_pipeline, p_joinPredList, bExplodesEst);
+  if (bExplodesEst)
     nSumNetworkCost += C_EXPLOSION_PENALTY;
 
   // record the sum network and unicast costs
@@ -167,6 +169,7 @@ void Card_StreamPer::vEstStreamCost(CardIter* pCI,
   p_costUnicast->SYM(SF_INT_LIT,nSumUnicastCost);
 
   Card_CostStream* p_costQuery = new Card_CostStream;
+  p_costQuery->pSymbol()->Y_vSet(P_EstRows, (i8)(dEstRowsRead > 9.0e18 ? 9.0e18 : dEstRowsRead));
   p_costQuery->vAppendChild(p_costNetwork);
   p_costQuery->vAppendChild(p_costUnicast);
 
@@ -178,23 +181,53 @@ void Card_StreamPer::vEstStreamCost(CardIter* pCI,
 /*----------------------------------------------------------------------------*/
 /* does the estimated intermediate result of this sequence explode?           */
 /*----------------------------------------------------------------------------*/
-// Rows are estimated as in index nested-loop execution: the head table's rows,
-// then for every join the arriving rows times the rows per key of the join
-// column on the joined table (Index::nEstKeyFanOut). Every filter on a table
-// keeps C_FILTER_COEFF of its rows. The sequence explodes when a stream grows
-// beyond C_EXPLOSION_FACTOR times the largest table of the query.
 bool Card_StreamPer::bExplodes(Card_TableList* p_tableList,
                                Card_FiltPredList* p_filtPredList,
                                Card_Deck* p_pipeline,
                                Card_JoinPredList* p_joinPredList)
 {
+  bool bExplodes = false;
+  dEstRows(p_tableList, p_filtPredList, p_pipeline, p_joinPredList, bExplodes);
+  return bExplodes;
+}
+
+/*----------------------------------------------------------------------------*/
+/* estimated rows that this join sequence reads (C_out)                       */
+/*----------------------------------------------------------------------------*/
+// Rows are estimated as in index nested-loop execution: the head table's rows,
+// then for every join the arriving rows times the rows per key of the join
+// column on the joined table (Index::nEstKeyFanOut), using the join predicate
+// to the stream with the fewest rows per key. Every other join predicate
+// between the joined table and the stream is then checked on those rows:
+// with keys and foreign keys each arriving row keeps at least one match, so
+// it divides the rows by its own rows per key, down to one row per arriving
+// row (TPC-H Q9: partsupp joins lineitem on partkey and suppkey). Every filter
+// on a table keeps C_FILTER_COEFF of its rows.
+//
+// The cost of the sequence is the sum of the rows read by its steps (the head
+// table: the rows it keeps and a tenth of the rows it scans), as
+// DuckDB's join order optimiser sums the rows of intermediate results: on one
+// node the network model gives every sequence the same cost, and starting
+// from the smallest table (TPC-H Q9: nation) can read all of lineitem where
+// starting from the filtered table (part) reads a twentieth of it.
+//
+// The sequence explodes when a stream grows beyond C_EXPLOSION_FACTOR times
+// the largest table of the query.
+d8 Card_StreamPer::dEstRows(Card_TableList* p_tableList,
+                            Card_FiltPredList* p_filtPredList,
+                            Card_Deck* p_pipeline,
+                            Card_JoinPredList* p_joinPredList,
+                            bool& rbExplodes)
+{
   _precondition_(_ADDRESS_, _MAGIC_, CN_CARD, _FOOTER_);
 
   static const d8 C_EXPLOSION_FACTOR = 4.0;
+  static const d8 C_SCAN_WEIGHT      = 0.1;
 
   d8 dRows    = 0.0;
   d8 dMaxRows = 0.0;
   d8 dLargest = 1.0;
+  d8 dSumRead = 0.0;
 
   char acJoined[64];   // table syntaxes already in the stream
   i8 nJoined = 0;
@@ -204,6 +237,8 @@ bool Card_StreamPer::bExplodes(Card_TableList* p_tableList,
 
     char cTblSyn;
     d8 dRead;
+    d8 dReduce = 1.0;
+    d8 dProbes = 0.0;
 
     if (xStreamPer.pChild()->bIsCard(CK_STREAMHEAD)) {
       cTblSyn = xStreamPer.p_streamHead()->pSymbol()->cTblSyn();
@@ -213,9 +248,10 @@ bool Card_StreamPer::bExplodes(Card_TableList* p_tableList,
     if (xStreamPer.pChild()->bIsCard(CK_STREAMJOIN)) {
       cTblSyn = xStreamPer.p_streamJoin()->pSymbol()->cTblSyn();
 
-      // every join predicate between this table and the stream applies, so
-      // the rows read are bounded by the most selective of them
-      i8 nFanOut = 0;
+      // the join predicates between this table and the stream
+      i8 anFanOut[64];
+      i8 anProbe[64];
+      i8 nPreds = 0;
       Kid xJoinPredList(p_joinPredList);
       while (xJoinPredList.bEach(CK_RLNCONJ)) {
         Card_RlnConj* p_rlnConj = xJoinPredList.p_rlnConj();
@@ -226,13 +262,28 @@ bool Card_StreamPer::bExplodes(Card_TableList* p_tableList,
         for (i8 i = 0; i < nJoined; i++)
           if (acJoined[i] == cTblSyn_other)
             bInStream = true;
-        if (! bInStream)
+        if (! bInStream || nPreds >= (i8)(sizeof(anFanOut) / sizeof(anFanOut[0])))
           continue;
-        i8 n = nJoinFanOut(p_pipeline, p_tableList, cTblSyn, p_rlnConj);
-        if (! nFanOut || n < nFanOut)
-          nFanOut = n;
+        anFanOut[nPreds] = nJoinFanOut(p_pipeline, p_tableList, cTblSyn, p_rlnConj, &anProbe[nPreds]);
+        nPreds++;
       }
-      dRead = dRows * (d8)(nFanOut ? nFanOut : 1);
+
+      // read through the most selective one, check the others
+      i8 iMin = -1;
+      for (i8 i = 0; i < nPreds; i++)
+        if (iMin < 0 || anFanOut[i] < anFanOut[iMin])
+          iMin = i;
+      i8 nFanOut = (iMin >= 0) ? anFanOut[iMin] : 1;
+      if (nFanOut < 1)
+        nFanOut = 1;
+      for (i8 i = 0; i < nPreds; i++)
+        if (i != iMin)
+          dReduce *= (d8)(anFanOut[i] > 1 ? anFanOut[i] : 1);
+      if (dReduce > (d8)nFanOut)
+        dReduce = (d8)nFanOut;
+
+      dRead = dRows * (d8)nFanOut;
+      dProbes = dRows * (d8)((iMin >= 0) ? anProbe[iMin] : 1);
     }
     else
       continue;
@@ -245,7 +296,7 @@ bool Card_StreamPer::bExplodes(Card_TableList* p_tableList,
       dRead = dTableRows;
 
     i8 nFilters = p_filtPredList->nFiltersFor(cTblSyn);
-    dRows = dRead;
+    dRows = dRead / dReduce;
     while (nFilters-- > 0)
       dRows *= C_FILTER_COEFF;
     if (dRows < 1.0)
@@ -254,23 +305,38 @@ bool Card_StreamPer::bExplodes(Card_TableList* p_tableList,
     if (dRead > dMaxRows)
       dMaxRows = dRead;
 
+    // the head table is scanned once: its filters are applied as it is read
+    // (on an index when they are bounds, as l_shipdate in TPC-H Q14), so it
+    // counts as the rows it keeps plus a tenth of the rows it reads; a join
+    // makes its index lookups (one per arriving row in every partition that the
+    // stream is sent to) and reads every row they find
+    if (xStreamPer.pChild()->bIsCard(CK_STREAMHEAD))
+      dSumRead += dRows + C_SCAN_WEIGHT * dRead;
+    else
+      dSumRead += dProbes + dRead;
+
     if (nJoined < (i8)sizeof(acJoined))
       acJoined[nJoined++] = cTblSyn;
   }
 
-  return dMaxRows > C_EXPLOSION_FACTOR * dLargest;
+  rbExplodes = dMaxRows > C_EXPLOSION_FACTOR * dLargest;
+  return dSumRead;
 }
 
 /*----------------------------------------------------------------------------*/
 /* rows of the joined table matched by one arriving row (1 if unknown)        */
 /*----------------------------------------------------------------------------*/
 // Uses the fan-out estimated for the index whose leading column is the join
-// column on the joined side (Index::nEstKeyFanOut, recorded as P_FanOut).
+// column on the joined side (Index::nEstKeyFanOut, recorded as P_FanOut),
+// scaled to all partitions.
 i8 Card_StreamPer::nJoinFanOut(Card_Deck* p_pipeline,
                                Card_TableList* p_tableList,
                                char cTblSyn_join,
-                               Card_RlnConj* p_rlnConj)
+                               Card_RlnConj* p_rlnConj,
+                               i8* pnProbePtns)
 {
+  if (pnProbePtns)
+    *pnProbePtns = 1;
   _static_
 
   if (! p_rlnConj)
@@ -318,7 +384,29 @@ i8 Card_StreamPer::nJoinFanOut(Card_Deck* p_pipeline,
       if (! nFanOut || n < nFanOut)
         nFanOut = n;
     }
-    return nFanOut ? nFanOut : 1;
+    if (! nFanOut)
+      return 1;
+
+    // The fan-out is sampled in one partition. A lookup on a column that the
+    // table is not partitioned by finds rows in every partition (the stream is
+    // broadcast to them), so it finds the fan-out times the partitions; on the
+    // partition column, or in a replicated table, it finds them in one.
+    Card_Table* p_table_join = p_tableList->pFind(cTblSyn_join);
+    bool bReplicated = p_table_join && p_table_join->pSymbol()->bHasFacet(SF_TBL_SYN_rep);
+    bool bPtnColumn = false;
+    if (Card_TablePtn* p_tablePtn = p_tableList->pGetTablePtn(cTblSyn_join)) {
+      Symbol* p_Y_ptn = p_tablePtn->pSymbol();
+      bPtnColumn = p_Y_ptn->bHasFacet(SF_TBL_COL) && p_Y_ptn->iTo_ordinal(SF_TBL_COL) == iOrdinal;
+    }
+    if (! bReplicated && ! bPtnColumn) {
+      i8 nPtns = AM::PTNMAP::nPtnsInGrid();
+      if (nPtns > 1) {
+        nFanOut *= nPtns;
+        if (pnProbePtns)
+          *pnProbePtns = nPtns;
+      }
+    }
+    return nFanOut;
   }
 
   return 1;

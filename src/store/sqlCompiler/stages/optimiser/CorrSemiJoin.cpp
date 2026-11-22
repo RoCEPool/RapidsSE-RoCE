@@ -104,6 +104,26 @@ b1 CorrSemiJoin::bRewrite(const std::string& sSql, const PlanNode* pGraphTemplat
   if (nSelect < 2)
     return false;
 
+  // ... and a sub-query that is an operand of a comparison: "<op> ( select".
+  // Without one there is nothing to rewrite, and the trial plan below (about
+  // a third of the SQL compile time) is not made.
+  b1 bComparedSubquery = false;
+  for (size_t i = sLower.find("select"); i != std::string::npos && !bComparedSubquery;
+       i = sLower.find("select", i + 1)) {
+    size_t j = i;
+    while (j > 0 && isspace((unsigned char)sLower[j - 1]))
+      j--;
+    if (j == 0 || sLower[j - 1] != '(')
+      continue;
+    j--;
+    while (j > 0 && isspace((unsigned char)sLower[j - 1]))
+      j--;
+    if (j > 0 && (sLower[j - 1] == '<' || sLower[j - 1] == '>' || sLower[j - 1] == '='))
+      bComparedSubquery = true;
+  }
+  if (!bComparedSubquery)
+    return false;
+
   std::string sCurrent(sSql);
   b1 bChanged = false;
   for (i8 i = 0; i < C_MAX_REWRITES; i++) {

@@ -24,11 +24,14 @@ namespace STORE
                          Card_Deck* p_pipeline,
                          Card_JoinPredList* p_joinPredList);
 
+     d8 dEstRows(Card_TableList* p_tableList, Card_FiltPredList* p_filtPredList,
+                 Card_Deck* p_pipeline, Card_JoinPredList* p_joinPredList, bool& rbExplodes);
      bool bExplodes(Card_TableList* p_tableList, Card_FiltPredList* p_filtPredList,
                     Card_Deck* p_pipeline, Card_JoinPredList* p_joinPredList);
 
      static i8 nJoinFanOut(Card_Deck* p_pipeline, Card_TableList* p_tableList,
-                           char cTblSyn_join, Card_RlnConj* p_rlnConj);
+                           char cTblSyn_join, Card_RlnConj* p_rlnConj,
+                    i8* pnProbePtns = nullptr);
 
      eXK eJoinCast(CardIter* pCI,
                    Card_StreamPtn*  p_streamPtn,

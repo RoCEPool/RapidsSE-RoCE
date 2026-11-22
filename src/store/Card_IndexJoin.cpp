@@ -92,7 +92,37 @@ void Card_IndexJoin::vAdd_transients(CardIter* pCI)
   //pCI->G.p_term->vDump();
 
 
-  if (!pCI->Early.m_pNeeded_later->pFind_expr(pCI->E.p_term->pSymbol())) {
+  // Is the arriving key already needed later? A needed column of another
+  // table can have the same name (m_mfgkey of manufacturer and of
+  // returnitems): when both are table columns, they must be the same one.
+  // (Treating them as the same left the key out of the early project in front
+  // of this join, whose emit came out empty when the other table is joined
+  // after this one.)
+  bool bKeyNeeded = false;
+  if (Card_Expr* p_expr_found = pCI->Early.m_pNeeded_later->pFind_expr(pCI->E.p_term->pSymbol())) {
+    bKeyNeeded = true;
+    Card_Expr* p_expr_defn = pCI->pPrior_expr(pCI->E.p_term->pSymbol());
+    if (p_expr_defn && p_expr_defn->bIsScalarCol() && p_expr_found->bIsScalarCol()) {
+      Symbol* pSym_defn  = p_expr_defn->pPeekChild()->pSymbol();
+      Symbol* pSym_found = p_expr_found->pPeekChild()->pSymbol();
+      if (pSym_defn->bHasFacet(SF_TBL_COL) && pSym_found->bHasFacet(SF_TBL_COL) &&
+          ! pSym_found->bMatches(SF_TBL_COL, pSym_defn)) {
+        // another table's column of the same name: look for this one
+        bKeyNeeded = false;
+        for (Kid x_needed(pCI->Early.m_pNeeded_later); x_needed.bEach(CK_EXPR); /**/) {
+          Card_Expr* p_expr_needed = x_needed.p_expr();
+          if (p_expr_needed->bIsScalarCol() &&
+              p_expr_needed->pPeekChild()->pSymbol()->bHasFacet(SF_TBL_COL) &&
+              p_expr_needed->pPeekChild()->pSymbol()->bMatches(SF_TBL_COL, pSym_defn)) {
+            bKeyNeeded = true;
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  if (! bKeyNeeded) {
 
     if (pCI->E.p_term->pSymbol()->bHasFacet(SF_EXP_COL)) {
       Card_Expr* p_expr_expCol = Card_Expr::pCraft_expr_Of_term(pCI->E.p_term);

@@ -3,6 +3,7 @@
 /*============================================================================*/
 
 #include "Card_CostStream.hpp"
+#include "AM.hpp"
 
 #include "Card_Predicate.hpp"
 #include "Card_RlnConj.hpp"
@@ -98,6 +99,24 @@ bool Card_CostStream::bIsLowerCost(Card_CostStream* p_costQuery_arg)
 
   if (iCostNetwork_this > iCostNetwork_arg)
     return false;
+
+  // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+  // the rows the sequence reads (Card_StreamPer::dEstRows); on one node every
+  // sequence has the same network cost
+
+  if (pSymbol()->Y_bHas(P_EstRows) && p_costQuery_arg->pSymbol()->Y_bHas(P_EstRows) &&
+      ! AM::JOB::bHasTag("<optimiser_off_join_rows>"_Stz) && ! AM::JOB::bHasTag("<optimiser_off_all>"_Stz)) {
+    // estimates within C_ROWS_TIE of each other are a tie: the estimate does
+    // not know which rows lie together (lineitem rows of an order, found
+    // through the partition column), so the comparison below decides
+    static const d8 C_ROWS_TIE = 0.9;
+    d8 dRows_this = (d8)pSymbol()->Y_iGet(P_EstRows);
+    d8 dRows_arg  = (d8)p_costQuery_arg->pSymbol()->Y_iGet(P_EstRows);
+    if (dRows_this < dRows_arg * C_ROWS_TIE)
+      return true;
+    if (dRows_arg < dRows_this * C_ROWS_TIE)
+      return false;
+  }
 
   // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 

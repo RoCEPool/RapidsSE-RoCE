@@ -67,19 +67,30 @@ Card_FiltPredList* Card_FiltPredList::pExtractList(Card_Deck* p_deck)
 
   Card_FiltPredList* p_filtPredList = new Card_FiltPredList;
 
+  // the filters of the tables of the <from>s of the deck (the deck's cards are
+  // <from>s holding a <table> and maybe a <filter>; iterating <table> cards of
+  // the deck found none, so join ordering never saw a filter)
   Kid xDeck(p_deck);
-  while (xDeck.bEach(CK_p_TABLE, CK_o_FILTER)) {
+  while (xDeck.bEach(CK_o_FROM, CK_p_TABLE)) {
 
-    Card_Filter* p_filter = _pCard_Filter(xDeck.pSub1());
+    Card_Table* p_table = _pCard_Table(xDeck.pSub1());
+    Card_Filter* p_filter = xDeck.pChild()->pSub_filter();
+    if (! p_filter)
+      p_filter = p_table->pSub_filter();
+    if (! p_filter)
+      continue;
 
     Card_Predicate* p_predicate = p_filter->pSub_predicate();
+    if (! p_predicate)
+      continue;
 
     nFilters = 0;
     p_predicate->bLambdaWalk(CK_RLNCONJ, bLambda);
 
     if (nFilters) {
       Card_FiltPred* p_filtPred = new Card_FiltPred;
-      p_filtPred->SYM(SF_TBL_SYN, xDeck.p_table()->szFacet(SF_TBL_NM));
+      char azTblSyn[4] = { '$', 'T', p_table->pSymbol()->cTblSyn(), '\0' };
+      p_filtPred->SYM(SF_TBL_SYN, (Stz*)azTblSyn);
       p_filtPred->pSymbol()->Y_vSet(P_Count,nFilters);
       p_filtPredList->vAppendChild(p_filtPred);
     }
