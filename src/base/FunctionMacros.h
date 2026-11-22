@@ -523,6 +523,10 @@
     iArg1 = *(--paW);                                                       \
     if (eErrorCode != EC_NONE ||                                            \
         iArg1 == C_DATUM_NULL) {                                            \
+      iInCount = *(--paW);                                                  \
+      while(iInCount-- > 0) {                                               \
+        iArg2 = *(--paW);                                                   \
+      }                                                                     \
       *(paW++) = C_DATUM_NULL;                                              \
     }                                                                       \
     else {                                                                  \
@@ -548,6 +552,10 @@
     iArg1 = *(--paW);                                                       \
     if (eErrorCode != EC_NONE ||                                            \
         iArg1 == C_DATUM_NULL) {                                            \
+      iInCount = *(--paW);                                                  \
+      while(iInCount-- > 0) {                                               \
+        iArg2 = *(--paW);                                                   \
+      }                                                                     \
       *(paW++) = C_DATUM_NULL;                                              \
     }                                                                       \
     else {                                                                  \
@@ -573,6 +581,92 @@
     iArg1 = *(--paW);                                                       \
     if (eErrorCode != EC_NONE ||                                            \
         iArg1 == C_DATUM_NULL) {                                            \
+      iInCount = *(--paW);                                                  \
+      while(iInCount-- > 0) {                                               \
+        iArg2 = *(--paW);                                                   \
+      }                                                                     \
+      *(paW++) = C_DATUM_NULL;                                              \
+    }                                                                       \
+    else {                                                                  \
+      iInCount = *(--paW);                                                  \
+      while(iInCount--) {                                                   \
+        iArg2 = *(--paW);                                                   \
+        if (iArg1 == iArg2) {                                               \
+           bFilterResult = 1;                                               \
+           break;                                                           \
+        }                                                                   \
+      }                                                                     \
+      while(iInCount-- > 0) {                                               \
+        iArg2 = *(--paW);                                                   \
+      }                                                                     \
+      *(paW++) = bFilterResult;                                             \
+    }                                                                       \
+  }
+
+// DATE, TIME and TIMESTAMP values are 8-byte integers, compared like INTEGER.
+#define _INX_DTEDTE(eErrorCode)                                             \
+  {                                                                         \
+    bFilterResult = 0;                                                      \
+    iArg1 = *(--paW);                                                       \
+    if (eErrorCode != EC_NONE ||                                            \
+        iArg1 == C_DATUM_NULL) {                                            \
+      iInCount = *(--paW);                                                  \
+      while(iInCount-- > 0) {                                               \
+        iArg2 = *(--paW);                                                   \
+      }                                                                     \
+      *(paW++) = C_DATUM_NULL;                                              \
+    }                                                                       \
+    else {                                                                  \
+      iInCount = *(--paW);                                                  \
+      while(iInCount--) {                                                   \
+        iArg2 = *(--paW);                                                   \
+        if (iArg1 == iArg2) {                                               \
+           bFilterResult = 1;                                               \
+           break;                                                           \
+        }                                                                   \
+      }                                                                     \
+      while(iInCount-- > 0) {                                               \
+        iArg2 = *(--paW);                                                   \
+      }                                                                     \
+      *(paW++) = bFilterResult;                                             \
+    }                                                                       \
+  }
+
+#define _INX_TMETME(eErrorCode)                                             \
+  {                                                                         \
+    bFilterResult = 0;                                                      \
+    iArg1 = *(--paW);                                                       \
+    if (eErrorCode != EC_NONE ||                                            \
+        iArg1 == C_DATUM_NULL) {                                            \
+      iInCount = *(--paW);                                                  \
+      while(iInCount-- > 0) {                                               \
+        iArg2 = *(--paW);                                                   \
+      }                                                                     \
+      *(paW++) = C_DATUM_NULL;                                              \
+    }                                                                       \
+    else {                                                                  \
+      iInCount = *(--paW);                                                  \
+      while(iInCount--) {                                                   \
+        iArg2 = *(--paW);                                                   \
+        if (iArg1 == iArg2) {                                               \
+           bFilterResult = 1;                                               \
+           break;                                                           \
+        }                                                                   \
+      }                                                                     \
+      while(iInCount-- > 0) {                                               \
+        iArg2 = *(--paW);                                                   \
+      }                                                                     \
+      *(paW++) = bFilterResult;                                             \
+    }                                                                       \
+  }
+
+#define _INX_TSPTSP(eErrorCode)                                             \
+  {                                                                         \
+    bFilterResult = 0;                                                      \
+    iArg1 = *(--paW);                                                       \
+    if (eErrorCode != EC_NONE ||                                            \
+        iArg1 == C_DATUM_NULL) {                                            \
+      iInCount = *(--paW);                                                  \
       while(iInCount-- > 0) {                                               \
         iArg2 = *(--paW);                                                   \
       }                                                                     \
@@ -600,6 +694,10 @@
     ivlArg1.m_iAsI8 = *(--paW);                                             \
     if (eErrorCode != EC_NONE ||                                            \
         ivlArg1.m_iAsI8 == C_DATUM_NULL) {                                    \
+      iInCount = *(--paW);                                                  \
+      while(iInCount-- > 0) {                                               \
+        iArg2 = *(--paW);                                                   \
+      }                                                                     \
       *(paW++) = 0;                                                         \
     }                                                                       \
     else {                                                                  \
@@ -627,6 +725,10 @@
     ivlArg1.m_iAsI8 = *(--paW);                                             \
     if (eErrorCode != EC_NONE ||                                            \
         ivlArg1.m_iAsI8 == C_DATUM_NULL) {                                  \
+      iInCount = *(--paW);                                                  \
+      while(iInCount-- > 0) {                                               \
+        iArg2 = *(--paW);                                                   \
+      }                                                                     \
       *(paW++) = 0;                                                         \
     }                                                                       \
     else {                                                                  \
@@ -656,6 +758,10 @@
     iArg1 = *(--paW);                                                       \
     if (eErrorCode != EC_NONE ||                                            \
         iArg1 == C_DATUM_NULL) {                                            \
+      iInCount = *(--paW);                                                  \
+      while(iInCount-- > 0) {                                               \
+        iArg2 = *(--paW);                                                   \
+      }                                                                     \
       *(paW++) = C_DATUM_NULL;                                              \
     }                                                                       \
     else {                                                                  \
