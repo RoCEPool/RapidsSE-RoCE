@@ -1,0 +1,94 @@
+/*----------------------------------------------------------------------------*/
+/* joinPrune.test -- an index join skips the columns no operator reads        */
+/*----------------------------------------------------------------------------*/
+
+// An index (or cross) join inflates the columns of the joined table into its
+// row; a column that no code of the stage names is now skipped instead of
+// inflated (CombinedSrc::vPruneInflate), as DuckDB reads only the columns a
+// query uses. These queries check a cross join with a scalar sub-query (TPC-H
+// Q15 style), a joined column before skipped ones, and the last column of the
+// joined table after skipped strings.
+// The rows were computed with SQLite from DATA/TPCH/lineitem10k.csv,
+// supplier_2k.tbl and nation.tbl.
+
+create table ${testName2}_lineitem (
+  L_ORDERKEY      INTEGER       NOT NULL,
+  L_PARTKEY       INTEGER       NOT NULL,
+  L_SUPPKEY       INTEGER       NOT NULL,
+  L_LINENUMBER    INTEGER       NOT NULL,
+  L_QUANTITY      DECIMAL(15,2) NOT NULL,
+  L_EXTENDEDPRICE DECIMAL(15,2) NOT NULL,
+  L_DISCOUNT      DECIMAL(15,2) NOT NULL,
+  L_TAX           DECIMAL(15,2) NOT NULL,
+  L_RETURNFLAG    CHAR(1)       NOT NULL,
+  L_LINESTATUS    CHAR(1)       NOT NULL,
+  L_SHIPDATE      DATE          NOT NULL,
+  L_COMMITDATE    DATE          NOT NULL,
+  L_RECEIPTDATE   DATE          NOT NULL,
+  L_SHIPINSTRUCT  CHAR(25)      NOT NULL,
+  L_SHIPMODE      CHAR(10)      NOT NULL,
+  L_COMMENT       VARCHAR(44)   NOT NULL
+);
+success
+create index ${testName2}_IxL_ORDERKEY on ${testName2}_lineitem (L_ORDERKEY);
+affected: 0
+load ${testName2}_lineitem "../DATA/TPCH/lineitem10k.csv";
+success
+
+create table ${testName2}_nation (
+  N_NATIONKEY  INTEGER      NOT NULL,
+  N_NAME       CHAR(25)     NOT NULL,
+  N_REGIONKEY  INTEGER      NOT NULL,
+  N_COMMENT    VARCHAR(152)
+);
+success
+create index ${testName2}_IxN_NATIONKEY on ${testName2}_nation (N_NATIONKEY);
+affected: 0
+create index ${testName2}_IxN_REGIONKEY on ${testName2}_nation (N_REGIONKEY);
+affected: 0
+load ${testName2}_nation "../DATA/TPCH/nation.tbl" <field_delimiter> = "|";
+success
+create table ${testName2}_supplier (
+  S_SUPPKEY    INTEGER       NOT NULL,
+  S_NAME       CHAR(25)      NOT NULL,
+  S_ADDRESS    VARCHAR(40)   NOT NULL,
+  S_NATIONKEY  INTEGER       NOT NULL,
+  S_PHONE      CHAR(15)      NOT NULL,
+  S_ACCTBAL    DECIMAL(15,2) NOT NULL,
+  S_COMMENT    VARCHAR(101)  NOT NULL
+);
+success
+create index ${testName2}_IxS_SUPPKEY on ${testName2}_supplier (S_SUPPKEY);
+affected: 0
+load ${testName2}_supplier "../DATA/TPCH/supplier_2k.tbl" <field_delimiter> = "|";
+success
+
+create index ${testName2}_IxL_SUPPKEY on ${testName2}_lineitem (L_SUPPKEY);
+affected: 0
+create index ${testName2}_IxS_NATIONKEY on ${testName2}_supplier (S_NATIONKEY);
+affected: 0
+
+// a cross join with a scalar sub-query over a common table expression
+with r (supplier_no, total_revenue) as (
+  select l_suppkey, sum(l_extendedprice * (1 - l_discount)) from ${testName2}_lineitem
+   where l_shipdate >= DATE '1996-01-01' and l_shipdate < DATE '1996-04-01' group by l_suppkey)
+select s_suppkey, s_name, total_revenue from ${testName2}_supplier, r
+ where s_suppkey = supplier_no and total_revenue = (select max(total_revenue) from r)
+ order by s_suppkey;
+ordered rows:
+  (466, 'Supplier#000000466', 97245.1200)
+
+// a joined column before skipped ones
+select s_suppkey, n_name from ${testName2}_supplier, ${testName2}_nation
+ where s_nationkey = n_nationkey and s_suppkey < 4 order by s_suppkey;
+ordered rows:
+  (1, 'PERU')
+  (2, 'ETHIOPIA')
+  (3, 'ARGENTINA')
+
+// the last column of the joined table, after skipped strings
+select l_linenumber, s_comment from ${testName2}_lineitem, ${testName2}_supplier
+ where l_suppkey = s_suppkey and l_orderkey = 1 order by l_linenumber;
+ordered rows:
+  (5, 'ounts believe around the f')
+  (6, 'quickly unusual instructions would wake carefully. slyly ironic request')

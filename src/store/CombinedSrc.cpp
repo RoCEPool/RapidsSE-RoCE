@@ -5,6 +5,7 @@
 
 #include <string>
 #include <cstring>
+#include <vector>
 #include "BASE.h"
 
 #include "Stream.hpp"
@@ -95,6 +96,18 @@ void CombinedSrc::vSynthesizeCode(Stencil* pStencil, bool bFirstStage, bool bLas
 	bool bHasOrdAgg = false;
   char* azPruneStart = nullptr;   // start of a table-scan inflate whose columns may be pruned
   i8 iPruneEnd = -1;              // sketch that ends the consumers of the inflated row
+  std::vector<char*> vJoinPrune;  // starts of index joins whose unread columns may be skipped
+  const bool bJoinPrune = ! AM::JOB::bHasTag("<optimiser_off_join_prune>"_Stz) &&
+                          ! AM::JOB::bHasTag("<optimiser_off_all>"_Stz);
+  // An index (or cross) join inflates the columns of the joined table into its
+  // row; every later reader in the handler names the cells it reads, so a
+  // column no code of the handler names is skipped (see vPruneInflate). This
+  // runs when the handler is complete, just before its footer.
+  auto vJoinPruneFlush = [this, &vJoinPrune]() {
+    for (char* azStart : vJoinPrune)
+      vPruneInflate(azStart, m_azCodeCrs);
+    vJoinPrune.clear();
+  };
 	s32 sLabel_ordAgg;
 
   eHK ePreviousHandler = HK_NONE;
@@ -200,6 +213,7 @@ void CombinedSrc::vSynthesizeCode(Stencil* pStencil, bool bFirstStage, bool bLas
         // - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
         // end previous handler (by appending its footer)
 				pOpSketch->m_sLabelOrdAgg = sLabel_ordAgg;
+        vJoinPruneFlush();
         vAppendFunctionFooter(pOpSketch, ePreviousHandler, bHasIndexInflate, bHasOrdAgg);
 
         // - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -495,6 +509,8 @@ void CombinedSrc::vSynthesizeCode(Stencil* pStencil, bool bFirstStage, bool bLas
       case SK_INDEXJOIN:
 
         bHasIndexInflate = true;
+        if (bJoinPrune)
+          vJoinPrune.push_back(m_azCodeCrs);
 
         // - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
         // open the indexJoin code fragments file
@@ -779,7 +795,8 @@ void CombinedSrc::vSynthesizeCode(Stencil* pStencil, bool bFirstStage, bool bLas
 
         // - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
         // end previous handler function
-				vAppendFunctionFooter(pOpSketch, ePreviousHandler, bHasIndexInflate, bHasOrdAgg);
+				vJoinPruneFlush();
+        vAppendFunctionFooter(pOpSketch, ePreviousHandler, bHasIndexInflate, bHasOrdAgg);
 
         // - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
         // begin new StreamDef handler function
@@ -941,6 +958,7 @@ void CombinedSrc::vSynthesizeCode(Stencil* pStencil, bool bFirstStage, bool bLas
   // - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
   // end StreamDef handler
   RASSERT(eCurrentHandler == HK_STREAMDEF);
+  vJoinPruneFlush();
   vAppendFunctionFooter(nullptr, eCurrentHandler, bHasIndexInflate);
 
   // - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
