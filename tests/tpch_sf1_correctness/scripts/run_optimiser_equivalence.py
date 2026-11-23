@@ -18,7 +18,7 @@ from decimal import Decimal
 import common as c
 import prepare_sf1, run_reference, run_rapidsse as se
 
-SWITCHES = ['all', 'join_rows', 'join_dp', 'local_gbyagg', 'corr_semijoin', 'eq_closure', 'scan_to_indexscan', 'cut_sort', 'early_projection', 'reduce_gbyagg_key', 'static_calc',
+SWITCHES = ['all', 'join_rows', 'join_dp', 'local_gbyagg', 'corr_semijoin', 'eq_closure', 'const_fold', 'scan_project', 'scan_to_indexscan', 'cut_sort', 'early_projection', 'reduce_gbyagg_key', 'static_calc',
             'max_to_top', 'aggreg_to_sort_ordagg', 'sortdesc_limit_to_top', 'sort_limit_all_levels',
             'early_filter', 'late_projection', 'duplicate_filter']
 

@@ -1,0 +1,72 @@
+/*----------------------------------------------------------------------------*/
+/* constFold.test -- date +/- interval constants; projection in a scan stage  */
+/*----------------------------------------------------------------------------*/
+
+// The SQL compiler computes DATE literal +/- INTERVAL literal once, with the
+// arithmetic of the run-time macros, instead of for every row (ConstFold.cpp;
+// TPC-H Q1, Q5). A projection behind the filter of a scan now stays in the
+// stage of the scan (Card_Stage.cpp), which no longer copies every column of
+// the table out (TPC-H Q1, Q12). These queries check the folded values: a day
+// interval (TIMESTAMP), a year and a month interval (DATE), the end of a month
+// (January 31 plus one month is February 29 in 1996), a negative one, and a
+// filter and projection over a scan.
+// The expected rows were computed from DATA/TPCH/lineitem10k.csv with SQLite,
+// independently of RapidsSE.
+
+create table ${testName2}_lineitem (
+  L_ORDERKEY      INTEGER       NOT NULL,
+  L_PARTKEY       INTEGER       NOT NULL,
+  L_SUPPKEY       INTEGER       NOT NULL,
+  L_LINENUMBER    INTEGER       NOT NULL,
+  L_QUANTITY      DECIMAL(15,2) NOT NULL,
+  L_EXTENDEDPRICE DECIMAL(15,2) NOT NULL,
+  L_DISCOUNT      DECIMAL(15,2) NOT NULL,
+  L_TAX           DECIMAL(15,2) NOT NULL,
+  L_RETURNFLAG    CHAR(1)       NOT NULL,
+  L_LINESTATUS    CHAR(1)       NOT NULL,
+  L_SHIPDATE      DATE          NOT NULL,
+  L_COMMITDATE    DATE          NOT NULL,
+  L_RECEIPTDATE   DATE          NOT NULL,
+  L_SHIPINSTRUCT  CHAR(25)      NOT NULL,
+  L_SHIPMODE      CHAR(10)      NOT NULL,
+  L_COMMENT       VARCHAR(44)   NOT NULL
+);
+success
+create index ${testName2}_IxL_ORDERKEY on ${testName2}_lineitem (L_ORDERKEY);
+affected: 0
+create index ${testName2}_IxL_SUPPKEY on ${testName2}_lineitem (L_SUPPKEY);
+affected: 0
+load ${testName2}_lineitem "../DATA/TPCH/lineitem10k.csv";
+success
+
+// TPC-H Q1
+select l_returnflag, l_linestatus, count(*), sum(l_quantity), sum(l_extendedprice)
+  from ${testName2}_lineitem where l_shipdate <= date '1998-12-01' - interval '90' day
+ group by l_returnflag, l_linestatus order by l_returnflag, l_linestatus;
+ordered rows:
+  ('A', 'F', 2434, 61294.00, 92372128.47)
+  ('N', 'F', 70, 1852.00, 2839903.89)
+  ('N', 'O', 4927, 126700.00, 190259047.20)
+  ('R', 'F', 2415, 62210.00, 92360718.95)
+
+// a year interval
+select count(*) from ${testName2}_lineitem
+ where l_shipdate >= date '1996-01-01' and l_shipdate < date '1996-01-01' + interval '1' year;
+rows: (1496)
+
+// the end of the month
+select count(*) from ${testName2}_lineitem where l_shipdate = date '1996-01-31' + interval '1' month;
+rows: (8)
+
+// a month subtracted
+select count(*) from ${testName2}_lineitem where l_shipdate > date '1995-03-15' - interval '1' month;
+rows: (5567)
+
+// filter and projection over the scan
+select l_shipmode, count(*), sum(l_quantity) from ${testName2}_lineitem
+ where l_receiptdate >= date '1994-01-01' and l_receiptdate < date '1994-01-01' + interval '1' year
+   and l_shipmode in ('MAIL', 'SHIP')
+ group by l_shipmode order by l_shipmode;
+ordered rows:
+  ('MAIL', 200, 4851.00)
+  ('SHIP', 217, 5812.00)

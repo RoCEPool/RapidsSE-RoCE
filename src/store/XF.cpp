@@ -145,7 +145,8 @@ void XF::vXF(CardIter* pCI)
 // and, outside phase 3: join_rows (join ordering by estimated rows and the
 // index join on the index with the fewest rows per key: Card_StreamPer,
 // Card_IndexList), join_dp (Card_StreamSet.cpp), corr_semijoin (SQL compiler,
-// CorrSemiJoin.cpp) and eq_closure (SQL compiler, EqClosure.cpp)
+// CorrSemiJoin.cpp), eq_closure (SQL compiler, EqClosure.cpp), const_fold
+// (SQL compiler, ConstFold.cpp) and scan_project (Card_Stage.cpp)
 static bool bOptimisationOff(const char* szName)
 {
   if (AM::JOB::bHasTag("<optimiser_off_all>"_Stz))
