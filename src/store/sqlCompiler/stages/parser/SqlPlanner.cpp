@@ -933,7 +933,8 @@ antlrcpp::Any SqlPlanner::visitHint(sqlParser::HintContext *pCtx)
 /* Select node (for each select of each query/subquery)                       */
 /* Contains WITH / ORDER BY / LIMIT                                           */
 /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -*/
-antlrcpp::Any SqlPlanner::visitSelectQuery(sqlParser::SelectQueryContext *pCtx)
+template <class Ctx>
+antlrcpp::Any SqlPlanner::xPlanSelect(Ctx *pCtx, sqlParser::SelectExprContext *pSelectExpr)
 {
   // We don't call visitChildren() in this function because we need to control
   // the order of execution. Specifically, we need to place a SelectMarker on
@@ -952,7 +953,7 @@ antlrcpp::Any SqlPlanner::visitSelectQuery(sqlParser::SelectQueryContext *pCtx)
 
   // Get the statement string for this part of the query. Ignore any WITH
   // clauses at the start though.
-  antlr4::misc::Interval interval(pCtx->selectExpr()->start->getStartIndex(), pCtx->stop->getStopIndex());
+  antlr4::misc::Interval interval(pSelectExpr->start->getStartIndex(), pCtx->stop->getStopIndex());
   std::string queryStlStr = pCtx->start->getInputStream()->getText(interval);
 
   // Create the select marker, but don't put it on the statement stack just yet.
@@ -974,7 +975,7 @@ antlrcpp::Any SqlPlanner::visitSelectQuery(sqlParser::SelectQueryContext *pCtx)
 
 
   try {
-    pCtx->selectExpr()->accept(this);
+    pSelectExpr->accept(this);
 
   } catch (SqlException& e) {
 
@@ -1089,6 +1090,11 @@ antlrcpp::Any SqlPlanner::visitSelectQuery(sqlParser::SelectQueryContext *pCtx)
   return nullptr;
 }
 
+antlrcpp::Any SqlPlanner::visitSelectQuery(sqlParser::SelectQueryContext *pCtx)
+{
+  return xPlanSelect(pCtx, pCtx->selectExpr());
+}
+
 /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -*/
 /* WITH query item (for each table subquery)                                  */
 /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -*/
@@ -1166,6 +1172,10 @@ antlrcpp::Any SqlPlanner::visitWithQuery(sqlParser::WithQueryContext *pCtx)
 /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -*/
 antlrcpp::Any SqlPlanner::visitSetQuery(sqlParser::SetQueryContext *pCtx)
 {
+  // A plain SELECT (the setExpr is one selectExpr, no set operation and no
+  // parentheses) is planned as before, when it was parsed as a selectQuery.
+  if (pCtx->setExpr()->selectExpr() && ! pCtx->setExpr()->op)
+    return xPlanSelect(pCtx, pCtx->setExpr()->selectExpr());
 
   // We don't call visitChildren() in this function because we need to control
   // the order of execution.

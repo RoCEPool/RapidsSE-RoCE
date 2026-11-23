@@ -1,5 +1,5 @@
 
-// Generated from /Users/craig/repos/rapidsse/thirdparty/antlr/sql.g4 by ANTLR 4.13.1
+// Generated from /home/claude/main/thirdparty/antlr/sql.g4 by ANTLR 4.13.1
 
 
 #include "sqlVisitor.h"

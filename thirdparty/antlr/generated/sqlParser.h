@@ -1,5 +1,5 @@
 
-// Generated from /Users/craig/repos/rapidsse/thirdparty/antlr/sql.g4 by ANTLR 4.13.1
+// Generated from /home/claude/main/thirdparty/antlr/sql.g4 by ANTLR 4.13.1
 
 #pragma once
 
@@ -443,7 +443,6 @@ public:
   public:
     QueryContext(antlr4::ParserRuleContext *parent, size_t invokingState);
     virtual size_t getRuleIndex() const override;
-    SelectQueryContext *selectQuery();
     SetQueryContext *setQuery();
     std::vector<QueryHintContext *> queryHint();
     QueryHintContext* queryHint(size_t i);
@@ -1263,7 +1262,6 @@ public:
     antlr4::tree::TerminalNode *INSERT();
     TableReferenceContext *tableReference();
     ValuesExprContext *valuesExpr();
-    SelectQueryContext *selectQuery();
     SetQueryContext *setQuery();
     antlr4::tree::TerminalNode *WITH();
     std::vector<WithQueryContext *> withQuery();
@@ -2105,7 +2103,6 @@ public:
     SelectOrValuesContext *selectOrValues();
     std::vector<QueryHintContext *> queryHint();
     QueryHintContext* queryHint(size_t i);
-    SelectQueryContext *selectQuery();
     ValuesExprContext *valuesExpr();
     SetQueryContext *setQuery();
 

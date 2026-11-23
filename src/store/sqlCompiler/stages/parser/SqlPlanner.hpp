@@ -98,6 +98,9 @@ namespace Parser
     antlrcpp::Any visitQueryHint(sqlParser::QueryHintContext *pCtx)               override;
     antlrcpp::Any visitHint(sqlParser::HintContext *pCtx)                         override;
     antlrcpp::Any visitSelectQuery(sqlParser::SelectQueryContext *pCtx)           override;
+    // the plan of a plain SELECT (selectQuery, or a setQuery without a set operation)
+    template <class Ctx>
+    antlrcpp::Any xPlanSelect(Ctx *pCtx, sqlParser::SelectExprContext *pSelectExpr);
     antlrcpp::Any visitWithQuery(sqlParser::WithQueryContext *pCtx)               override;
     antlrcpp::Any visitSetQuery(sqlParser::SetQueryContext *pCtx)                 override;
     antlrcpp::Any visitSelectExpr(sqlParser::SelectExprContext *pCtx)             override;
