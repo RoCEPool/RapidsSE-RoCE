@@ -29,6 +29,11 @@
 #include "Table.hpp"
 
 #include "ClangDynamic.h"
+#include <algorithm>
+#include <vector>
+#include <stdlib.h>
+extern "C" void* aExtern_EntBufferNextEntry(void** ppEntBuffer, void* aPrevEntry);
+extern "C" void vExtern_GbyHashFree(void* aIndexInfo);
 #include "Op.hpp"
 #include "Stage.hpp"
 #include "Stream.hpp"
@@ -283,6 +288,7 @@ extern "C" void vExtern_IndexNew(void* aDynamic, i8 nNumCols, ColumnInfo* pColum
 
 	pDynamicT->m_xIndexInfoPL[0].m_aIndexTree = pIndexTree;
 	pDynamicT->m_xIndexInfoPL[0].m_aEntLast = nullptr;   // no previous row yet
+	vExtern_GbyHashFree(&pDynamicT->m_xIndexInfoPL[0]);
 }
 
 extern "C" void vExtern_IndexFind(void* aIndexInfo, char* aTableName, char* aIndexName) {
@@ -1681,3 +1687,156 @@ __aFooterFunction(IndexTree);
 
 
 
+
+/*----------------------------------------------------------------------------*/
+/* group by on one integer column in a hash table                             */
+/*----------------------------------------------------------------------------*/
+// A GROUP BY kept its groups in the payload index tree: a find for every row
+// and an insert for every new group, with the splits and copies of the tree
+// (TPC-H Q18: 1.5M groups of l_orderkey). DuckDB aggregates into a hash table.
+// For a key of one integer column (KE_INT, ascending) the groups are kept in an
+// open-addressing hash table here. Each group is a block laid out as an entry
+// of the tree (struct Ent_int, 8 bytes, the payload), so the generated code
+// reads the key and the payload at the same offsets. The groups are sorted by
+// key when they are traversed (vEosPLIntKeyTraversal), so they leave in the
+// order the tree gave them.
+namespace
+{
+  struct GbyHash
+  {
+    i8                 nBlockBytes = 0;
+    std::vector<char*> xChunks;       // blocks, allotted in chunks
+    char*              pFree = nullptr;
+    i8                 nFree = 0;
+    std::vector<i8>    aiKey;         // open addressing: key per slot
+    std::vector<char*> apBlock;       // block per slot (null: empty)
+    u8                 uMask = 0;
+    i8                 nUsed = 0;
+    std::vector<char*> xSorted;       // the blocks in key order (traversal)
+    size_t             iNext = 0;
+    bool               bSorted = false;
+
+    ~GbyHash() { for (char* p : xChunks) free(p); }
+
+    static u8 uHash(i8 iKey)
+    {
+      u8 u = (u8) iKey;
+      u ^= u >> 33; u *= 0xff51afd7ed558ccdULL; u ^= u >> 33;
+      return u;
+    }
+
+    void vGrow(void)
+    {
+      std::vector<i8> aiOldKey;
+      std::vector<char*> apOld;
+      aiOldKey.swap(aiKey);
+      apOld.swap(apBlock);
+      u8 nSlots = apOld.empty() ? 1024 : apOld.size() * 2;
+      aiKey.assign(nSlots, 0);
+      apBlock.assign(nSlots, nullptr);
+      uMask = nSlots - 1;
+      for (size_t i = 0; i < apOld.size(); i++) {
+        if (! apOld[i])
+          continue;
+        u8 u = uHash(aiOldKey[i]) & uMask;
+        while (apBlock[u])
+          u = (u + 1) & uMask;
+        aiKey[u] = aiOldKey[i];
+        apBlock[u] = apOld[i];
+      }
+    }
+
+    char* pNewBlock(void)
+    {
+      if (nFree < nBlockBytes) {
+        i8 nChunk = nBlockBytes * 4096;
+        pFree = (char*) calloc(1, nChunk);
+        xChunks.push_back(pFree);
+        nFree = nChunk;
+      }
+      char* p = pFree;
+      pFree += nBlockBytes;
+      nFree -= nBlockBytes;
+      return p;
+    }
+
+    char* pFindInsert(i8 iKey, bool* pbNew)
+    {
+      if ((u8)(nUsed + 1) * 2 > apBlock.size())
+        vGrow();
+      u8 u = uHash(iKey) & uMask;
+      while (apBlock[u]) {
+        if (aiKey[u] == iKey) {
+          *pbNew = false;
+          return apBlock[u];
+        }
+        u = (u + 1) & uMask;
+      }
+      char* p = pNewBlock();
+      ((Ent_int*) p)->m_iIntElm0 = iKey;
+      aiKey[u] = iKey;
+      apBlock[u] = p;
+      nUsed++;
+      bSorted = false;
+      *pbNew = true;
+      return p;
+    }
+  };
+}
+
+extern "C" void vExtern_GbyHashFree(void* aIndexInfo)
+{
+  IndexInfo* pIndexInfo = (IndexInfo*) aIndexInfo;
+  if (pIndexInfo->m_aGbyHash)
+    delete (GbyHash*) pIndexInfo->m_aGbyHash;
+  pIndexInfo->m_aGbyHash = nullptr;
+}
+
+// the group of the key (a block laid out as a tree entry); *pbNew when it is
+// new, and then its payload is to be initialised
+extern "C" void* aExtern_GbyHashFindInt(void* aIndexInfo, i8 iKey, i8 nPayloadBytes, bool* pbNew)
+{
+  IndexInfo* pIndexInfo = (IndexInfo*) aIndexInfo;
+  GbyHash* pHash = (GbyHash*) pIndexInfo->m_aGbyHash;
+  if (! pHash) {
+    pHash = new GbyHash;
+    pHash->nBlockBytes = ((sizeof(Ent_int) + 8 + nPayloadBytes + 7) / 8) * 8;
+    pIndexInfo->m_aGbyHash = pHash;
+  }
+  return pHash->pFindInsert(iKey, pbNew);
+}
+
+// first entry of the payload: the first group in key order, or the tree's
+extern "C" void* aExtern_PLBegin(void* aIndexInfo)
+{
+  IndexInfo* pIndexInfo = (IndexInfo*) aIndexInfo;
+  GbyHash* pHash = (GbyHash*) pIndexInfo->m_aGbyHash;
+  if (! pHash)
+    return aExtern_IndexTreeBegin(pIndexInfo->m_aIndexTree, &pIndexInfo->m_aEntBuffer);
+  if (! pHash->bSorted) {
+    pHash->xSorted.clear();
+    pHash->xSorted.reserve(pHash->nUsed);
+    for (char* p : pHash->apBlock)
+      if (p)
+        pHash->xSorted.push_back(p);
+    std::sort(pHash->xSorted.begin(), pHash->xSorted.end(), [](char* a, char* b) {
+      return ((Ent_int*) a)->m_iIntElm0 < ((Ent_int*) b)->m_iIntElm0; });
+    pHash->bSorted = true;
+  }
+  pHash->iNext = 0;
+  if (pHash->xSorted.empty())
+    return nullptr;
+  return pHash->xSorted[pHash->iNext++];
+}
+
+// next entry of the payload
+extern "C" void* aExtern_PLNext(void* aIndexInfo, void* aPrevEntry)
+{
+  IndexInfo* pIndexInfo = (IndexInfo*) aIndexInfo;
+  GbyHash* pHash = (GbyHash*) pIndexInfo->m_aGbyHash;
+  if (! pHash)
+    return aExtern_EntBufferNextEntry(&pIndexInfo->m_aEntBuffer, aPrevEntry);
+  if (pHash->iNext >= pHash->xSorted.size())
+    return nullptr;
+  return pHash->xSorted[pHash->iNext++];
+}

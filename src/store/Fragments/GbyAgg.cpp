@@ -98,6 +98,37 @@ void vGbyAggFindIntKeyAsc(Dynamic_T* aDynamicT) {
 }
 
 /*----------------------------------------------------------------------------*/
+/*-- vGbyAggHashIntKey -------------------------------------------------------*/
+/*----------------------------------------------------------------------------*/
+// The group of the row in a hash table (IndexTree.cpp, GbyHash), as DuckDB
+// aggregates, instead of a find and an insert in the payload tree. A new
+// group is laid out as a tree entry and its payload is initialised below.
+// One integer key only (KE_INT, ascending).
+// function-vGbyAggHashIntKey
+void vGbyAggHashIntKey(Dynamic_T* aDynamicT) {
+
+  i8 CURRENT_DUP_OP;
+  void *aEntFound;
+
+  // marker-start
+  // - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+  // find or add the group of the key
+  bool bNewGroup = false;
+#ifdef WITH_CLANG
+  aEntFound = aExtern_GbyHashFindInt(&aDynamicT->m_xIndexInfoPL[CURRENT_DUP_OP],
+                                     *(i8*)aDynamicT->m_xIndexInfoPL[CURRENT_DUP_OP].m_aEntKey,
+                                     __PAYLOADBYTES__, &bNewGroup);
+#endif
+  if (bNewGroup) {
+    aDynamicT->m_iRowsProcessed++;
+    aDynamicT->m_aiPayload = (i8 *) ((char *) aEntFound
+                                     + sizeof(struct Ent_int)
+                                     + 8);
+    // marker-end
+  }
+}
+
+/*----------------------------------------------------------------------------*/
 /*-- vGbyAggFindKeyAscDsc ------------------------------------------------------*/
 /*------------------------------------------------------------------------------*/
 // function-vGbyAggFindKeyAscDsc

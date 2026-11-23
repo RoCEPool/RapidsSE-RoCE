@@ -1,0 +1,92 @@
+/*----------------------------------------------------------------------------*/
+/* hashGbyAgg.test -- group by on one integer column in a hash table          */
+/*----------------------------------------------------------------------------*/
+
+// A GROUP BY on one integer column keeps its groups in a hash table instead
+// of the payload index tree (Fragments/GbyAgg.cpp, IndexTree.cpp GbyHash), as
+// DuckDB aggregates. The groups leave sorted by key, as they left the tree, so
+// an ORDER BY on the key that the optimiser leaves out stays right. These
+// queries check: more groups than the first table holds (it grows), COUNT,
+// SUM, MIN, MAX, a DATE and an ORDER BY, and a NULL key (it sorts first,
+// as in the tree).
+// The lineitem rows were computed from DATA/TPCH/lineitem10k.csv with SQLite;
+// the NULL key rows were read off DATA/Transliterate/date.csv.
+
+create table ${testName2}_lineitem (
+  L_ORDERKEY      INTEGER       NOT NULL,
+  L_PARTKEY       INTEGER       NOT NULL,
+  L_SUPPKEY       INTEGER       NOT NULL,
+  L_LINENUMBER    INTEGER       NOT NULL,
+  L_QUANTITY      DECIMAL(15,2) NOT NULL,
+  L_EXTENDEDPRICE DECIMAL(15,2) NOT NULL,
+  L_DISCOUNT      DECIMAL(15,2) NOT NULL,
+  L_TAX           DECIMAL(15,2) NOT NULL,
+  L_RETURNFLAG    CHAR(1)       NOT NULL,
+  L_LINESTATUS    CHAR(1)       NOT NULL,
+  L_SHIPDATE      DATE          NOT NULL,
+  L_COMMITDATE    DATE          NOT NULL,
+  L_RECEIPTDATE   DATE          NOT NULL,
+  L_SHIPINSTRUCT  CHAR(25)      NOT NULL,
+  L_SHIPMODE      CHAR(10)      NOT NULL,
+  L_COMMENT       VARCHAR(44)   NOT NULL
+);
+success
+create index ${testName2}_IxL_ORDERKEY on ${testName2}_lineitem (L_ORDERKEY);
+affected: 0
+create index ${testName2}_IxL_SUPPKEY on ${testName2}_lineitem (L_SUPPKEY);
+affected: 0
+load ${testName2}_lineitem "../DATA/TPCH/lineitem10k.csv";
+success
+
+create table ${testName2}_datums (
+int_col0   INTEGER,
+int_col1   INTEGER,
+bol_col2   BOOLEAN,
+bol_col3   BOOLEAN,
+dte_col4   DATE,
+dte_col5   DATE,
+dec_col6   DECIMAL(19,2),
+dec_col7   DECIMAL(19,2),
+flt_col8   FLOAT,
+flt_col9   FLOAT,
+tme_col10  TIME,
+tme_col11  TIME,
+tsp_col12  TIMESTAMP,
+tsp_col13  TIMESTAMP,
+vch_col14  VARCHAR(32),
+vch_col15  VARCHAR(32)
+);
+success
+load ${testName2}_datums "../DATA/Transliterate/date.csv" ;
+success
+
+// 9754 groups
+select count(*), sum(c), max(c) from (select l_partkey, count(*) c from ${testName2}_lineitem group by l_partkey);
+rows: (9754, 10000, 3)
+
+select l_partkey, count(*), sum(l_quantity) from ${testName2}_lineitem group by l_partkey order by l_partkey limit 3;
+ordered rows:
+  (20, 1, 5.00)
+  (51, 1, 33.00)
+  (53, 1, 34.00)
+
+select l_suppkey, min(l_shipdate), max(l_quantity) from ${testName2}_lineitem where l_suppkey < 4
+ group by l_suppkey order by l_suppkey;
+ordered rows:
+  (1, DATE '1994-08-13', 38.00)
+  (3, DATE '1994-07-09', 12.00)
+
+// a NULL key
+select int_col1, count(*), min(int_col0) from ${testName2}_datums group by int_col1 order by int_col1;
+ordered rows:
+  (NULL, 1, 3)
+  (0, 1, 11)
+  (1000, 1, 1)
+  (2000, 1, 2)
+  (4000, 1, 4)
+  (5000, 1, 5)
+  (6000, 1, 6)
+  (7000, 1, 7)
+  (8000, 1, 8)
+  (9000, 1, 9)
+  (10000, 1, 10)

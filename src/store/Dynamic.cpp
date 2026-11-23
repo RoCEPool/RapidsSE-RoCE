@@ -5,6 +5,7 @@
 #include "BASE.h"
 
 #include "Dynamic.hpp"
+extern "C" void vExtern_GbyHashFree(void* aIndexInfo);
 #include "LogicUnit.hpp"
 
 //#include "IndexDef.hpp"
@@ -256,6 +257,8 @@ Dynamic::Dynamic(LogicUnit* pLogicUnit)
     m_xDynamicT.m_xIndexInfoPL[iIndex].m_aIndex = nullptr;
     m_xDynamicT.m_xIndexInfoPL[iIndex].m_aIndexTree = nullptr;
     m_xDynamicT.m_xIndexInfoPL[iIndex].m_aIndexDef = nullptr;
+    m_xDynamicT.m_xIndexInfoPL[iIndex].m_aEntLast = nullptr;
+    m_xDynamicT.m_xIndexInfoPL[iIndex].m_aGbyHash = nullptr;
     m_xDynamicT.m_xIndexInfoPL[iIndex].m_aEntWrk = (void *) &pLogicUnit->m_oEntWrkPL;
     m_xDynamicT.m_xIndexInfoPL[iIndex].m_aEntKey = ((EntWrk *) m_xDynamicT.m_xIndexInfoPL[iIndex].m_aEntWrk)->aKey();
     m_xDynamicT.m_xIndexInfoPL[iIndex].m_aEntBottom = nullptr;
@@ -330,6 +333,9 @@ Dynamic::~Dynamic(void) noexcept(false)
     IndexTree* pIndexTree = _pIndexTree(m_xDynamicT.m_xIndexInfoPL[0].m_aIndexTree);
     delete pIndexTree;
   }
+
+  for (i8 iIndex = 0; iIndex < C_MAX_DUP_OPS; iIndex++)
+    vExtern_GbyHashFree(&m_xDynamicT.m_xIndexInfoPL[iIndex]);
 
   if (m_xDynamicT.m_xIndexInfoPL[0].m_aIndexDef) {
     IndexDef* pIndexDef = _pIndexDef(m_xDynamicT.m_xIndexInfoPL[0].m_aIndexDef);

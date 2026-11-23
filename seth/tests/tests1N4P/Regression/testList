@@ -19,3 +19,4 @@ corrSemiJoin.test
 localGbyAgg.test
 eqClosure.test
 constFold.test
+hashGbyAgg.test

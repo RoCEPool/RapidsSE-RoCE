@@ -16,6 +16,7 @@
 #include "SN_Flt.hpp"
 #include "SN_Bcd.hpp"
 #include "CodeSynthUtils.hpp"
+#include "AM.hpp"
 
 /*----------------------------------------------------------------------------*/
 /*-- LifeCycle ---------------------------------------------------------------*/
@@ -280,6 +281,15 @@ void CombinedSrc::vSynthesizeCode(Stencil* pStencil, bool bFirstStage, bool bLas
 					vAppendCodeFragment(pOpSketch, "iGbyAggGenAscBegin"_Stz, pOperatorFile);
 					vGenerateExprCode(pOpSketch->m_pInitStack, "    "_Stz);
 					vAppendCodeFragment(pOpSketch, "iGbyAggGenAscEnd"_Stz, pOperatorFile);
+				}
+				else if ( ! pOpSketch->m_pIndexDef->bHasDescending() &&
+				          pOpSketch->m_pIndexDef->eKeyKind() == KE_INT &&
+				          ! AM::JOB::bHasTag("<optimiser_off_hash_gbyagg>"_Stz) &&
+				          ! AM::JOB::bHasTag("<optimiser_off_all>"_Stz)) {
+					// the groups in a hash table (Fragments/GbyAgg.cpp, IndexTree.cpp)
+					vAppendCodeFragment(pOpSketch, "vGbyAggHashIntKey"_Stz, pOperatorFile);
+					vGenerateExprCode(pOpSketch->m_pInitStack, "    "_Stz);
+					vAppendCodeFragment(pOpSketch, "iGbyAggIntKeyEnd"_Stz, pOperatorFile);
 				}
 				else {
 
