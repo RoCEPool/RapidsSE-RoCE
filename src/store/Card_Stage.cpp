@@ -178,6 +178,21 @@ void Card_Stage::vReinstate_stages_v0(CardIter* pCI)
     }
 
 
+    // A GROUP BY behind the project kept in a scan stage stays in that stage, as
+    // DuckDB aggregates in the pipeline of the scan: the scan no longer hands
+    // every row to the next stage through a tub (TPC-H Q1 handed on 5.9 million
+    // rows to make 4 groups). Job tag /optimiser_off_scan_gbyagg splits them.
+    if (CK_o_GBYAGG == e_main && bScanStage && bSawProjectOp && ! bSawAggOp &&
+        ! bSawIndexJoinOp && ! bSawSortOp &&
+        ! AM::JOB::bHasTag("<optimiser_off_scan_gbyagg>"_Stz) &&
+        ! AM::JOB::bHasTag("<optimiser_off_all>"_Stz)) {
+      bScanStage = false;
+      bSawAggOp = true;
+      bSawProjectOp = false;
+      bSawFilterOp = false;
+      continue;
+    }
+
     if ((CK_o_GBYAGG == e_main || CK_o_ORDAGG == e_main) &&
         (bSawAggOp || bSawIndexJoinOp || bSawProjectOp)) {
        vAddNext(pCI, p_main, i_Main,""_Stz);
