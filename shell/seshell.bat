@@ -1,2 +1,2 @@
 @echo off
-java -cp .;* com.rapidsdata.shell.RapidsShell %*
+java -XX:+UseSerialGC -XX:TieredStopAtLevel=1 -cp .;* com.rapidsdata.shell.RapidsShell %*

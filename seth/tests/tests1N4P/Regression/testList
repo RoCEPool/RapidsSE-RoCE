@@ -17,3 +17,4 @@ avgOverAggregate.test
 orFactor.test
 corrSemiJoin.test
 localGbyAgg.test
+eqClosure.test

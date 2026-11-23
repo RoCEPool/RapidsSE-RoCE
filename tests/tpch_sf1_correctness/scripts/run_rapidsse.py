@@ -21,11 +21,14 @@ PORT = os.environ.get('TPCH_SE_PORT', '9123')
 PARTITIONS = int(os.environ.get('TPCH_SE_PARTITIONS', '2'))   # partitions of the one node
 THREADS = int(os.environ.get('TPCH_SE_THREADS', '2'))
 ENGINE_LOG = os.path.join(c.REPO, 'se.log')
+# the JVM options of shell/seshell.sh (a short-lived client: serial collector,
+# first JIT compiler only)
+JVM_OPTIONS = os.environ.get('TPCH_SE_JVM_OPTIONS', '-XX:+UseSerialGC -XX:TieredStopAtLevel=1').split()
 
 
 def shell(sql, timeout):
     t0 = time.time()
-    p = subprocess.run(['timeout', str(timeout), 'java', '-cp', os.path.join(c.REPO, 'shell', '*'),
+    p = subprocess.run(['timeout', str(timeout), 'java'] + JVM_OPTIONS + ['-cp', os.path.join(c.REPO, 'shell', '*'),
                         'com.rapidsdata.shell.RapidsShell', '--continueBatchOnError', '-s',
                         '-h', '127.0.0.1', '-p', PORT], input=sql, capture_output=True, text=True, env=ENV)
     out = '\n'.join(l for l in p.stdout.splitlines() if not l.startswith('Picked up'))
