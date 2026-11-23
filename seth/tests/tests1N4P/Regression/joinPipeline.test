@@ -91,3 +91,24 @@ select s_name, l_orderkey from ${testName2}_supplier, ${testName2}_lineitem
  where s_suppkey = l_suppkey and l_linenumber = 7 and s_nationkey = 3 order by l_orderkey limit 3;
 ordered rows:
   ('Supplier#000001501', 3205)
+
+// string comparisons in the aggregates: the GROUP BY allocates its strings
+// after those of the projected row (TPC-H Q12 counted wrong when they overlapped)
+select s_nationkey,
+       sum(case when l_shipmode = 'MAIL' or l_shipmode = 'SHIP' then 1 else 0 end),
+       sum(case when l_shipmode <> 'MAIL' and l_shipmode <> 'SHIP' then 1 else 0 end)
+  from ${testName2}_supplier, ${testName2}_lineitem
+ where s_suppkey = l_suppkey and l_quantity > 40 group by s_nationkey order by s_nationkey limit 3;
+ordered rows:
+  (0, 1, 11)
+  (1, 5, 12)
+  (2, 5, 12)
+
+// the same behind a table scan
+select l_linestatus,
+       sum(case when l_shipmode = 'MAIL' or l_shipmode = 'SHIP' then 1 else 0 end),
+       sum(case when l_shipmode <> 'MAIL' and l_shipmode <> 'SHIP' then 1 else 0 end)
+  from ${testName2}_lineitem where l_quantity > 40 group by l_linestatus order by l_linestatus;
+ordered rows:
+  ('F', 265, 717)
+  ('O', 301, 744)

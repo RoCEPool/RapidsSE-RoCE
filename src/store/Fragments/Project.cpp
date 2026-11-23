@@ -77,7 +77,9 @@ i8 iProjectEnd(Dynamic_T* aDynamicT) {
   }
 
   p__STRUCT_TO___CURRENT_OP = (struct __STRUCT_TO___CURRENT_OP*)aDynamicT->m_xRowInfoPT[CURRENT_DUP_OP].m_aRowCellArray;
-  szStrArea = aDynamicT->m_xRowInfoPT[CURRENT_DUP_OP].m_acStrArea;
+  // the strings of the projected row end here: an operator that follows in the
+  // same stage (a GROUP BY) allocates its own strings after them, not over them
+  aDynamicT->m_xRowInfoPT[CURRENT_DUP_OP].m_acStrArea = szStrArea;
 
   // marker-end
 
