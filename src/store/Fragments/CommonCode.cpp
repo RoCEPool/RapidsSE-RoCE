@@ -854,8 +854,9 @@ i8 vEosPLGenKeyTraversal(Dynamic_T* aDynamicT) {
   // - - - - - - - - - - - - - -
   // payload traversal
 #ifdef WITH_CLANG
-  aDynamicT->m_xIndexInfoPL[CURRENT_DUP_OP].m_aEntInt = (struct Ent_int*)aDynamicT->m_fp_aExtern_IndexTreeBegin(
-      aDynamicT->m_xIndexInfoPL[CURRENT_DUP_OP].m_aIndexTree, &aDynamicT->m_xIndexInfoPL[CURRENT_DUP_OP].m_aEntBuffer);
+  // (the groups of a hash table group by in key order, else the tree)
+  aDynamicT->m_xIndexInfoPL[CURRENT_DUP_OP].m_aEntInt = (struct Ent_int*)
+      aExtern_PLBegin(&aDynamicT->m_xIndexInfoPL[CURRENT_DUP_OP]);
 #endif
 
   // - - - - - - - - - - - - - - - - - - - - - - - - - - - - -

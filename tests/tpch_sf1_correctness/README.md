@@ -119,8 +119,8 @@ join each set of tables), corr_semijoin (SQL compiler: key sets copied into corr
 sub-queries), eq_closure (SQL compiler: a = b and b = c add a = c to the filter), const_fold
 (SQL compiler: DATE literal +/- INTERVAL literal computed once), scan_project (a projection
 behind the filter of a scan stays in the stage of the scan) sll_parse (SQL parsed with
-SLL prediction first, full LL only when that fails) and hash_gbyagg (a GROUP BY on one
-integer column keeps its groups in a hash table, not in the payload tree).
+SLL prediction first, full LL only when that fails) and hash_gbyagg (a GROUP BY keeps
+its groups in a hash table, not in the payload tree).
 
     python3 tests/tpch_sf1_correctness/scripts/run_optimiser_equivalence.py
 

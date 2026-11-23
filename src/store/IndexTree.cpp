@@ -9,6 +9,8 @@
 #include "Pay.hpp"
 #include "Key.hpp"
 #include "Ent.hpp"
+#include "AM.hpp"
+#include <string.h>
 
 #include "RowCoder.hpp"
 #include "HeadLine.hpp"
@@ -34,6 +36,7 @@
 #include <stdlib.h>
 extern "C" void* aExtern_EntBufferNextEntry(void** ppEntBuffer, void* aPrevEntry);
 extern "C" void vExtern_GbyHashFree(void* aIndexInfo);
+static void* aGbyHashFindGen(void* aIndexInfo, void* pEntWrk, void* aKey, i8 nPayloadBytes, bool* pbNew);
 #include "Op.hpp"
 #include "Stage.hpp"
 #include "Stream.hpp"
@@ -138,8 +141,11 @@ extern "C" void* aExtern_IndexTreeFindInsertGenAsc(void* aDynamic, i8 nPayloadBy
 	// get the ent
 	Ent* pEntInt = (Ent*)pDynamicT->m_xIndexInfoPL[0].m_aEntInt;
 
-	// find and insert entry
-	Ent* pEntInserted =  pIndexTree->aFindInsertEntryAscGen(aKey, pEntInt, nPayloadBytes, pbInsertedEntry, &pDynamicT->m_iErrorCode);
+	// find and insert entry: in a hash table (vExtern_GbyHashFindGen), or in
+	// the tree with the job tag /optimiser_off_hash_gbyagg
+	Ent* pEntInserted = (Ent*) aGbyHashFindGen(&pDynamicT->m_xIndexInfoPL[0], pEntInt, aKey, nPayloadBytes, pbInsertedEntry);
+	if (! pEntInserted)
+		pEntInserted = pIndexTree->aFindInsertEntryAscGen(aKey, pEntInt, nPayloadBytes, pbInsertedEntry, &pDynamicT->m_iErrorCode);
 
 	//pDynamicT->m_aiPayload = pEntInserted->aiPayload();
 
@@ -1715,6 +1721,10 @@ namespace
     std::vector<char*> xSorted;       // the blocks in key order (traversal)
     size_t             iNext = 0;
     bool               bSorted = false;
+    // general keys (KE_GENERAL): the hash of the key per slot, the blocks are
+    // copies of the work entry (header, key, payload) of variable size
+    bool               bGen = false;
+    std::vector<u8>    auHash;
 
     ~GbyHash() { for (char* p : xChunks) free(p); }
 
@@ -1746,17 +1756,85 @@ namespace
       }
     }
 
-    char* pNewBlock(void)
+    char* pNewBlock(i8 nBytes = 0)
     {
-      if (nFree < nBlockBytes) {
-        i8 nChunk = nBlockBytes * 4096;
+      if (! nBytes)
+        nBytes = nBlockBytes;
+      nBytes = ((nBytes + 7) / 8) * 8;
+      if (nFree < nBytes) {
+        i8 nChunk = nBytes * 4096 > (1 << 20) ? nBytes * 4096 : (1 << 20);
         pFree = (char*) calloc(1, nChunk);
         xChunks.push_back(pFree);
         nFree = nChunk;
       }
       char* p = pFree;
-      pFree += nBlockBytes;
-      nFree -= nBlockBytes;
+      pFree += nBytes;
+      nFree -= nBytes;
+      return p;
+    }
+
+    static u8 uHashBytes(const i8* aiWords, i8 nBytes)
+    {
+      u8 u = 0x9e3779b97f4a7c15ULL ^ (u8) nBytes;
+      for (i8 i = 0; i < nBytes / 8; i++) {
+        u ^= (u8) aiWords[i];
+        u *= 0xff51afd7ed558ccdULL;
+        u ^= u >> 32;
+      }
+      return u;
+    }
+
+    void vGrowGen(void)
+    {
+      std::vector<u8> auOld;
+      std::vector<char*> apOld;
+      auOld.swap(auHash);
+      apOld.swap(apBlock);
+      u8 nSlots = apOld.empty() ? 1024 : apOld.size() * 2;
+      auHash.assign(nSlots, 0);
+      apBlock.assign(nSlots, nullptr);
+      uMask = nSlots - 1;
+      for (size_t i = 0; i < apOld.size(); i++) {
+        if (! apOld[i])
+          continue;
+        u8 u = auOld[i] & uMask;
+        while (apBlock[u])
+          u = (u + 1) & uMask;
+        auHash[u] = auOld[i];
+        apBlock[u] = apOld[i];
+      }
+    }
+
+    // the group of the key of the work entry; a new group is a copy of the
+    // work entry with its payload created (as the tree inserts it)
+    char* pFindInsertGen(Ent* pEntWrk, Key* aKey, i8 nPayloadBytes, bool* pbNew)
+    {
+      if ((u8)(nUsed + 1) * 2 > apBlock.size())
+        vGrowGen();
+      i8 nKeyBytes = aKey->nElmSeqSize();
+      const i8* aiKey = (const i8*) aKey->aElmSeq_dtm();
+      u8 uH = uHashBytes(aiKey, nKeyBytes);
+      u8 u = uH & uMask;
+      while (apBlock[u]) {
+        if (auHash[u] == uH) {
+          Key* aKeyAt = ((Ent*) apBlock[u])->aKey();
+          if (aKeyAt->nElmSeqSize() == nKeyBytes &&
+              0 == memcmp(aKeyAt->aElmSeq_dtm(), aiKey, nKeyBytes)) {
+            *pbNew = false;
+            return apBlock[u];
+          }
+        }
+        u = (u + 1) & uMask;
+      }
+      Ent::vPayloadCreate(pEntWrk, nPayloadBytes);
+      i8 nBytes = sizeof(Ent) + nKeyBytes + 8 + nPayloadBytes;
+      char* p = pNewBlock(nBytes);
+      memcpy(p, pEntWrk, nBytes);
+      auHash[u] = uH;
+      apBlock[u] = p;
+      nUsed++;
+      bSorted = false;
+      *pbNew = true;
       return p;
     }
 
@@ -1784,10 +1862,13 @@ namespace
   };
 }
 
+// m_aGbyHash: the groups are in the tree (job tag /optimiser_off_hash_gbyagg)
+static void* const C_GBYHASH_OFF = (void*) 1;
+
 extern "C" void vExtern_GbyHashFree(void* aIndexInfo)
 {
   IndexInfo* pIndexInfo = (IndexInfo*) aIndexInfo;
-  if (pIndexInfo->m_aGbyHash)
+  if (pIndexInfo->m_aGbyHash && pIndexInfo->m_aGbyHash != C_GBYHASH_OFF)
     delete (GbyHash*) pIndexInfo->m_aGbyHash;
   pIndexInfo->m_aGbyHash = nullptr;
 }
@@ -1811,7 +1892,7 @@ extern "C" void* aExtern_PLBegin(void* aIndexInfo)
 {
   IndexInfo* pIndexInfo = (IndexInfo*) aIndexInfo;
   GbyHash* pHash = (GbyHash*) pIndexInfo->m_aGbyHash;
-  if (! pHash)
+  if (! pHash || pIndexInfo->m_aGbyHash == C_GBYHASH_OFF)
     return aExtern_IndexTreeBegin(pIndexInfo->m_aIndexTree, &pIndexInfo->m_aEntBuffer);
   if (! pHash->bSorted) {
     pHash->xSorted.clear();
@@ -1819,8 +1900,12 @@ extern "C" void* aExtern_PLBegin(void* aIndexInfo)
     for (char* p : pHash->apBlock)
       if (p)
         pHash->xSorted.push_back(p);
-    std::sort(pHash->xSorted.begin(), pHash->xSorted.end(), [](char* a, char* b) {
-      return ((Ent_int*) a)->m_iIntElm0 < ((Ent_int*) b)->m_iIntElm0; });
+    if (pHash->bGen)
+      std::sort(pHash->xSorted.begin(), pHash->xSorted.end(), [](char* a, char* b) {
+        return KC_BEFORE == Key::eCompareAsc(((Ent*) a)->aKey(), ((Ent*) b)->aKey()); });
+    else
+      std::sort(pHash->xSorted.begin(), pHash->xSorted.end(), [](char* a, char* b) {
+        return ((Ent_int*) a)->m_iIntElm0 < ((Ent_int*) b)->m_iIntElm0; });
     pHash->bSorted = true;
   }
   pHash->iNext = 0;
@@ -1834,9 +1919,30 @@ extern "C" void* aExtern_PLNext(void* aIndexInfo, void* aPrevEntry)
 {
   IndexInfo* pIndexInfo = (IndexInfo*) aIndexInfo;
   GbyHash* pHash = (GbyHash*) pIndexInfo->m_aGbyHash;
-  if (! pHash)
+  if (! pHash || pIndexInfo->m_aGbyHash == C_GBYHASH_OFF)
     return aExtern_EntBufferNextEntry(&pIndexInfo->m_aEntBuffer, aPrevEntry);
   if (pHash->iNext >= pHash->xSorted.size())
     return nullptr;
   return pHash->xSorted[pHash->iNext++];
+}
+
+// the group of a general key in the hash table, or nullptr when the groups
+// are kept in the tree (job tag /optimiser_off_hash_gbyagg, decided once per
+// index)
+static void* aGbyHashFindGen(void* aIndexInfo, void* pEntWrk, void* aKey, i8 nPayloadBytes, bool* pbNew)
+{
+  IndexInfo* pIndexInfo = (IndexInfo*) aIndexInfo;
+  if (pIndexInfo->m_aGbyHash == C_GBYHASH_OFF)
+    return nullptr;
+  GbyHash* pHash = (GbyHash*) pIndexInfo->m_aGbyHash;
+  if (! pHash) {
+    if (AM::JOB::bHasTag("<optimiser_off_hash_gbyagg>"_Stz) || AM::JOB::bHasTag("<optimiser_off_all>"_Stz)) {
+      pIndexInfo->m_aGbyHash = C_GBYHASH_OFF;
+      return nullptr;
+    }
+    pHash = new GbyHash;
+    pHash->bGen = true;
+    pIndexInfo->m_aGbyHash = pHash;
+  }
+  return pHash->pFindInsertGen((Ent*) pEntWrk, (Key*) aKey, nPayloadBytes, pbNew);
 }

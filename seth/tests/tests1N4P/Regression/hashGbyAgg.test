@@ -2,8 +2,8 @@
 /* hashGbyAgg.test -- group by on one integer column in a hash table          */
 /*----------------------------------------------------------------------------*/
 
-// A GROUP BY on one integer column keeps its groups in a hash table instead
-// of the payload index tree (Fragments/GbyAgg.cpp, IndexTree.cpp GbyHash), as
+// A GROUP BY keeps its groups in a hash table instead of the payload index
+// tree (Fragments/GbyAgg.cpp, IndexTree.cpp GbyHash), as
 // DuckDB aggregates. The groups leave sorted by key, as they left the tree, so
 // an ORDER BY on the key that the optimiser leaves out stays right. These
 // queries check: more groups than the first table holds (it grows), COUNT,
@@ -90,3 +90,45 @@ ordered rows:
   (8000, 1, 8)
   (9000, 1, 9)
   (10000, 1, 10)
+
+// general keys (two columns, strings): copies of the work entry in the table
+select count(*), sum(c) from (select l_suppkey, l_linenumber, count(*) c from ${testName2}_lineitem group by l_suppkey, l_linenumber);
+rows: (9181, 10000)
+
+select l_suppkey, l_linenumber, count(*), sum(l_quantity) from ${testName2}_lineitem where l_suppkey < 3
+ group by l_suppkey, l_linenumber order by l_suppkey, l_linenumber;
+ordered rows:
+  (1, 1, 1, 4.00)
+  (1, 3, 1, 38.00)
+
+select l_shipmode, l_returnflag, count(*), min(l_shipdate) from ${testName2}_lineitem
+ group by l_shipmode, l_returnflag order by l_shipmode, l_returnflag;
+ordered rows:
+  ('AIR', 'A', 348, DATE '1992-01-13')
+  ('AIR', 'N', 752, DATE '1995-05-23')
+  ('AIR', 'R', 314, DATE '1992-01-19')
+  ('FOB', 'A', 330, DATE '1992-02-07')
+  ('FOB', 'N', 687, DATE '1995-05-24')
+  ('FOB', 'R', 400, DATE '1992-01-22')
+  ('MAIL', 'A', 346, DATE '1992-01-16')
+  ('MAIL', 'N', 720, DATE '1995-05-25')
+  ('MAIL', 'R', 345, DATE '1992-01-24')
+  ('RAIL', 'A', 340, DATE '1992-01-13')
+  ('RAIL', 'N', 753, DATE '1995-06-02')
+  ('RAIL', 'R', 339, DATE '1992-01-27')
+  ('REG AIR', 'A', 333, DATE '1992-01-08')
+  ('REG AIR', 'N', 772, DATE '1995-06-02')
+  ('REG AIR', 'R', 338, DATE '1992-01-25')
+  ('SHIP', 'A', 355, DATE '1992-02-12')
+  ('SHIP', 'N', 743, DATE '1995-06-02')
+  ('SHIP', 'R', 323, DATE '1992-02-01')
+  ('TRUCK', 'A', 382, DATE '1992-01-09')
+  ('TRUCK', 'N', 724, DATE '1995-05-23')
+  ('TRUCK', 'R', 356, DATE '1992-01-14')
+
+select l_shipinstruct, count(*) from ${testName2}_lineitem group by l_shipinstruct;
+rows:
+  ('COLLECT COD', 2480)
+  ('DELIVER IN PERSON', 2531)
+  ('NONE', 2502)
+  ('TAKE BACK RETURN', 2487)
