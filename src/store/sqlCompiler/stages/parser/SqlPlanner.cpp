@@ -4,6 +4,7 @@
 
 #include "BASE.h"
 #include "SqlPlanner.hpp"
+#include "AM.hpp"
 
 #include "sqlLexer.h"
 #include "sqlParser.h"
@@ -489,12 +490,40 @@ PlanNode* SqlPlanner::plan(Stz* pStr, const PlanNode* pTemplate)
   // Create a parser from the stream of tokens.
   sqlParser parser(&tokens);
   
-  // Add our own error listener so that we can be notified if there is a parsing error.
-  parser.removeErrorListeners();
-  parser.addErrorListener(&errorListener);
-  
-  // Parse the token stream.
-  sqlParser::StatementContext* pStatementCtx = parser.statement();
+  // Parse in two stages, as ANTLR recommends for speed: first with SLL
+  // prediction, which never looks at the whole context and stops at the
+  // first error; only if that fails, again with full LL prediction and the
+  // error listener, which gives the same parse or the real syntax error. Most
+  // statements parse in the first stage, and full LL prediction was most of
+  // the time of the SQL compiler (TPC-H Q2: 170 ms). Job tag
+  // /optimiser_off_sll_parse parses with LL only.
+  sqlParser::StatementContext* pStatementCtx = nullptr;
+  if (! AM::JOB::bHasTag("<optimiser_off_sll_parse>"_Stz) && ! AM::JOB::bHasTag("<optimiser_off_all>"_Stz)) {
+    parser.removeErrorListeners();
+    parser.setErrorHandler(std::make_shared<antlr4::BailErrorStrategy>());
+    parser.getInterpreter<antlr4::atn::ParserATNSimulator>()->setPredictionMode(antlr4::atn::PredictionMode::SLL);
+    try {
+      pStatementCtx = parser.statement();
+    }
+    catch (antlr4::ParseCancellationException&) {
+      pStatementCtx = nullptr;
+    }
+    if (! pStatementCtx) {
+      tokens.seek(0);
+      parser.reset();
+      parser.setErrorHandler(std::make_shared<antlr4::DefaultErrorStrategy>());
+      parser.getInterpreter<antlr4::atn::ParserATNSimulator>()->setPredictionMode(antlr4::atn::PredictionMode::LL);
+    }
+  }
+
+  if (! pStatementCtx) {
+    // Add our own error listener so that we can be notified if there is a parsing error.
+    parser.removeErrorListeners();
+    parser.addErrorListener(&errorListener);
+
+    // Parse the token stream.
+    pStatementCtx = parser.statement();
+  }
   
   // Check for any syntax errors
   if (errorListener.bGotError()) {

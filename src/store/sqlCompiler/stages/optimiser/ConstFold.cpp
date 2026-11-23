@@ -32,6 +32,7 @@
 #include "TimestampLiteral.hpp"
 #include "CodeSynthCommon.h"
 #include "AM.hpp"
+#include "store/sqlCompiler/shadowNodes/planObjects/planMarkers/statementMarkers/dml/ExplainMarker.hpp"
 
 #include <time.h>
 #include <vector>
@@ -175,17 +176,25 @@ void ConstFold::vConstFold(PlanNode* pRootNode)
   QueryNode* pPlanNode = _pQueryNode(ShadowRoot::pPlanRoot(pRootNode));
   ASSERT(pPlanNode);
 
-  // collect first, replace after the walk
+  // collect first, replace after the walk. EXPLAIN shows the expressions as
+  // they were written, with their types: nothing is folded there.
   std::vector<QueryNode*> xFound;
-  auto fVisitor = [&xFound](PlanNode* pNode, s2K& sPath, i8 iDepth, void* pvArg) -> GraphNav::eWalkCtrl {
+  bool bExplain = false;
+  auto fVisitor = [&xFound, &bExplain](PlanNode* pNode, s2K& sPath, i8 iDepth, void* pvArg) -> GraphNav::eWalkCtrl {
     UNUSED(sPath);
     UNUSED(iDepth);
     UNUSED(pvArg);
+    if (ExplainMarker::bIsOfType(pNode)) {
+      bExplain = true;
+      return GraphNav::WALK_ABORT;
+    }
     if (AdditionExpr::bIsExactType(pNode) || SubtractionExpr::bIsExactType(pNode))
       xFound.push_back(_pQueryNode(pNode));
     return GraphNav::WALK_CONTINUE;
   };
   GraphNav::bGlobalWalk(pPlanNode, true, true, fVisitor, nullptr);
+  if (bExplain)
+    return;
 
   for (QueryNode* pExpr : xFound) {
     QueryNode* pValue = pFold(pExpr, pRootNode);

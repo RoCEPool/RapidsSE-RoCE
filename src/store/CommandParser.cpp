@@ -4,6 +4,7 @@
 
 #include "BASE.h"
 #include "CommandParser.hpp"
+#include "AM.hpp"
 
 #include "../thirdparty/antlr/generated/sqlLexer.h"
 
@@ -127,13 +128,36 @@ TaskList* CommandParser::pParseCommand(Stz* szCommand, Stz* szFilePath)
 
   // Create a parser from the stream of tokens.
   Parser::sqlParser parser(&tokens);
-  
-  // Add our own error listener so that we can be notified if there is a parsing error.
-  parser.removeErrorListeners();
-  parser.addErrorListener(&errorListener);
 
-  // Parse the token stream.
-  Parser::sqlParser::StatementsContext* pStatementsCtx = parser.statements();
+  // Two stages, as in SqlPlanner::plan: SLL prediction first, full LL with
+  // the error listener only if that fails.
+  Parser::sqlParser::StatementsContext* pStatementsCtx = nullptr;
+  if (! AM::JOB::bHasTag("<optimiser_off_sll_parse>"_Stz) && ! AM::JOB::bHasTag("<optimiser_off_all>"_Stz)) {
+    parser.removeErrorListeners();
+    parser.setErrorHandler(std::make_shared<antlr4::BailErrorStrategy>());
+    parser.getInterpreter<antlr4::atn::ParserATNSimulator>()->setPredictionMode(antlr4::atn::PredictionMode::SLL);
+    try {
+      pStatementsCtx = parser.statements();
+    }
+    catch (antlr4::ParseCancellationException&) {
+      pStatementsCtx = nullptr;
+    }
+    if (! pStatementsCtx) {
+      tokens.seek(0);
+      parser.reset();
+      parser.setErrorHandler(std::make_shared<antlr4::DefaultErrorStrategy>());
+      parser.getInterpreter<antlr4::atn::ParserATNSimulator>()->setPredictionMode(antlr4::atn::PredictionMode::LL);
+    }
+  }
+
+  if (! pStatementsCtx) {
+    // Add our own error listener so that we can be notified if there is a parsing error.
+    parser.removeErrorListeners();
+    parser.addErrorListener(&errorListener);
+
+    // Parse the token stream.
+    pStatementsCtx = parser.statements();
+  }
   
   // Check for any syntax errors
   if (errorListener.bGotError()) {
