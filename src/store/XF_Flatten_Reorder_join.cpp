@@ -226,8 +226,17 @@ void XF_Flatten_Reorder_join::vReorderTables(void)
   // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
   // 4) Compute all possible join permutations
 
-  Card_StreamSet* p_streamPrmAll =
-      Card_StreamSet::pComputeAllPermutations(m_pCI->E.p_tableList, m_pCI->E.p_joinPredList);
+  // Only the connected orders, and on one node only the cheapest way to join
+  // each set of tables (Card_StreamSet::pComputeConnectedPermutations). Job
+  // tag /optimiser_off_join_dp walks every order as before.
+  bool bJoinDp = ! AM::JOB::bHasTag("<optimiser_off_join_dp>"_Stz) &&
+                 ! AM::JOB::bHasTag("<optimiser_off_all>"_Stz);
+  bool bOneNode = AM::PTNMAP::nKnownNodes() <= 1;
+  Card_StreamSet* p_streamPrmAll = bJoinDp
+      ? Card_StreamSet::pComputeConnectedPermutations(m_pCI->E.p_tableList, m_pCI->E.p_joinPredList,
+                                                      m_pCI->E.p_filtPredList, pPipeline,
+                                                      bOneNode && ! AM::JOB::bHasTag("<optimiser_off_join_rows>"_Stz))
+      : Card_StreamSet::pComputeAllPermutations(m_pCI->E.p_tableList, m_pCI->E.p_joinPredList);
   //p_streamPrmAll->vDump(__func__);
 
   Kid xStreamPrmAll(p_streamPrmAll);

@@ -22,6 +22,8 @@ namespace STORE
 
     void vAddStageCasts(CardIter* pCI);
 
+    bool bLocalise_gbyAgg(CardIter* pCI);
+
     eXK eAddStageCast_toPrev_cast(CardIter*        pCI,
                                   Card_StreamPtn*  p_streamPtn,
                                   Card_Project*    p_project_prev,

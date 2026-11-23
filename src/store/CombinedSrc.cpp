@@ -286,6 +286,8 @@ void CombinedSrc::vSynthesizeCode(Stencil* pStencil, bool bFirstStage, bool bLas
 					// find the key
 					if (pOpSketch->m_pIndexDef->bHasDescending())
 						vAppendCodeFragment(pOpSketch, "vGbyAggFindKeyAscDsc"_Stz, pOperatorFile);
+					else if (pOpSketch->m_pIndexDef->eKeyKind() == KE_INT)
+						vAppendCodeFragment(pOpSketch, "vGbyAggFindIntKeyAsc"_Stz, pOperatorFile);
 					else
 						vAppendCodeFragment(pOpSketch, "vGbyAggFindKeyAsc"_Stz, pOperatorFile);
 

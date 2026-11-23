@@ -41,6 +41,10 @@ struct IndexInfo {
   void* m_aEntUpper;
   void* m_aEntBuffer;
   struct Ent_int* m_aEntInt;
+  // group by on one integer column: the entry of the previous row and its
+  // key (Fragments/GbyAgg.cpp). Valid until the next insert into the tree.
+  void* m_aEntLast;
+  i8    m_iKeyLast;
 };
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
