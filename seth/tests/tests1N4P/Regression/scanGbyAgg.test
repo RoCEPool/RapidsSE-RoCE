@@ -1,0 +1,72 @@
+/*----------------------------------------------------------------------------*/
+/* scanGbyAgg.test -- a GROUP BY in the stage of the table scan               */
+/*----------------------------------------------------------------------------*/
+
+// A GROUP BY behind the filter and project of a table scan runs in the stage
+// of the scan (Card_Stage.cpp), as DuckDB aggregates in the pipeline of the
+// scan, so the scan no longer hands every row to another stage. These queries
+// check general and integer keys, HAVING, a key the stream is partitioned on,
+// and a GROUP BY in a derived table.
+// The rows were computed from DATA/TPCH/lineitem10k.csv with SQLite.
+
+create table ${testName2}_lineitem (
+  L_ORDERKEY      INTEGER       NOT NULL,
+  L_PARTKEY       INTEGER       NOT NULL,
+  L_SUPPKEY       INTEGER       NOT NULL,
+  L_LINENUMBER    INTEGER       NOT NULL,
+  L_QUANTITY      DECIMAL(15,2) NOT NULL,
+  L_EXTENDEDPRICE DECIMAL(15,2) NOT NULL,
+  L_DISCOUNT      DECIMAL(15,2) NOT NULL,
+  L_TAX           DECIMAL(15,2) NOT NULL,
+  L_RETURNFLAG    CHAR(1)       NOT NULL,
+  L_LINESTATUS    CHAR(1)       NOT NULL,
+  L_SHIPDATE      DATE          NOT NULL,
+  L_COMMITDATE    DATE          NOT NULL,
+  L_RECEIPTDATE   DATE          NOT NULL,
+  L_SHIPINSTRUCT  CHAR(25)      NOT NULL,
+  L_SHIPMODE      CHAR(10)      NOT NULL,
+  L_COMMENT       VARCHAR(44)   NOT NULL
+);
+success
+create index ${testName2}_IxL_ORDERKEY on ${testName2}_lineitem (L_ORDERKEY);
+affected: 0
+create index ${testName2}_IxL_SUPPKEY on ${testName2}_lineitem (L_SUPPKEY);
+affected: 0
+load ${testName2}_lineitem "../DATA/TPCH/lineitem10k.csv";
+success
+
+
+// general key (two CHAR columns)
+select l_returnflag, l_linestatus, count(*), sum(l_quantity), sum(l_discount)
+  from ${testName2}_lineitem where l_shipdate <= DATE '1998-09-02'
+ group by l_returnflag, l_linestatus order by l_returnflag, l_linestatus;
+ordered rows:
+  ('A', 'F', 2434, 61294.00, 123.13)
+  ('N', 'F', 70, 1852.00, 3.32)
+  ('N', 'O', 4927, 126700.00, 247.20)
+  ('R', 'F', 2415, 62210.00, 120.70)
+
+// integer key and HAVING
+select l_suppkey, count(*), max(l_extendedprice) from ${testName2}_lineitem
+ where l_quantity > 45 group by l_suppkey having count(*) > 1 order by l_suppkey limit 3;
+ordered rows:
+  (50, 2, 77125.50)
+  (100, 2, 78228.50)
+  (169, 2, 57253.52)
+
+// a key the stream may be partitioned on
+select l_orderkey, sum(l_quantity) from ${testName2}_lineitem where l_linenumber > 0
+ group by l_orderkey having sum(l_quantity) > 250 order by l_orderkey;
+ordered rows:
+  (2208, 256.00)
+  (2567, 266.00)
+  (3460, 254.00)
+  (4421, 255.00)
+  (5989, 257.00)
+  (6882, 303.00)
+  (7523, 257.00)
+  (8516, 271.00)
+
+// in a derived table
+select count(*) from (select l_partkey from ${testName2}_lineitem where l_tax > 0.07 group by l_partkey);
+rows: (1124)
