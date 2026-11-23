@@ -64,10 +64,12 @@ tagName           : PLAIN_IDENTIFIER | TIME ;
 
 // query command rules ------------------------------------------------------
 queryCmd          : query ;
-query             : (queryHint)*
-                    ( selectQuery
-                    | setQuery
-                    ) ;
+// A plain SELECT is parsed as a setQuery whose setExpr is a single selectExpr
+// (SqlPlanner::visitSetQuery plans it as a selectQuery). With the two rules as
+// alternatives here, the parser had to read ahead to the end of every query
+// and sub-query to see whether a UNION follows, which was most of the time of
+// the SQL compiler.
+query             : (queryHint)* setQuery ;
 
 queryHint         : HINT_START (hint)? (',' hint)* HINT_END ;
 
@@ -212,7 +214,7 @@ fileCmd           : FILE (identifier | stringLiteral) ;
 // I
 insertCmd         : (WITH withQuery (',' withQuery)*)?
                     INSERT INTO? ref = tableReference ( '('columnName (',' columnName)*')' )?
-                    (valuesExpr | selectQuery | setQuery) ;
+                    (valuesExpr | setQuery) ;
 
 // J
 // K
@@ -394,7 +396,7 @@ varyingLenChar    : (
                     ) (COLLATE collate = collationName)?;
 
 asSubquery        : selectOrValues ;
-selectOrValues    : '(' (queryHint)* selectOrValues ')' | (queryHint)* (selectQuery | valuesExpr | setQuery) ;
+selectOrValues    : '(' (queryHint)* selectOrValues ')' | (queryHint)* (valuesExpr | setQuery) ;
 
 // lists -----------------------------------------------------------------------
 selectList        : selectListItem (',' selectListItem)* ;
@@ -925,7 +927,11 @@ fragment DUBLDUBL     : '""' ;
 
 PLAIN_IDENTIFIER      : '_'* LETTER (LETTER | DIGIT | '_')* ;
 BAKTIKD_IDENTIFIER    : '`' (~[`\r\n])+ '`';
-DUBLQUOTED_IDENTIFIER : { isDublQuoteId }?  ( '"' (DUBLDUBL | ~["\r\n])+ '"' );
+// The predicate is at the end of the rule: at its start it was part of the
+// lexer state at the start of every token, which ANTLR cannot cache, so every
+// token was lexed by simulating the whole lexer ATN (TPC-H Q2: 18 ms for its
+// 190 tokens, now 0.06 ms). The tokens matched are the same.
+DUBLQUOTED_IDENTIFIER : ( '"' (DUBLDUBL | ~["\r\n])+ '"' ) { isDublQuoteId }? ;
 PARAM_IDENTIFIER      : '$' LETTER (LETTER | DIGIT | '_')* ;
 
 SINGLQUOTED_STRING    : '\'' (DUBLSINGL | (~'\''))* '\'' ;

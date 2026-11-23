@@ -40,6 +40,18 @@
 #include "SqlOperator.hpp"
 #include "SetOp.hpp"
 #include "JoinOp.hpp"
+#include "FilterOp.hpp"
+
+// the columns of the last filter or join asked about (pMatchingExprAliasesFor)
+namespace Parser
+{
+namespace
+{
+  thread_local QueryNode*     gpAliasCacheOp   = nullptr;
+  thread_local QueryNodeList* gpAliasCacheCols = nullptr;
+  thread_local bool           gbAliasCacheOn   = false;
+}
+}
 #include "StringObject.hpp"
 #include "StringList.hpp"
 #include "EqExpr.hpp"
@@ -1313,7 +1325,18 @@ void NameValidator::vValidateColumns(PlanNode *pRootNode, QueryNode* pStartNode,
   // We do a bottom up walk because there may be aliases higher up the plan
   // that refer to exprs lower down and we want to qualify columnRefs in those
   // lower expressions before we hit the aliases higher up.
-  GraphNav::bBoundedWalkBottomUp(pStartNode, true, true, fVisitor, pRootNode);
+  vAliasCacheReset();
+  bool bWasOn = gbAliasCacheOn;
+  gbAliasCacheOn = true;
+  try {
+    GraphNav::bBoundedWalkBottomUp(pStartNode, true, true, fVisitor, pRootNode);
+  } catch (...) {
+    vAliasCacheReset();
+    gbAliasCacheOn = bWasOn;
+    throw;
+  }
+  vAliasCacheReset();
+  gbAliasCacheOn = bWasOn;
 }
 
 /*----------------------------------------------------------------------------*/
@@ -1626,8 +1649,46 @@ QueryNodeList* NameValidator::pMatchingDataSourcesFor(QueryNode* pColumnRef,
 /* operator and that contain a given alias name. Need to free the list and    */
 /* nodes returned.                                                            */
 /*----------------------------------------------------------------------------*/
+// The columns that a filter or a join can see are those of its inputs, which
+// do not change while the column references of one statement are qualified.
+// They were built again (a copy of every column of every input table) for
+// each column reference: in TPC-H Q2 that was a third of the SQL compiler.
+// The list is kept for the operator last asked about, during one
+// vValidateColumns() walk (vAliasCacheReset()).
+// (the cache: gpAliasCacheOp, gpAliasCacheCols, gbAliasCacheOn, at the top of this file)
+
+void NameValidator::vAliasCacheReset(void)
+{
+  if (gpAliasCacheCols) {
+    QueryNode* pCol;
+    while ((pCol = gpAliasCacheCols->pPop()) != nullptr)
+      delete pCol;
+    delete gpAliasCacheCols;
+  }
+  gpAliasCacheCols = nullptr;
+  gpAliasCacheOp = nullptr;
+}
+
 QueryNodeList* NameValidator::pMatchingExprAliasesFor(Stz* szAlias, QueryNode* pSqlOp, PlanNode* pRootNode)
 {
+  if (gbAliasCacheOn && (FilterOp::bIsExactType(pSqlOp) || JoinOp::bIsExactType(pSqlOp))) {
+    if (gpAliasCacheOp != pSqlOp) {
+      vAliasCacheReset();
+      gpAliasCacheCols = PlanObject::pColumnExprs(pSqlOp, pRootNode);
+      gpAliasCacheOp = pSqlOp;
+    }
+    QueryNodeList* pMatches = new QueryNodeList();
+    QueryNodeIter* pIter = gpAliasCacheCols->pNewIter();
+    while (pIter->bHasNext()) {
+      QueryNode* pCol = pIter->pNext();
+      Stz* szColAlias = ProjectedColumn::szAliasName(pCol);
+      if (szColAlias && szAlias->bSame(szColAlias))
+        pMatches->vAppend(pCol->pDeepCopy(true));
+    }
+    delete pIter;
+    return pMatches;
+  }
+
   ASSERT(szAlias);
   ASSERT(pSqlOp);
   ASSERT(SqlOperator::bIsOfType(pSqlOp));
