@@ -89,11 +89,34 @@ void Step::vAddSteps_SqlCompiler(void)
   vAddStep("sqlCompiler::transliterate"_Stz,      &Step::vSqlCompilerTransliterate);
 }
 
+
+// Job tag /sqlStepTimes traces the time of each SQL compiler step.
+namespace {
+// The parsed plan graph is checked against its definitions only when the job
+// asks for checks (/optimiser_validate or /validate_plan).
+bool bValidatePlanGraph(void)
+{
+  return AM::JOB::bHasTag("<optimiser_validate>"_Stz) || AM::JOB::bHasTag("<validate_plan>"_Stz);
+}
+
+struct SqlStepTimer {
+  const char* m_szStep;
+  u8 m_uStart;
+  explicit SqlStepTimer(const char* szStep)
+  : m_szStep(szStep), m_uStart(AM::JOB::bHasTag("<sqlStepTimes>"_Stz) ? Hardware::uReadClock() : 0) {}
+  ~SqlStepTimer() {
+    if (m_uStart)
+      vTrace("sqlStepTime %s %.3f ms\n"_Stz, m_szStep, (Hardware::uReadClock() - m_uStart) / 1e6);
+  }
+};
+}
+
 /*----------------------------------------------------------------------------*/
 /* sqlCompiler::aggregateSplit -- Split ordinal expressions that have multiple*/
 /* aggregate terms into child ProjectOps                                      */
 /*----------------------------------------------------------------------------*/
 void Step::vSqlCompilerAggregateSplit(void) {
+  SqlStepTimer oSqlStepTimer(__func__);
   ENTRY();
 
   /**
@@ -159,6 +182,7 @@ void Step::vSqlCompilerAggregateSplit(void) {
 /* sqlCompiler::corrBySquash -- Squash ProjectOps for CORRESPONDING BY clauses*/
 /*----------------------------------------------------------------------------*/
 void Step::vSqlCompilerCorrBySquash(void) {
+  SqlStepTimer oSqlStepTimer(__func__);
   ENTRY();
 
   /**
@@ -250,6 +274,7 @@ void Step::vSqlCompilerCorrBySquash(void) {
 /* sqlCompiler::deletePlan -- Simply delete the plan in the operand           */
 /*----------------------------------------------------------------------------*/
 void Step::vSqlCompilerDeletePlan(void) {
+  SqlStepTimer oSqlStepTimer(__func__);
   ENTRY();
 
   /**
@@ -271,6 +296,7 @@ void Step::vSqlCompilerDeletePlan(void) {
 /* sqlCompiler::doExplain -- (potentially) create the explain of the plan     */
 /*----------------------------------------------------------------------------*/
 void Step::vSqlCompilerDoExplain(void) {
+  SqlStepTimer oSqlStepTimer(__func__);
   ENTRY();
 
   /**
@@ -382,6 +408,7 @@ void Step::vSqlCompilerDoExplain(void) {
 /* sqlCompiler::doExplainTliterate -- (potentially) create the explain of plan */
 /*----------------------------------------------------------------------------*/
 void Step::vSqlCompilerDoExplainTliterate(void) {
+  SqlStepTimer oSqlStepTimer(__func__);
   ENTRY();
 
   /**
@@ -458,6 +485,7 @@ void Step::vSqlCompilerDoExplainTliterate(void) {
 /* sqlCompiler::explainFormat -- Return the tabledef for the explain format   */
 /*----------------------------------------------------------------------------*/
 void Step::vSqlCompilerExplainFormat(void) {
+  SqlStepTimer oSqlStepTimer(__func__);
   ENTRY();
 
   /**
@@ -509,6 +537,7 @@ void Step::vSqlCompilerExplainFormat(void) {
 /*----------------------------------------------------------------------------*/
 void Step::vSqlCompilerExplainPlan(void)
 {
+  SqlStepTimer oSqlStepTimer(__func__);
   ENTRY();
 
   /**
@@ -536,6 +565,7 @@ void Step::vSqlCompilerExplainPlan(void)
 /*----------------------------------------------------------------------------*/
 void Step::vSqlCompilerExprPushdown(void)
 {
+  SqlStepTimer oSqlStepTimer(__func__);
   ENTRY();
 
   /**
@@ -607,6 +637,7 @@ void Step::vSqlCompilerExprPushdown(void)
 /*----------------------------------------------------------------------------*/
 void Step::vSqlCompilerJoinOptimisation(void)
 {
+  SqlStepTimer oSqlStepTimer(__func__);
   ENTRY();
 
   /**
@@ -659,6 +690,7 @@ void Step::vSqlCompilerJoinOptimisation(void)
 /*----------------------------------------------------------------------------*/
 void Step::vSqlCompilerExprValidate(void)
 {
+  SqlStepTimer oSqlStepTimer(__func__);
   ENTRY();
 
   /**
@@ -724,6 +756,7 @@ void Step::vSqlCompilerExprValidate(void)
 /* sqlCompiler::hasExplain -- does sql have to do an explain?                 */
 /*----------------------------------------------------------------------------*/
 void Step::vSqlCompilerHasExplain(void) {
+  SqlStepTimer oSqlStepTimer(__func__);
   ENTRY();
 
   bool bExplain = false;
@@ -778,6 +811,7 @@ void Step::vSqlCompilerHasExplain(void) {
 /*----------------------------------------------------------------------------*/
 void Step::vSqlCompilerNameValidate(void)
 {
+  SqlStepTimer oSqlStepTimer(__func__);
   ENTRY();
 
   /**
@@ -818,6 +852,7 @@ void Step::vSqlCompilerNameValidate(void)
       std::string sRewritten;
       if (Parser::CorrSemiJoin::bRewrite(pPlanRoot, std::string(pPlanOperand->azSqlText()), sRewritten)) {
         Parser::SqlPlanner* pPlanner2 = new Parser::SqlPlanner();
+        pPlanner2->m_bValidatePlan = bValidatePlanGraph();
         Parser::PlanNode* pPlanRoot2 = nullptr;
         try {
           pPlanRoot2 = pPlanner2->plan((Stz*)sRewritten.c_str(), Parser::PlanDefinitionParser::pGraphTemplate());
@@ -879,6 +914,7 @@ L_Exit:
 /*----------------------------------------------------------------------------*/
 void Step::vSqlCompilerParser(void)
 {
+  SqlStepTimer oSqlStepTimer(__func__);
   ENTRY();
 
   vPhaseMark("sqlcompile_start");
@@ -945,6 +981,7 @@ void Step::vSqlCompilerParser(void)
 
   // Parse the SQL command.
   Parser::SqlPlanner* pPlanner = new Parser::SqlPlanner();
+  pPlanner->m_bValidatePlan = bValidatePlanGraph();
   Parser::PlanNode* pPlanRoot;
 
   try {
@@ -1006,6 +1043,7 @@ L_Exit:
 /*----------------------------------------------------------------------------*/
 void Step::vSqlCompilerPartitionExplain(void)
 {
+  SqlStepTimer oSqlStepTimer(__func__);
   ENTRY();
 
   /**
@@ -1032,6 +1070,7 @@ void Step::vSqlCompilerPartitionExplain(void)
 /*----------------------------------------------------------------------------*/
 void Step::vSqlCompilerPartitionPlan(void)
 {
+  SqlStepTimer oSqlStepTimer(__func__);
   ENTRY();
 
   /**
@@ -1088,6 +1127,7 @@ void Step::vSqlCompilerPartitionPlan(void)
 /*----------------------------------------------------------------------------*/
 void Step::vSqlCompilerPostProject(void)
 {
+  SqlStepTimer oSqlStepTimer(__func__);
   ENTRY();
 
   /**
@@ -1151,6 +1191,7 @@ void Step::vSqlCompilerPostProject(void)
 /*----------------------------------------------------------------------------*/
 void Step::vSqlCompilerProjValidation(void)
 {
+  SqlStepTimer oSqlStepTimer(__func__);
   ENTRY();
 
   /**
@@ -1209,6 +1250,7 @@ void Step::vSqlCompilerProjValidation(void)
 /*----------------------------------------------------------------------------*/
 void Step::vSqlCompilerSetOpValidate(void)
 {
+  SqlStepTimer oSqlStepTimer(__func__);
   ENTRY();
 
   /**
@@ -1266,6 +1308,7 @@ void Step::vSqlCompilerSetOpValidate(void)
 /*----------------------------------------------------------------------------*/
 void Step::vSqlCompilerStageMarkers(void)
 {
+  SqlStepTimer oSqlStepTimer(__func__);
   ENTRY();
 
   /**
@@ -1317,6 +1360,7 @@ void Step::vSqlCompilerStageMarkers(void)
 /*----------------------------------------------------------------------------*/
 void Step::vSqlCompilerTransliterate(void)
 {
+  SqlStepTimer oSqlStepTimer(__func__);
   ENTRY();
 
   s256 sPipelineName;
