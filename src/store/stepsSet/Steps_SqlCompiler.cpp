@@ -36,6 +36,7 @@
 #include "AggregateSplit.hpp"
 #include "OrFactor.hpp"
 #include "EqClosure.hpp"
+#include "ConstFold.hpp"
 #include "CorrSemiJoin.hpp"
 #include "NameValidator.hpp"
 #include "ExprValidator.hpp"
@@ -211,6 +212,9 @@ void Step::vSqlCompilerCorrBySquash(void) {
     // Join predicates implied by equal columns (a = b and b = c: a = c), so
     // that a join order can join the tables of the chain in any order.
     EqClosure::vEqClosure(pPlanRoot);
+
+    // DATE literal +/- INTERVAL literal computed once, not for every row.
+    ConstFold::vConstFold(pPlanRoot);
 
   } catch (Parser::SqlException& e) {
     Grid* pGrid = AM::pGrid();

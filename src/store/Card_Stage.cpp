@@ -3,6 +3,7 @@
 /*============================================================================*/
 
 #include "Card_Stage.hpp"
+#include "AM.hpp"
 
 #include "CardIter.hpp"
 #include "SawOpCards.hpp"
@@ -77,6 +78,10 @@ void Card_Stage::vReinstate_stages_v0(CardIter* pCI)
   bool bSawIndexJoinOp = false;
   bool bSawProjectOp = false;
   bool bSawSortOp = false;
+  // the stage holds the scan of a table and its filters only (see PROJECT)
+  bool bScanStage = pCI->E.p_deck->nChildCards() > 1 &&
+                    (CK_o_SCAN == pCI->E.p_deck->pGetChild(1)->eCard() ||
+                     CK_o_INDEXSCAN == pCI->E.p_deck->pGetChild(1)->eCard());
 
   pCI->vClearRegisters();
   pCI->vBeginEach();
@@ -105,6 +110,7 @@ void Card_Stage::vReinstate_stages_v0(CardIter* pCI)
         vAddNext(pCI, p_main, i_Main,""_Stz);
       e_level_running = e_level_main;
       vAddStage(pCI, p_main, i_Main, e_level_running,nStages);
+      bScanStage = false;
       bSawFilterOp = false;
       if (CK_o_GBYAGG == e_main || CK_o_AGGREG == e_main || CK_o_ORDAGG == e_main)
         bSawAggOp = true;
@@ -122,6 +128,7 @@ void Card_Stage::vReinstate_stages_v0(CardIter* pCI)
         || CK_o_KEYNOTEXISTS == e_main) {
       vAddNext(pCI, p_main, i_Main,""_Stz);
       vAddStage(pCI, p_main, i_Main, e_level_running,nStages);
+      bScanStage = false;
       bSawAggOp = false;
       bSawFilterOp = false;
       bSawIndexJoinOp = true;
@@ -134,6 +141,7 @@ void Card_Stage::vReinstate_stages_v0(CardIter* pCI)
         && (bSawAggOp || bSawFilterOp || bSawIndexJoinOp || bSawProjectOp || bSawSortOp) ) {
        vAddNext(pCI, p_main, i_Main,""_Stz);
       vAddStage(pCI, p_main, i_Main, e_level_running,nStages);
+      bScanStage = false;
       bSawAggOp = false;
       bSawFilterOp = false;
       bSawIndexJoinOp = false;
@@ -142,10 +150,25 @@ void Card_Stage::vReinstate_stages_v0(CardIter* pCI)
       continue;
     }
 
+    // A projection behind the filter of a scan stays in the stage of the scan:
+    // it keeps the columns that the next stages need, and the scan no longer
+    // copies every column of the table out of the stage (TPC-H Q1 copied the
+    // 16 columns of lineitem, comments included, to keep 6). Job tag
+    // /optimiser_off_scan_project splits them as before.
+    bool bProjectInScan = bScanStage && bSawFilterOp && ! bSawAggOp && ! bSawIndexJoinOp &&
+                          ! bSawProjectOp && ! bSawSortOp &&
+                          ! AM::JOB::bHasTag("<optimiser_off_scan_project>"_Stz) &&
+                          ! AM::JOB::bHasTag("<optimiser_off_all>"_Stz);
+    if (CK_o_PROJECT == e_main && bProjectInScan) {
+      bSawProjectOp = true;
+      continue;
+    }
+
     if ((CK_o_PROJECT == e_main)
         && (bSawAggOp || bSawFilterOp || bSawIndexJoinOp || bSawProjectOp || bSawSortOp) ) {
       vAddNext(pCI, p_main, i_Main,""_Stz);
       vAddStage(pCI, p_main, i_Main, e_level_running,nStages);
+      bScanStage = false;
       bSawAggOp = false;
       bSawFilterOp = false;
       bSawIndexJoinOp = false;
@@ -159,6 +182,7 @@ void Card_Stage::vReinstate_stages_v0(CardIter* pCI)
         (bSawAggOp || bSawIndexJoinOp || bSawProjectOp)) {
        vAddNext(pCI, p_main, i_Main,""_Stz);
       vAddStage(pCI, p_main, i_Main, e_level_running,nStages);
+      bScanStage = false;
       // The new stage holds an aggregation: what follows it starts the next stage.
       // (This was "false": a <project> behind the second of two aggregations at one
       // level stayed in the stage of that aggregation, and the generated code did
@@ -175,6 +199,7 @@ void Card_Stage::vReinstate_stages_v0(CardIter* pCI)
 
       vAddNext(pCI, p_main, i_Main,""_Stz);
       vAddStage(pCI, p_main, i_Main, e_level_running,nStages);
+      bScanStage = false;
       bSawAggOp = false;
       bSawFilterOp = false;
       bSawIndexJoinOp = false;
@@ -193,6 +218,7 @@ void Card_Stage::vReinstate_stages_v0(CardIter* pCI)
 
       vAddNext(pCI, p_main, i_Main,""_Stz);
       vAddStage(pCI, p_main, i_Main, e_level_running,nStages);
+      bScanStage = false;
       bSawAggOp = false;
       bSawFilterOp = false;
       bSawIndexJoinOp = false;
@@ -205,6 +231,7 @@ void Card_Stage::vReinstate_stages_v0(CardIter* pCI)
     if (bSawAggOp || bSawIndexJoinOp) {
       vAddNext(pCI, p_main, i_Main,""_Stz);
       vAddStage(pCI, p_main, i_Main, e_level_running,nStages);
+      bScanStage = false;
       bSawAggOp = false;
       bSawFilterOp = false;
       bSawIndexJoinOp = false;
