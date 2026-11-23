@@ -764,8 +764,9 @@ void vEosPLPotTubEnd(Dynamic_T* aDynamicT) {
     // - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
     // move to next entry
 #ifdef WITH_CLANG
-    aDynamicT->m_xIndexInfoPL[CURRENT_DUP_OP].m_aEntInt = (struct Ent_int*)aDynamicT->m_fp_aExtern_EntBufferNextEntry(
-        &aDynamicT->m_xIndexInfoPL[CURRENT_DUP_OP].m_aEntBuffer, aDynamicT->m_xIndexInfoPL[CURRENT_DUP_OP].m_aEntInt);
+    // (the next group of a hash table group by, else the next tree entry)
+    aDynamicT->m_xIndexInfoPL[CURRENT_DUP_OP].m_aEntInt = (struct Ent_int*)aExtern_PLNext(
+        &aDynamicT->m_xIndexInfoPL[CURRENT_DUP_OP], aDynamicT->m_xIndexInfoPL[CURRENT_DUP_OP].m_aEntInt);
 #endif
   }
 
@@ -806,8 +807,9 @@ void vEosPLIntKeyTraversal(Dynamic_T* aDynamicT) {
   // - - - - - - - - - - - - - -
   // payload traversal
 #ifdef WITH_CLANG
+  // (the groups of a hash table group by in key order, else the tree)
   aDynamicT->m_xIndexInfoPL[CURRENT_DUP_OP].m_aEntInt = (struct Ent_int*)
-      aDynamicT->m_fp_aExtern_IndexTreeBegin(aDynamicT->m_xIndexInfoPL[CURRENT_DUP_OP].m_aIndexTree, &aDynamicT->m_xIndexInfoPL[CURRENT_DUP_OP].m_aEntBuffer);
+      aExtern_PLBegin(&aDynamicT->m_xIndexInfoPL[CURRENT_DUP_OP]);
 #endif
 
 	if (!aDynamicT->m_iRowsProcessed)

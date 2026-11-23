@@ -45,6 +45,9 @@ struct IndexInfo {
   // key (Fragments/GbyAgg.cpp). Valid until the next insert into the tree.
   void* m_aEntLast;
   i8    m_iKeyLast;
+  // group by on one integer column: the groups in a hash table instead of
+  // the tree (IndexTree.cpp, GbyHash); null when the tree is used
+  void* m_aGbyHash;
 };
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -

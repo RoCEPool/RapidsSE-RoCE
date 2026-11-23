@@ -118,12 +118,13 @@ join_dp (join ordering over connected orders only, keeping on one node the cheap
 join each set of tables), corr_semijoin (SQL compiler: key sets copied into correlated
 sub-queries), eq_closure (SQL compiler: a = b and b = c add a = c to the filter), const_fold
 (SQL compiler: DATE literal +/- INTERVAL literal computed once), scan_project (a projection
-behind the filter of a scan stays in the stage of the scan) and sll_parse (SQL parsed with
-SLL prediction first, full LL only when that fails).
+behind the filter of a scan stays in the stage of the scan) sll_parse (SQL parsed with
+SLL prediction first, full LL only when that fails) and hash_gbyagg (a GROUP BY on one
+integer column keeps its groups in a hash table, not in the payload tree).
 
     python3 tests/tpch_sf1_correctness/scripts/run_optimiser_equivalence.py
 
-runs each of the 22 queries normally and with every switch (484 executions) and compares the
+runs each of the 22 queries normally and with every switch (506 executions) and compares the
 rows with the reference by the rules above. It writes `reports/OPTIMISER_EQUIVALENCE.md`.
 It needs more memory than the correctness test (plans without early projection carry every
 column); on a machine with 8 GB the node is killed for memory part of the way. CI has 16 GB.
