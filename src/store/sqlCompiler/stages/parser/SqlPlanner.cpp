@@ -562,7 +562,8 @@ PlanNode* SqlPlanner::plan(Stz* pStr, const PlanNode* pTemplate)
   RASSERT(bGotMainSubquery);
 
   // Validate the plan subsection of the graph
-  GraphValidator::vValidatePlan(pRoot);
+  if (m_bValidatePlan)
+    GraphValidator::vValidatePlan(pRoot);
 
   return pRoot;
 }

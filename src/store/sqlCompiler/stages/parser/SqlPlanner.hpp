@@ -63,6 +63,13 @@ namespace Parser
     } PlannerContext;
 
    public:
+    // Check the plan graph against its definitions (GraphValidator) when it is
+    // built: a self-check that costs as much as the rest of the parse (26 ms
+    // of TPC-H Q2), so it runs only when the job asks for it (see
+    // Steps_SqlCompiler.cpp), as DuckDB verifies plans only in debug runs.
+    bool m_bValidatePlan = true;
+
+   public:
     
     void* operator new(size_t);
     void  operator delete(void*);

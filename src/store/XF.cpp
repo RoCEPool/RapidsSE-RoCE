@@ -252,7 +252,10 @@ void XF::vTransform(void)
   //XF_Optimise_gbyAgg_To_ordAgg::vOptimise(m_pCI);    //
   XF_Optimise_Cull_bound::vOptimise(m_pCI);            //
   XF_Prolog_Analyse_emit::vAnalyse(m_pCI);             //
-  XF_Utility::vVerify_dic(m_pCI);               //
+  // A self-check of the cards (RASSERTs only, about 10 ms of TPC-H Q2): only
+  // when the job asks for checks, like the plan graph check (Steps_SqlCompiler.cpp).
+  if (AM::JOB::bHasTag("<optimiser_validate>"_Stz))
+    XF_Utility::vVerify_dic(m_pCI);
   if (! bOptimisationOff("early_projection"))
     XF_Optimise_Early_projection::vOptimise(m_pCI);
   if (! bOptimisationOff("reduce_gbyagg_key"))
