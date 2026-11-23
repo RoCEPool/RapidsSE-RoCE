@@ -799,6 +799,38 @@ void Step::vSqlCompilerNameValidate(void)
   // where applicable.
   try {
     NameValidator::vValidateNames(pPlanRoot);
+
+    // The restriction of the outer query on the key of a correlated sub-query,
+    // copied into the sub-query (CorrSemiJoin.cpp), found on this plan now
+    // that its names are resolved. A changed statement is planned again; if
+    // that fails, this plan stays.
+    if (pPlanOperand->azSqlText() &&
+        !AM::JOB::bHasTag("<optimiser_off_corr_semijoin>"_Stz)) {
+      std::string sRewritten;
+      if (Parser::CorrSemiJoin::bRewrite(pPlanRoot, std::string(pPlanOperand->azSqlText()), sRewritten)) {
+        Parser::SqlPlanner* pPlanner2 = new Parser::SqlPlanner();
+        Parser::PlanNode* pPlanRoot2 = nullptr;
+        try {
+          pPlanRoot2 = pPlanner2->plan((Stz*)sRewritten.c_str(), Parser::PlanDefinitionParser::pGraphTemplate());
+          if (pPlanRoot2)
+            NameValidator::vValidateNames(Parser::_pRootNode(pPlanRoot2));
+        } catch (...) {
+          delete pPlanRoot2;
+          pPlanRoot2 = nullptr;
+          if (AM::JOB::bHasTag("<optimiser_trace>"_Stz))
+            vTrace("CorrSemiJoin: planning the rewritten statement failed\n"_Stz);
+        }
+        delete pPlanner2;
+        if (pPlanRoot2) {
+          delete pPlanRoot;
+          pPlanRoot = Parser::_pRootNode(pPlanRoot2);
+          pPlanOperand->vPlanNode(pPlanRoot2);
+          if (AM::JOB::bHasTag("<optimiser_trace>"_Stz))
+            vTrace("CorrSemiJoin: %s\n"_Stz, sRewritten.c_str());
+        }
+      }
+    }
+
     NameValidator::vCheckDisabledFunctionality(pPlanRoot);
 
   } catch (Parser::SqlException& e) {
@@ -948,31 +980,8 @@ void Step::vSqlCompilerParser(void)
 
   ASSERT(pPlanRoot);
 
-  // The restriction of the outer query on the key of a correlated sub-query,
-  // copied into the sub-query (CorrSemiJoin.cpp): the statement is planned
-  // again from the changed text. If that fails, the plan of the original
-  // statement stays.
-  if (!AM::JOB::bHasTag("<optimiser_off_corr_semijoin>"_Stz)) {
-    std::string sRewritten;
-    if (Parser::CorrSemiJoin::bRewrite(std::string(sSqlStatement.szStz()->azChar()), pGraphTemplate, sRewritten)) {
-      Parser::SqlPlanner* pPlanner2 = new Parser::SqlPlanner();
-      try {
-        Parser::PlanNode* pPlanRoot2 = pPlanner2->plan((Stz*)sRewritten.c_str(), pGraphTemplate);
-        if (pPlanRoot2) {
-          delete pPlanRoot;
-          pPlanRoot = pPlanRoot2;
-          if (AM::JOB::bHasTag("<optimiser_trace>"_Stz))
-            vTrace("CorrSemiJoin: %s\n"_Stz, sRewritten.c_str());
-        }
-      } catch (...) {
-        if (AM::JOB::bHasTag("<optimiser_trace>"_Stz))
-          vTrace("CorrSemiJoin: planning the rewritten statement failed\n"_Stz);
-      }
-      delete pPlanner2;
-    }
-  }
-
   pPlanOperand = new PlanOperand(pPlanRoot);
+  pPlanOperand->vSqlText(sSqlStatement.szStz()->azChar());
   m_oDataStack.vPushPtr(pPlanOperand);
 
   //vTrace("  antlr(%s) -> RootNode %p\n"_Stz,

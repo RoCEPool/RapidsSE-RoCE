@@ -39,6 +39,16 @@ Birth::~Birth(void) noexcept(false)
 /*----------------------------------------------------------------------------*/
 
 /*----------------------------------------------------------------------------*/
+/* microseconds since the epoch                                               */
+/*----------------------------------------------------------------------------*/
+u8 Birth::uNowMicros(void)
+{
+  struct timespec xNow;
+  clock_gettime(CLOCK_REALTIME, &xNow);
+  return (u8)xNow.tv_sec * C_1M + (u8)xNow.tv_nsec / 1000;
+}
+
+/*----------------------------------------------------------------------------*/
 /* clear the birth time                                                       */
 /*----------------------------------------------------------------------------*/
 void Birth::vClear(void)
@@ -56,7 +66,8 @@ i8 Birth::iElapsedSsec(void)
 {
   _precondition_(_MAGIC_,CN_BIRTH,_FOOTER_);
   
-  Ivl wCurrentIvl = IvlLib::wToIvl(m_wTsp);
+  // (it converted the birth timestamp, not the current time: always 0)
+  Ivl wCurrentIvl = IvlLib::wToIvl(uNowMicros());
 
   u8 uMicros = IvlLib::uSubtract(wCurrentIvl, m_wIvl);
   
@@ -70,10 +81,12 @@ void Birth::vNow(void)
 {
   _precondition_(_MAGIC_,CN_BIRTH,_FOOTER_);
   
-  // get current tsp
-  m_wTsp = TspLib::wGetCurrTsp_local();
-  
-  m_wIvl = IvlLib::wToIvl(m_wTsp);
+  // Every DataBuffer is born, many per statement: converting the clock to a
+  // local timestamp and back (localtime, timelocal) took a tenth of the SQL
+  // compile time. The interval is the microseconds since the epoch, which is
+  // what that round trip gave. The timestamp is not kept (nothing reads it).
+  m_wIvl = IvlLib::wToIvl(uNowMicros());
+  m_wTsp.m_iWrd = 0;
 }
 
 /*----------------------------------------------------------------------------*/

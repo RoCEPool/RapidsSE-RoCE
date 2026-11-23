@@ -21,6 +21,7 @@ namespace BASE
     void vClear(void);
     void vNow(void);
     i8   iElapsedSsec(void);
+    static u8 uNowMicros(void);
   
     Footer* aFooter(void);
   };

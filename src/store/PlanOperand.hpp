@@ -16,6 +16,7 @@ namespace STORE
   {
   protected:
     Parser::PlanNode* m_pPlanNode;
+    char*             m_azSqlText;   // the statement the plan was made from (owned)
     
     // must be last
     Footer m_xFooter;
@@ -30,6 +31,9 @@ namespace STORE
     static void vRepair(Object* pObject);
 
     Parser::PlanNode* pPlanNode(void);
+    void              vPlanNode(Parser::PlanNode* pPlanNode);
+    void              vSqlText(const char* azSqlText);
+    const char*       azSqlText(void);
   
   private:
     Footer* aFooter(void);

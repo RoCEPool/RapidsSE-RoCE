@@ -7,6 +7,38 @@
 #include "OpSketch.hpp"
 #include "Table.hpp"
 #include "Index.hpp"
+#include <map>
+#include <mutex>
+#include <string>
+
+// offset of the line after a function marker, per "<file path>\x1f<marker>"
+static std::map<std::string, i8> gxMarkerOffset;
+static std::mutex gxMarkerMutex;
+
+// Every fragment of every query read its file from the start up to its
+// function marker (about a third of the optimiser's time in TPC-H Q2). Where
+// the marker is, is kept per file and marker: the next time the file is read
+// from the line after it. The fragment files do not change while the node runs.
+static std::string sMarkerKey(File* pFile, Stz* szFunMkr)
+{
+  return std::string(pFile->sFilePath().azChar()) + '\x1f' + szFunMkr->azChar();
+}
+
+static bool bSeekPastMarker(File* pFile, const std::string& sKey)
+{
+  std::lock_guard<std::mutex> xLock(gxMarkerMutex);
+  auto it = gxMarkerOffset.find(sKey);
+  if (it == gxMarkerOffset.end())
+    return false;
+  pFile->vSeek(it->second);
+  return true;
+}
+
+static void vRememberMarker(File* pFile, const std::string& sKey)
+{
+  std::lock_guard<std::mutex> xLock(gxMarkerMutex);
+  gxMarkerOffset[sKey] = pFile->iTell();
+}
 
 /*----------------------------------------------------------------------------*/
 /*-- LifeCycle ---------------------------------------------------------------*/
@@ -34,6 +66,10 @@ bool CodeSynthUtils::bExtract(File* pFile, OpSketch* pOpSketch, Stz* szFunMkr,
 
   sLine = ""_Stz;
 
+  std::string sMarkerKey_ = sMarkerKey(pFile, szFunMkr);
+  if (bSeekPastMarker(pFile, sMarkerKey_))
+    bFoundFunc = true;
+
   while (pFile->bReadLine(sLine)) {
 
     // look for comments
@@ -44,6 +80,7 @@ bool CodeSynthUtils::bExtract(File* pFile, OpSketch* pOpSketch, Stz* szFunMkr,
         if (StrLib::bContains(sLine.azChar(), szFunMkr->azChar())) {
           //vTrace("FOUND FUNCTION MARKER - %s\n"_Stz, szFunMkr);
           bFoundFunc = true;
+          vRememberMarker(pFile, sMarkerKey_);
           continue;
         }
       }
@@ -171,6 +208,10 @@ bool CodeSynthUtils::bExtract(File* pFile, OpSketch* pOpSketch, Stz* szFunMkr,
 
 	sLine = ""_Stz;
 
+	std::string sMarkerKey_ = sMarkerKey(pFile, szFunMkr);
+	if (bSeekPastMarker(pFile, sMarkerKey_))
+	  bFoundFunc = true;
+
 	while (pFile->bReadLine(sLine)) {
 
 		// look for comments
@@ -181,6 +222,7 @@ bool CodeSynthUtils::bExtract(File* pFile, OpSketch* pOpSketch, Stz* szFunMkr,
 				if (StrLib::bContains(sLine.azChar(), szFunMkr->azChar())) {
 					//vTrace("FOUND FUNCTION MARKER - %s\n"_Stz, szFunMkr);
 					bFoundFunc = true;
+					vRememberMarker(pFile, sMarkerKey_);
 					continue;
 				}
 			}
@@ -300,6 +342,10 @@ bool CodeSynthUtils::bExtractInflate(File* pFile, OpSketch* pOpSketch, Column* p
   bool bFoundFunc = false;
   bool bFoundStart = false;
 
+  std::string sMarkerKey_ = sMarkerKey(pFile, szFunMkr);
+  if (bSeekPastMarker(pFile, sMarkerKey_))
+    bFoundFunc = true;
+
   while (pFile->bReadLine(sLine)) {
 
     // look for comments
@@ -310,6 +356,7 @@ bool CodeSynthUtils::bExtractInflate(File* pFile, OpSketch* pOpSketch, Column* p
         if (StrLib::bContains(sLine.azChar(), szFunMkr->azChar())) {
           //vTrace("FOUND FUNCTION MARKER - %s\n"_Stz, szFunMkr);
           bFoundFunc = true;
+          vRememberMarker(pFile, sMarkerKey_);
           continue;
         }
       }
@@ -382,6 +429,10 @@ bool CodeSynthUtils::bExtractInflate(File* pFile, OpSketch* pOpSketch, Column* p
 	bool bFoundFunc = false;
 	bool bFoundStart = false;
 
+	std::string sMarkerKey_ = sMarkerKey(pFile, szFunMkr);
+	if (bSeekPastMarker(pFile, sMarkerKey_))
+	  bFoundFunc = true;
+
 	while (pFile->bReadLine(sLine)) {
 
 		// look for comments
@@ -392,6 +443,7 @@ bool CodeSynthUtils::bExtractInflate(File* pFile, OpSketch* pOpSketch, Column* p
 				if (StrLib::bContains(sLine.azChar(), szFunMkr->azChar())) {
 					//vTrace("FOUND FUNCTION MARKER - %s\n"_Stz, szFunMkr);
 					bFoundFunc = true;
+					vRememberMarker(pFile, sMarkerKey_);
 					continue;
 				}
 			}
@@ -464,6 +516,10 @@ bool CodeSynthUtils::bExtractInflate(File* pFile, OpSketch* pOpSketch, Column* p
 	bool bFoundFunc = false;
 	bool bFoundStart = false;
 
+	std::string sMarkerKey_ = sMarkerKey(pFile, szFunMkr);
+	if (bSeekPastMarker(pFile, sMarkerKey_))
+	  bFoundFunc = true;
+
 	while (pFile->bReadLine(sLine)) {
 
 		// look for comments
@@ -474,6 +530,7 @@ bool CodeSynthUtils::bExtractInflate(File* pFile, OpSketch* pOpSketch, Column* p
 				if (StrLib::bContains(sLine.azChar(), szFunMkr->azChar())) {
 					//vTrace("FOUND FUNCTION MARKER - %s\n"_Stz, szFunMkr);
 					bFoundFunc = true;
+					vRememberMarker(pFile, sMarkerKey_);
 					continue;
 				}
 			}
