@@ -1,0 +1,152 @@
+/*----------------------------------------------------------------------------*/
+/* eqClosure.test -- join predicates implied by equal columns                 */
+/*----------------------------------------------------------------------------*/
+
+// When the AND of a filter makes columns of three or more tables equal
+// (a = b and b = c), the SQL compiler adds the equalities between the other
+// pairs (a = c), as DuckDB derives them from equivalence sets, so that the join
+// order search can join the tables of the chain in any order (TPC-H Q5:
+// c_nationkey = s_nationkey and s_nationkey = n_nationkey give c_nationkey =
+// n_nationkey, and the join can start from region). Columns of an enclosing
+// query are left out. These queries check that the added equalities remove no
+// row: TPC-H Q5, a chain through one table with an alias, and a chain with a
+// constant.
+// The expected rows were computed from DATA/TPCH (lineitem10k.csv,
+// orders_10k.csv, customer_10k.csv, supplier_2k.tbl, nation.tbl, region.tbl)
+// with SQLite, independently of RapidsSE.
+
+create table ${testName2}_lineitem (
+  L_ORDERKEY      INTEGER       NOT NULL,
+  L_PARTKEY       INTEGER       NOT NULL,
+  L_SUPPKEY       INTEGER       NOT NULL,
+  L_LINENUMBER    INTEGER       NOT NULL,
+  L_QUANTITY      DECIMAL(15,2) NOT NULL,
+  L_EXTENDEDPRICE DECIMAL(15,2) NOT NULL,
+  L_DISCOUNT      DECIMAL(15,2) NOT NULL,
+  L_TAX           DECIMAL(15,2) NOT NULL,
+  L_RETURNFLAG    CHAR(1)       NOT NULL,
+  L_LINESTATUS    CHAR(1)       NOT NULL,
+  L_SHIPDATE      DATE          NOT NULL,
+  L_COMMITDATE    DATE          NOT NULL,
+  L_RECEIPTDATE   DATE          NOT NULL,
+  L_SHIPINSTRUCT  CHAR(25)      NOT NULL,
+  L_SHIPMODE      CHAR(10)      NOT NULL,
+  L_COMMENT       VARCHAR(44)   NOT NULL
+);
+success
+create index ${testName2}_IxL_ORDERKEY on ${testName2}_lineitem (L_ORDERKEY);
+affected: 0
+create index ${testName2}_IxL_SUPPKEY on ${testName2}_lineitem (L_SUPPKEY);
+affected: 0
+load ${testName2}_lineitem "../DATA/TPCH/lineitem10k.csv";
+success
+
+create table ${testName2}_orders (
+  O_ORDERKEY      INTEGER       NOT NULL,
+  O_CUSTKEY       INTEGER       NOT NULL,
+  O_ORDERSTATUS   CHAR(1)       NOT NULL,
+  O_TOTALPRICE    DECIMAL(15,2) NOT NULL,
+  O_ORDERDATE     DATE          NOT NULL,
+  O_ORDERPRIORITY CHAR(15)      NOT NULL,
+  O_CLERK         CHAR(15)      NOT NULL,
+  O_SHIPPRIORITY  INTEGER       NOT NULL,
+  O_COMMENT       VARCHAR(79)   NOT NULL
+) partition by (O_CUSTKEY);
+success
+create index ${testName2}_IxO_ORDERKEY on ${testName2}_orders (O_ORDERKEY);
+affected: 0
+create index ${testName2}_IxO_CUSTKEY on ${testName2}_orders (O_CUSTKEY);
+affected: 0
+load ${testName2}_orders "../DATA/TPCH/orders_10k.csv";
+success
+
+create table ${testName2}_customer (
+  C_CUSTKEY    INTEGER       NOT NULL,
+  C_NAME       VARCHAR(25)   NOT NULL,
+  C_ADDRESS    VARCHAR(40)   NOT NULL,
+  C_NATIONKEY  INTEGER       NOT NULL,
+  C_PHONE      CHAR(15)      NOT NULL,
+  C_ACCTBAL    DECIMAL(15,2) NOT NULL,
+  C_MKTSEGMENT CHAR(10)      NOT NULL,
+  C_COMMENT    VARCHAR(117)  NOT NULL
+);
+success
+create index ${testName2}_IxC_CUSTKEY on ${testName2}_customer (C_CUSTKEY);
+affected: 0
+create index ${testName2}_IxC_NATIONKEY on ${testName2}_customer (C_NATIONKEY);
+affected: 0
+load ${testName2}_customer "../DATA/TPCH/customer_10k.csv";
+success
+
+create table ${testName2}_supplier (
+  S_SUPPKEY    INTEGER       NOT NULL,
+  S_NAME       CHAR(25)      NOT NULL,
+  S_ADDRESS    VARCHAR(40)   NOT NULL,
+  S_NATIONKEY  INTEGER       NOT NULL,
+  S_PHONE      CHAR(15)      NOT NULL,
+  S_ACCTBAL    DECIMAL(15,2) NOT NULL,
+  S_COMMENT    VARCHAR(101)  NOT NULL
+);
+success
+create index ${testName2}_IxS_SUPPKEY on ${testName2}_supplier (S_SUPPKEY);
+affected: 0
+create index ${testName2}_IxS_NATIONKEY on ${testName2}_supplier (S_NATIONKEY);
+affected: 0
+load ${testName2}_supplier "../DATA/TPCH/supplier_2k.tbl" <field_delimiter> = "|";
+success
+
+create table ${testName2}_nation (
+  N_NATIONKEY  INTEGER      NOT NULL,
+  N_NAME       CHAR(25)     NOT NULL,
+  N_REGIONKEY  INTEGER      NOT NULL,
+  N_COMMENT    VARCHAR(152)
+);
+success
+create index ${testName2}_IxN_NATIONKEY on ${testName2}_nation (N_NATIONKEY);
+affected: 0
+create index ${testName2}_IxN_REGIONKEY on ${testName2}_nation (N_REGIONKEY);
+affected: 0
+load ${testName2}_nation "../DATA/TPCH/nation.tbl" <field_delimiter> = "|";
+success
+
+create table ${testName2}_region (
+  R_REGIONKEY  INTEGER      NOT NULL,
+  R_NAME       CHAR(25)     NOT NULL,
+  R_COMMENT    VARCHAR(152)
+);
+success
+create index ${testName2}_IxR_REGIONKEY on ${testName2}_region (R_REGIONKEY);
+affected: 0
+load ${testName2}_region "../DATA/TPCH/region.tbl" <field_delimiter> = "|";
+success
+
+// TPC-H Q5
+select n_name, sum(l_extendedprice * (1 - l_discount))
+  from ${testName2}_customer, ${testName2}_orders, ${testName2}_lineitem, ${testName2}_supplier, ${testName2}_nation, ${testName2}_region
+ where c_custkey = o_custkey and l_orderkey = o_orderkey and l_suppkey = s_suppkey
+   and c_nationkey = s_nationkey and s_nationkey = n_nationkey
+   and n_regionkey = r_regionkey and r_name = 'ASIA'
+ group by n_name order by n_name;
+ordered rows:
+  ('CHINA', 45599.8900)
+  ('INDIA', 149316.6063)
+  ('INDONESIA', 175621.1669)
+  ('JAPAN', 164806.5065)
+  ('VIETNAM', 63530.4217)
+
+// two tables equal to the column of a third (with an alias)
+select n1.n_name, count(*) from ${testName2}_supplier, ${testName2}_customer, ${testName2}_nation n1
+ where s_nationkey = n1.n_nationkey and c_nationkey = n1.n_nationkey
+   and n1.n_regionkey = 2 and s_suppkey < 50 and c_custkey < 300
+ group by n1.n_name order by n1.n_name;
+ordered rows:
+  ('CHINA', 39)
+  ('INDIA', 33)
+  ('INDONESIA', 36)
+  ('JAPAN', 13)
+  ('VIETNAM', 22)
+
+// a chain that ends in a constant
+select count(*), sum(o_totalprice) from ${testName2}_orders, ${testName2}_customer, ${testName2}_nation
+ where o_custkey = c_custkey and c_nationkey = n_nationkey and n_nationkey = 7;
+rows: (406, 61203879.18)

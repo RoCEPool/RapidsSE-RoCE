@@ -35,6 +35,7 @@
 
 #include "AggregateSplit.hpp"
 #include "OrFactor.hpp"
+#include "EqClosure.hpp"
 #include "CorrSemiJoin.hpp"
 #include "NameValidator.hpp"
 #include "ExprValidator.hpp"
@@ -206,6 +207,10 @@ void Step::vSqlCompilerCorrBySquash(void) {
     // Conditions that every branch of an OR in a filter implies, added to the
     // filter so that they can be applied to a table before the joins.
     OrFactor::vOrFactor(pPlanRoot);
+
+    // Join predicates implied by equal columns (a = b and b = c: a = c), so
+    // that a join order can join the tables of the chain in any order.
+    EqClosure::vEqClosure(pPlanRoot);
 
   } catch (Parser::SqlException& e) {
     Grid* pGrid = AM::pGrid();

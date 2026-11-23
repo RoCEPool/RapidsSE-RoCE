@@ -115,12 +115,12 @@ sort_limit_all_levels, early_filter, late_projection, duplicate_filter, local_gb
 node and origin merges for a GROUP BY on a column the stream is partitioned on); also join_rows
 (join ordering by estimated rows, index joins on the index with the fewest rows per key),
 join_dp (join ordering over connected orders only, keeping on one node the cheapest way to
-join each set of tables) and corr_semijoin (SQL compiler: key sets copied into correlated
-sub-queries).
+join each set of tables), corr_semijoin (SQL compiler: key sets copied into correlated
+sub-queries) and eq_closure (SQL compiler: a = b and b = c add a = c to the filter).
 
     python3 tests/tpch_sf1_correctness/scripts/run_optimiser_equivalence.py
 
-runs each of the 22 queries normally and with every switch (396 executions) and compares the
+runs each of the 22 queries normally and with every switch (418 executions) and compares the
 rows with the reference by the rules above. It writes `reports/OPTIMISER_EQUIVALENCE.md`.
 It needs more memory than the correctness test (plans without early projection carry every
 column); on a machine with 8 GB the node is killed for memory part of the way. CI has 16 GB.
