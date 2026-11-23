@@ -141,6 +141,9 @@ void XF::vXF(CardIter* pCI)
 //   scan_to_indexscan, cut_sort, early_projection, reduce_gbyagg_key,
 //   static_calc, max_to_top, aggreg_to_sort_ordagg, sortdesc_limit_to_top,
 //   sort_limit_all_levels, early_filter, late_projection, duplicate_filter
+// and, outside phase 3: join_rows (join ordering by estimated rows and the
+// index join on the index with the fewest rows per key: Card_StreamPer,
+// Card_IndexList), corr_semijoin (SQL compiler, CorrSemiJoin.cpp)
 static bool bOptimisationOff(const char* szName)
 {
   if (AM::JOB::bHasTag("<optimiser_off_all>"_Stz))

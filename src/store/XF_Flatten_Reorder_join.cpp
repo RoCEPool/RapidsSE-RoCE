@@ -183,6 +183,11 @@ void XF_Flatten_Reorder_join::vReorderTables(void)
 
   Card_Deck* pPipeline = m_pCI->E.p_deck;
 
+  // The permutations are copied into the join ordering board only to be seen
+  // in a trace: the board is deleted below. With 8 tables (TPC-H Q8) there
+  // are thousands of them and copying them took most of the join ordering.
+  bool bShow = AM::JOB::bHasTag("<optimiser_trace>"_Stz) || pFile;
+
   Board* pBoard = new Board(C_UNKNOWN,
                             BK_JOINORDERING,
                             aBK[BK_JOINORDERING],
@@ -225,21 +230,25 @@ void XF_Flatten_Reorder_join::vReorderTables(void)
       Card_StreamSet::pComputeAllPermutations(m_pCI->E.p_tableList, m_pCI->E.p_joinPredList);
   //p_streamPrmAll->vDump(__func__);
 
-  m_pCI->E.p_deck->vAppendChild((new Card_Section) ->SYM(SF_NOTE, "All Permutations"_Stz));
   Kid xStreamPrmAll(p_streamPrmAll);
-  while (xStreamPrmAll.bEach())
-    m_pCI->E.p_deck->vAppendChild(xStreamPrmAll.p_streamPer()->pDupCardRecursive());
+  if (bShow) {
+    m_pCI->E.p_deck->vAppendChild((new Card_Section) ->SYM(SF_NOTE, "All Permutations"_Stz));
+    while (xStreamPrmAll.bEach())
+      m_pCI->E.p_deck->vAppendChild(xStreamPrmAll.p_streamPer()->pDupCardRecursive());
+  }
 
   // 5) Remove invalid permutations
 
   p_streamPrmAll->vRemoveInvalid();
   //p_streamPrmAll->vDump(__func__);
-  m_pCI->E.p_deck->vAppendChild((new Card_Section) ->SYM(SF_NOTE, "Valid Permutations"_Stz));
+  if (bShow) {
+    m_pCI->E.p_deck->vAppendChild((new Card_Section) ->SYM(SF_NOTE, "Valid Permutations"_Stz));
 
-  xStreamPrmAll.vEnded();
-  xStreamPrmAll.vBegin();
-  while (xStreamPrmAll.bEach())
-    m_pCI->E.p_deck->vAppendChild(xStreamPrmAll.p_streamPer()->pDupCardRecursive());
+    xStreamPrmAll.vEnded();
+    xStreamPrmAll.vBegin();
+    while (xStreamPrmAll.bEach())
+      m_pCI->E.p_deck->vAppendChild(xStreamPrmAll.p_streamPer()->pDupCardRecursive());
+  }
 
   if (! p_streamPrmAll->nChildCards()) {
     s4K sTableList;
@@ -252,19 +261,22 @@ void XF_Flatten_Reorder_join::vReorderTables(void)
   // 5) Calculate join load
 
   p_streamPrmAll->vEstCostsForAllPermutations(m_pCI,m_pCI->E.p_tableList, m_pCI->E.p_filtPredList, pPipeline, m_pCI->E.p_joinPredList);
-  m_pCI->E.p_deck->vAppendChild((new Card_Section) ->SYM(SF_NOTE, "Join Cost Est."_Stz));
+  if (bShow) {
+    m_pCI->E.p_deck->vAppendChild((new Card_Section) ->SYM(SF_NOTE, "Join Cost Est."_Stz));
 
-  xStreamPrmAll.vEnded();
-  xStreamPrmAll.vBegin();
-  while (xStreamPrmAll.bEach())
-    m_pCI->E.p_deck->vAppendChild(xStreamPrmAll.p_streamPer()->pDupCardRecursive());
+    xStreamPrmAll.vEnded();
+    xStreamPrmAll.vBegin();
+    while (xStreamPrmAll.bEach())
+      m_pCI->E.p_deck->vAppendChild(xStreamPrmAll.p_streamPer()->pDupCardRecursive());
+  }
 
   // get the join permutations strings
 
+  // (the strings are only seen in a trace: nothing reads them back)
   xStreamPrmAll.vEnded();
   xStreamPrmAll.vBegin();
   i8 iJoinPermutations = 0;
-  while (xStreamPrmAll.bEach(CK_STREAMPER)) {
+  while (bShow && xStreamPrmAll.bEach(CK_STREAMPER)) {
     Card_JoinOrdering* p_joinOrdering = Card_JoinOrdering::pDerive(xStreamPrmAll.p_streamPer());
     //p_joinOrdering->vDump();
     s4K sJoinOrder;
@@ -291,6 +303,9 @@ void XF_Flatten_Reorder_join::vReorderTables(void)
   // Specific join order /jo ?
   if (AM::JOB::bHasTag(C_JO_PICK)) {
     sJoinOrder= AM::JOB::szTagValue(C_JO_PICK);
+    // a tag without a value (written "/jo_pick=7" instead of "/jo_pick = 7")
+    if (! sJoinOrder)
+      sJoinOrder = "-1"_Stz;
     i8 iJoinOrder = StrLib::iToI8((char*)sJoinOrder);
     p_joinOrdering =
         Card_JoinOrdering::pPick(p_streamPrmAll, iJoinOrder);

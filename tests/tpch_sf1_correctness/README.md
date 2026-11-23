@@ -111,7 +111,9 @@ out the stages is what makes a pipeline executable. The transformations that onl
 cheaper can be switched off per job, with the tags `/optimiser_off_<name>` and
 `/optimiser_off_all` (`src/store/XF.cpp`): scan_to_indexscan, cut_sort, early_projection,
 reduce_gbyagg_key, static_calc, max_to_top, aggreg_to_sort_ordagg, sortdesc_limit_to_top,
-sort_limit_all_levels, early_filter, late_projection, duplicate_filter.
+sort_limit_all_levels, early_filter, late_projection, duplicate_filter; also join_rows (join
+ordering by estimated rows, index joins on the index with the fewest rows per key) and
+corr_semijoin (SQL compiler: key sets copied into correlated sub-queries).
 
     python3 tests/tpch_sf1_correctness/scripts/run_optimiser_equivalence.py
 

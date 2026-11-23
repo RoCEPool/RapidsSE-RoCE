@@ -128,6 +128,8 @@ void Card_JoinOrdering::vJoinOrderString(String* pString,
 
   if (bNumbers) {
     pString->vSprint("JO %5lld "_Stz,pSymbol()->Y_iGet(P_Permutation));
+    if (p_costQuery->pSymbol()->Y_bHas(P_EstRows))
+      pString->vCatSprint("Rows %12lld "_Stz, p_costQuery->pSymbol()->Y_iGet(P_EstRows));
   }
 
   // the join sequence

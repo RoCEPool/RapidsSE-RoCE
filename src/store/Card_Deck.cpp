@@ -3,6 +3,9 @@
 /*============================================================================*/
 
 #include "Card_Deck.hpp"
+#include "AM.hpp"
+#include "Card_COLUMN.hpp"
+#include "Card_TablePtn.hpp"
 
 #include "Card_OP.hpp"
 #include "CardIter.hpp"
@@ -69,6 +72,7 @@ void Card_Deck::vAddStageCasts(CardIter* pCI)
         CK_o_INDEXSCAN == pCI->E.e_Op ||
         CK_o_KEYEXISTS == pCI->E.e_Op ||
         CK_o_KEYNOTEXISTS == pCI->E.e_Op ||
+        CK_o_CROSSJOIN == pCI->E.e_Op ||
         CK_o_SCAN == pCI->E.e_Op) {
 
       if (! p_OP_prev) {
@@ -130,9 +134,31 @@ eXK Card_Deck::eAddStageCast_toPrev_cast(CardIter*        pCI,
           CK_o_INDEXSCAN == p_OP_curr->eCard() ||
           CK_o_KEYEXISTS == p_OP_curr->eCard() ||
           CK_o_KEYNOTEXISTS == p_OP_curr->eCard() ||
+          CK_o_CROSSJOIN == p_OP_curr->eCard() ||
           CK_o_SCAN == p_OP_curr->eCard());
 
   RASSERT(p_streamPtn);
+
+  // A cross join (a join without an index on its column, read in full) pairs
+  // every arriving row with every row of the table: each arriving row must
+  // reach every partition, unless the table is replicated. It had no stage
+  // cast, so each partition paired only its own rows (rows were lost when the
+  // join order put such a join after the first table).
+  if (CK_o_CROSSJOIN == p_OP_curr->eCard()) {
+    Card_TablePtn* p_tablePtn_cross = p_OP_curr->pSub_tablePtn();
+    bool bReplicated = p_tablePtn_cross &&
+                       Card_COLUMN::bIsReplicated(p_tablePtn_cross->pSymbol());
+    if (bReplicated || AM::PTNMAP::nPtnsInGrid() <= 1 || ! p_cast_prev) {
+      if (p_tablePtn_cross)
+        pCI->vAppendNewChild(p_streamPtn, CK_p_STREAMKEY, p_tablePtn_cross->pSymbol());
+      return XK_UNICAST;
+    }
+    p_cast_prev->SYM(SF_STG_CAST,"broadcast"_Stz);
+    p_streamPtn->vDeleteAllChildren();
+    if (p_tablePtn_cross)
+      pCI->vAppendNewChild(p_streamPtn, CK_p_STREAMKEY, p_tablePtn_cross->pSymbol());
+    return XK_BROADCAST;
+  }
 
   //Card_Table*      p_table_join      = p_OP_curr->pSub_table();
   //Card_From*       p_from_join       = p_OP_curr->pSub_from();

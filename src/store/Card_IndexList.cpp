@@ -3,6 +3,7 @@
 /*============================================================================*/
 
 #include "Card_IndexList.hpp"
+#include "AM.hpp"
 
 #include "Index.hpp"
 #include "Card_Index.hpp"
@@ -128,9 +129,19 @@ void Card_IndexList::vChoose_index_For_crossJoin(void)
 /*----------------------------------------------------------------------------*/
 /* choose appropriate index for indexJoin                                     */
 /*----------------------------------------------------------------------------*/
+// Of the indexes with an "==" bound, the one with the fewest rows per key
+// (P_FanOut): a join on two columns, as partsupp on ps_partkey and ps_suppkey
+// in TPC-H Q9, reads about 4 rows per arriving row through ps_partkey and 80
+// through ps_suppkey; the other comparison stays a filter. Without fan-outs the
+// first such index is taken, as before.
 void Card_IndexList::vChoose_index_For_indexJoin(void)
 {
   _precondition_(_ADDRESS_, _MAGIC_, CN_CARD, _FOOTER_);
+
+  Card_Index* p_index_best = nullptr;
+  Card_Bound* p_bound_best = nullptr;
+  i8 nFanOut_best = 0;
+  bool bFirst = AM::JOB::bHasTag("<optimiser_off_join_rows>"_Stz) || AM::JOB::bHasTag("<optimiser_off_all>"_Stz);
 
   Kid xIndexList(this);
   while (xIndexList.bEach(CK_INDEX)) {
@@ -142,11 +153,21 @@ void Card_IndexList::vChoose_index_For_indexJoin(void)
       Card_Bound* p_bound = _pCard_Bound(xCI_bounds.pChild());
 
       if (p_bound->bIsEBound()) {
-        p_index->vSet_Choose_index();
-        p_bound->pSymbol()->Y_vSet(P_ChosenBound);
-        return;
+        i8 nFanOut = p_index->pSymbol()->Y_bHas(P_FanOut) ? p_index->pSymbol()->Y_iGet(P_FanOut) : 0;
+        if (! p_index_best ||
+            (! bFirst && nFanOut > 0 && (nFanOut_best <= 0 || nFanOut < nFanOut_best))) {
+          p_index_best = p_index;
+          p_bound_best = p_bound;
+          nFanOut_best = nFanOut;
+        }
+        break;
       }
     }
+  }
+
+  if (p_index_best) {
+    p_index_best->vSet_Choose_index();
+    p_bound_best->pSymbol()->Y_vSet(P_ChosenBound);
   }
 }
 

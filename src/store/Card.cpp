@@ -46,6 +46,7 @@ Stz* P_EmittedCol   = "i_EmittedCol"_Stz;
 Stz* P_FixedNm      = "bFixedNm"_Stz;
 Stz* P_FixedPos     = "bFixedPos"_Stz;
 Stz* P_FanOut       = "nFanOut"_Stz;
+Stz* P_EstRows      = "nEstRows"_Stz;
 Stz* P_Fn           = "Fn"_Stz;
 Stz* P_FusedProject = "bFusedProject"_Stz;
 Stz* P_HashOf       = "szHashOf"_Stz;

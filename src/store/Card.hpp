@@ -178,6 +178,7 @@ extern Stz* P_EmittedCol;
 extern Stz* P_FixedNm;
 extern Stz* P_FixedPos;
 extern Stz* P_FanOut;   // estimated rows per key of an index
+extern Stz* P_EstRows;  // estimated rows a join sequence reads (C_out)
 extern Stz* P_Fn;
 extern Stz* P_FusedProject;
 extern Stz* P_HashOf;

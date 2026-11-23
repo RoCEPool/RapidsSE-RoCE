@@ -231,6 +231,8 @@ Stz* Optimiser::szJoinPermutation(i8 iJoinPermutation)
 {
   _precondition_(_ADDRESS_,_MAGIC_,CN_OPTIMISER,_FOOTER_);
 
+  if (iJoinPermutation < 0 || iJoinPermutation >= C_PERMUTATIONS)
+    return nullptr;
   return m_sJoinPermutation[iJoinPermutation];
 }
 
@@ -241,6 +243,9 @@ void Optimiser::vJoinPermutation(i8 iJoinPermutation, Stz* szJoinPermutation)
 {
   _precondition_(_ADDRESS_,_MAGIC_,CN_OPTIMISER,_FOOTER_);
 
+  // a query of many tables has more permutations than the array holds
+  if (iJoinPermutation < 0 || iJoinPermutation >= C_PERMUTATIONS)
+    return;
   m_sJoinPermutation[iJoinPermutation] = szJoinPermutation;
 }
 
