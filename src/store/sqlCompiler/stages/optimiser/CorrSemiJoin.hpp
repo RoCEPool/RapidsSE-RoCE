@@ -22,10 +22,10 @@ namespace Parser
     // "outer IN (S)", or by conditions on outer's table), returns in sOut the
     // statement with "inner IN (keys)" added to the WHERE of the sub-query.
     // Returns false when there is nothing to add (sOut is then undefined).
-    static b1 bRewrite(const std::string& sSql, const PlanNode* pGraphTemplate, std::string& sOut);
+    // pRootNode: the statement's plan, names resolved (NameValidator).
+    static b1 bRewrite(PlanNode* pRootNode, const std::string& sSql, std::string& sOut);
 
   private:
-    static b1 bRewriteOnce(const std::string& sSql, const PlanNode* pGraphTemplate, std::string& sOut);
     static b1 bFindInPlan(PlanNode* pRootNode, const std::string& sSql, std::string& sOut);
     static b1 bTryFilter(QueryNode* pFilterOp, PlanNode* pRootNode, const std::string& sSql, std::string& sOut);
     static QueryNode* pWhereOf(QueryNode* pExprSubquery);

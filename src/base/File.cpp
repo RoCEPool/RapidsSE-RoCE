@@ -990,7 +990,8 @@ bool File::bReadLine(Stz* szDst)
   for (;;) {
     
     // get next char
-    char cNextChar = getc(m_aFile);
+    // (unlocked: a File is used by one thread; getc took a lock per character)
+    char cNextChar = getc_unlocked(m_aFile);
   #ifdef WITH_STATISTICS_COUNTERS
     gpAttachMap->m_oStatistics.File.m_nGetcs++;
 #endif

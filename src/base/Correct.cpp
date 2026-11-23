@@ -19,9 +19,12 @@ extern s256 gi_szaArgv[];
 /*----------------------------------------------------------------------------*/
 /* debug point                                                                */
 /*----------------------------------------------------------------------------*/
-void BASE::vDebugPoint(void)
+// A place for a breakpoint. It was sleep(0): a system call that can also give
+// up the processor, made from about 150 places including card validation and
+// the transforms; it took about 40% of the optimiser's time (TPC-H Q2).
+__attribute__((noinline)) void BASE::vDebugPoint(void)
 {
-  sleep(0);
+  __asm__ __volatile__("" ::: "memory");
 }
 
 /*----------------------------------------------------------------------------*/

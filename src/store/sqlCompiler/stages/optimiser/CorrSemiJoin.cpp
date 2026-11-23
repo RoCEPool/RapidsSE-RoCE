@@ -42,8 +42,10 @@
 //
 // The change is made to the text of the statement, which is then planned
 // again: the plan of a sub-query is made from its text, and the text of every
-// sub-query is a piece of the statement (SelectMarker queryText). Names are
-// resolved on a trial plan to find the columns.
+// sub-query is a piece of the statement (SelectMarker queryText). It runs on
+// the statement's own plan once its names are resolved (sqlCompiler::
+// nameValidate), finding every change in one walk; only a changed statement
+// is planned again (a trial plan per change cost 150 ms in TPC-H Q2).
 //
 // Job tag /optimiser_off_corr_semijoin leaves the statement as it was.
 //
@@ -87,12 +89,11 @@
 
 using namespace Parser;
 
-static const i8 C_MAX_REWRITES = 4;
 
 /*----------------------------------------------------------------------------*/
 /* entry                                                                      */
 /*----------------------------------------------------------------------------*/
-b1 CorrSemiJoin::bRewrite(const std::string& sSql, const PlanNode* pGraphTemplate, std::string& sOut)
+b1 CorrSemiJoin::bRewrite(PlanNode* pRootNode, const std::string& sSql, std::string& sOut)
 {
   // a statement and a correlated sub-query: at least two SELECTs
   std::string sLower(sSql);
@@ -104,9 +105,7 @@ b1 CorrSemiJoin::bRewrite(const std::string& sSql, const PlanNode* pGraphTemplat
   if (nSelect < 2)
     return false;
 
-  // ... and a sub-query that is an operand of a comparison: "<op> ( select".
-  // Without one there is nothing to rewrite, and the trial plan below (about
-  // a third of the SQL compile time) is not made.
+  // ... and a sub-query that is an operand of a comparison: "<op> ( select"
   b1 bComparedSubquery = false;
   for (size_t i = sLower.find("select"); i != std::string::npos && !bComparedSubquery;
        i = sLower.find("select", i + 1)) {
@@ -124,38 +123,12 @@ b1 CorrSemiJoin::bRewrite(const std::string& sSql, const PlanNode* pGraphTemplat
   if (!bComparedSubquery)
     return false;
 
-  std::string sCurrent(sSql);
-  b1 bChanged = false;
-  for (i8 i = 0; i < C_MAX_REWRITES; i++) {
-    std::string sNext;
-    if (!bRewriteOnce(sCurrent, pGraphTemplate, sNext))
-      break;
-    sCurrent = sNext;
-    bChanged = true;
-  }
-  if (bChanged)
-    sOut = sCurrent;
-  return bChanged;
-}
-
-b1 CorrSemiJoin::bRewriteOnce(const std::string& sSql, const PlanNode* pGraphTemplate, std::string& sOut)
-{
-  SqlPlanner* pPlanner = new SqlPlanner();
-  PlanNode* pPlanRoot = nullptr;
-  b1 bFound = false;
   try {
-    pPlanRoot = pPlanner->plan((Stz*)sSql.c_str(), pGraphTemplate);
-    if (pPlanRoot) {
-      NameValidator::vValidateNames(pPlanRoot);
-      bFound = bFindInPlan(pPlanRoot, sSql, sOut);
-    }
+    return bFindInPlan(pRootNode, sSql, sOut);
   } catch (...) {
-    // the original statement is planned again and reports its own errors
-    bFound = false;
+    // the statement is planned as it is
+    return false;
   }
-  delete pPlanRoot;
-  delete pPlanner;
-  return bFound;
 }
 
 /*----------------------------------------------------------------------------*/
@@ -163,23 +136,32 @@ b1 CorrSemiJoin::bRewriteOnce(const std::string& sSql, const PlanNode* pGraphTem
 /*----------------------------------------------------------------------------*/
 b1 CorrSemiJoin::bFindInPlan(PlanNode* pRootNode, const std::string& sSql, std::string& sOut)
 {
-  b1 bFound = false;
+  // every filter with something to add, in one walk: each change is made to
+  // the text as changed so far (sub-query texts are distinct pieces of it)
+  std::string sCurrent(sSql);
+  b1 bChanged = false;
   auto fVisitor = [&](PlanNode* pNode, s2K& sPath, i8 iDepth, void* pvArg) -> GraphNav::eWalkCtrl {
     UNUSED(sPath);
     UNUSED(iDepth);
     UNUSED(pvArg);
     if (!pNode->szType())
       return GraphNav::WALK_CONTINUE;
-    if (FilterOp::bIsOfType(pNode) && bTryFilter(_pQueryNode(pNode), pRootNode, sSql, sOut)) {
-      bFound = true;
-      return GraphNav::WALK_ABORT;
+    std::string sNext;
+    if (FilterOp::bIsOfType(pNode) && bTryFilter(_pQueryNode(pNode), pRootNode, sCurrent, sNext)) {
+      sCurrent = sNext;
+      bChanged = true;
     }
     return GraphNav::WALK_CONTINUE;
   };
   GraphNav::bGlobalWalk(pRootNode, false, true, fVisitor, nullptr);
-  return bFound;
+  if (bChanged)
+    sOut = sCurrent;
+  return bChanged;
 }
 
+/*----------------------------------------------------------------------------*/
+/* AND members                                                                */
+/*----------------------------------------------------------------------------*/
 void CorrSemiJoin::vFlattenAnd(QueryNode* pExpr, QueryNodeList* pList)
 {
   if (AndExpr::bIsOfType(pExpr)) {
