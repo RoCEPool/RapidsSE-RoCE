@@ -282,6 +282,7 @@ extern "C" void vExtern_IndexNew(void* aDynamic, i8 nNumCols, ColumnInfo* pColum
 	EntWrk::vEntKind(pEntWrk, bPayload, pIndexDef->eKeyKind());
 
 	pDynamicT->m_xIndexInfoPL[0].m_aIndexTree = pIndexTree;
+	pDynamicT->m_xIndexInfoPL[0].m_aEntLast = nullptr;   // no previous row yet
 }
 
 extern "C" void vExtern_IndexFind(void* aIndexInfo, char* aTableName, char* aIndexName) {

@@ -1,0 +1,205 @@
+/*----------------------------------------------------------------------------*/
+/* localGbyAgg.test -- group by on a partition column; join order search      */
+/*----------------------------------------------------------------------------*/
+
+// A GROUP BY runs in each partition, then its groups are merged per node and
+// at the origin. When the stream is partitioned on a column it groups by, the
+// groups of the partitions are final: the run-time optimiser drops the merges
+// and runs HAVING and the projection in the partitions (Card_Deck.cpp,
+// bLocalise_gbyAgg; TPC-H Q18 and Q16). A group by on one integer column first
+// tries the group of the previous row (Fragments/GbyAgg.cpp). The join order
+// search builds only connected orders and keeps the cheapest way to join each
+// set of tables (Card_StreamSet.cpp, pComputeConnectedPermutations).
+// These queries check that no group is lost or merged wrongly: a group by on
+// the partition column (lineitem, partitioned on l_orderkey) with HAVING, with
+// MIN, MAX, COUNT and SUM, inside an IN sub-query (TPC-H Q18), after the stream
+// is hash cast on the grouped column (TPC-H Q16), on a column that is not the
+// partition column, and a join of five tables.
+// The expected rows were computed from DATA/TPCH (lineitem10k.csv,
+// orders_10k.csv, customer_10k.csv, supplier_2k.tbl, nation.tbl, region.tbl)
+// with SQLite, independently of RapidsSE.
+
+create table ${testName2}_lineitem (
+  L_ORDERKEY      INTEGER       NOT NULL,
+  L_PARTKEY       INTEGER       NOT NULL,
+  L_SUPPKEY       INTEGER       NOT NULL,
+  L_LINENUMBER    INTEGER       NOT NULL,
+  L_QUANTITY      DECIMAL(15,2) NOT NULL,
+  L_EXTENDEDPRICE DECIMAL(15,2) NOT NULL,
+  L_DISCOUNT      DECIMAL(15,2) NOT NULL,
+  L_TAX           DECIMAL(15,2) NOT NULL,
+  L_RETURNFLAG    CHAR(1)       NOT NULL,
+  L_LINESTATUS    CHAR(1)       NOT NULL,
+  L_SHIPDATE      DATE          NOT NULL,
+  L_COMMITDATE    DATE          NOT NULL,
+  L_RECEIPTDATE   DATE          NOT NULL,
+  L_SHIPINSTRUCT  CHAR(25)      NOT NULL,
+  L_SHIPMODE      CHAR(10)      NOT NULL,
+  L_COMMENT       VARCHAR(44)   NOT NULL
+);
+success
+create index ${testName2}_IxL_ORDERKEY on ${testName2}_lineitem (L_ORDERKEY);
+affected: 0
+create index ${testName2}_IxL_SUPPKEY on ${testName2}_lineitem (L_SUPPKEY);
+affected: 0
+load ${testName2}_lineitem "../DATA/TPCH/lineitem10k.csv";
+success
+
+create table ${testName2}_orders (
+  O_ORDERKEY      INTEGER       NOT NULL,
+  O_CUSTKEY       INTEGER       NOT NULL,
+  O_ORDERSTATUS   CHAR(1)       NOT NULL,
+  O_TOTALPRICE    DECIMAL(15,2) NOT NULL,
+  O_ORDERDATE     DATE          NOT NULL,
+  O_ORDERPRIORITY CHAR(15)      NOT NULL,
+  O_CLERK         CHAR(15)      NOT NULL,
+  O_SHIPPRIORITY  INTEGER       NOT NULL,
+  O_COMMENT       VARCHAR(79)   NOT NULL
+) partition by (O_CUSTKEY);
+success
+create index ${testName2}_IxO_ORDERKEY on ${testName2}_orders (O_ORDERKEY);
+affected: 0
+create index ${testName2}_IxO_CUSTKEY on ${testName2}_orders (O_CUSTKEY);
+affected: 0
+load ${testName2}_orders "../DATA/TPCH/orders_10k.csv";
+success
+
+create table ${testName2}_customer (
+  C_CUSTKEY    INTEGER       NOT NULL,
+  C_NAME       VARCHAR(25)   NOT NULL,
+  C_ADDRESS    VARCHAR(40)   NOT NULL,
+  C_NATIONKEY  INTEGER       NOT NULL,
+  C_PHONE      CHAR(15)      NOT NULL,
+  C_ACCTBAL    DECIMAL(15,2) NOT NULL,
+  C_MKTSEGMENT CHAR(10)      NOT NULL,
+  C_COMMENT    VARCHAR(117)  NOT NULL
+);
+success
+create index ${testName2}_IxC_CUSTKEY on ${testName2}_customer (C_CUSTKEY);
+affected: 0
+create index ${testName2}_IxC_NATIONKEY on ${testName2}_customer (C_NATIONKEY);
+affected: 0
+load ${testName2}_customer "../DATA/TPCH/customer_10k.csv";
+success
+
+create table ${testName2}_supplier (
+  S_SUPPKEY    INTEGER       NOT NULL,
+  S_NAME       CHAR(25)      NOT NULL,
+  S_ADDRESS    VARCHAR(40)   NOT NULL,
+  S_NATIONKEY  INTEGER       NOT NULL,
+  S_PHONE      CHAR(15)      NOT NULL,
+  S_ACCTBAL    DECIMAL(15,2) NOT NULL,
+  S_COMMENT    VARCHAR(101)  NOT NULL
+);
+success
+create index ${testName2}_IxS_SUPPKEY on ${testName2}_supplier (S_SUPPKEY);
+affected: 0
+load ${testName2}_supplier "../DATA/TPCH/supplier_2k.tbl" <field_delimiter> = "|";
+success
+
+create table ${testName2}_nation (
+  N_NATIONKEY  INTEGER      NOT NULL,
+  N_NAME       CHAR(25)     NOT NULL,
+  N_REGIONKEY  INTEGER      NOT NULL,
+  N_COMMENT    VARCHAR(152)
+);
+success
+create index ${testName2}_IxN_NATIONKEY on ${testName2}_nation (N_NATIONKEY);
+affected: 0
+create index ${testName2}_IxN_REGIONKEY on ${testName2}_nation (N_REGIONKEY);
+affected: 0
+load ${testName2}_nation "../DATA/TPCH/nation.tbl" <field_delimiter> = "|";
+success
+
+create table ${testName2}_region (
+  R_REGIONKEY  INTEGER      NOT NULL,
+  R_NAME       CHAR(25)     NOT NULL,
+  R_COMMENT    VARCHAR(152)
+);
+success
+create index ${testName2}_IxR_REGIONKEY on ${testName2}_region (R_REGIONKEY);
+affected: 0
+load ${testName2}_region "../DATA/TPCH/region.tbl" <field_delimiter> = "|";
+success
+
+// on the partition column, with HAVING
+select l_orderkey, sum(l_quantity) from ${testName2}_lineitem
+ group by l_orderkey having sum(l_quantity) > 250 order by l_orderkey;
+ordered rows:
+  (2208, 256.00)
+  (2567, 266.00)
+  (3460, 254.00)
+  (4421, 255.00)
+  (5989, 257.00)
+  (6882, 303.00)
+  (7523, 257.00)
+  (8516, 271.00)
+
+// COUNT, MIN, MAX and SUM, HAVING on two of them
+select l_orderkey, count(*), min(l_quantity), max(l_quantity), sum(l_extendedprice)
+  from ${testName2}_lineitem
+ group by l_orderkey having count(*) = 7 and min(l_quantity) > 22 order by l_orderkey;
+ordered rows:
+  (164, 7, 23.00, 43.00, 311877.18)
+  (4645, 7, 25.00, 45.00, 316201.93)
+  (5989, 7, 26.00, 49.00, 363341.90)
+  (6560, 7, 23.00, 45.00, 404309.44)
+  (6692, 7, 25.00, 40.00, 326995.92)
+  (6882, 7, 39.00, 48.00, 413279.65)
+  (7687, 7, 26.00, 49.00, 369822.54)
+  (7908, 7, 23.00, 37.00, 304473.13)
+
+// TPC-H Q18: the grouped IN sub-query
+select c_name, o_orderkey, sum(l_quantity)
+  from ${testName2}_customer, ${testName2}_orders, ${testName2}_lineitem
+ where o_orderkey in (select l_orderkey from ${testName2}_lineitem
+                       group by l_orderkey having sum(l_quantity) > 250)
+   and c_custkey = o_custkey and o_orderkey = l_orderkey
+ group by c_name, o_orderkey order by o_orderkey;
+ordered rows:
+  ('Customer#000007594', 2208, 256.00)
+  ('Customer#000009388', 2567, 266.00)
+  ('Customer#000000626', 3460, 254.00)
+  ('Customer#000008323', 4421, 255.00)
+  ('Customer#000000930', 5989, 257.00)
+  ('Customer#000007746', 6882, 303.00)
+  ('Customer#000008781', 7523, 257.00)
+  ('Customer#000000655', 8516, 271.00)
+
+// TPC-H Q16: COUNT(DISTINCT) after the stream is hash cast on the counted column
+select l_shipmode, count(distinct l_suppkey) from ${testName2}_lineitem
+ where l_suppkey not in (select s_suppkey from ${testName2}_supplier where s_nationkey = 7)
+ group by l_shipmode order by l_shipmode;
+ordered rows:
+  ('AIR', 1300)
+  ('FOB', 1297)
+  ('MAIL', 1307)
+  ('RAIL', 1326)
+  ('REG AIR', 1351)
+  ('SHIP', 1323)
+  ('TRUCK', 1355)
+
+// not the partition column: merged as before
+select l_linenumber, count(*), sum(l_quantity) from ${testName2}_lineitem
+ group by l_linenumber order by l_linenumber;
+ordered rows:
+  (1, 2516, 63973.00)
+  (2, 2170, 56633.00)
+  (3, 1784, 44381.00)
+  (4, 1427, 36773.00)
+  (5, 1039, 26781.00)
+  (6, 710, 18230.00)
+  (7, 354, 9149.00)
+
+// five tables
+select n_name, count(*), sum(l_quantity)
+  from ${testName2}_lineitem, ${testName2}_orders, ${testName2}_customer, ${testName2}_nation, ${testName2}_region
+ where l_orderkey = o_orderkey and o_custkey = c_custkey and c_nationkey = n_nationkey
+   and n_regionkey = r_regionkey and r_name = 'ASIA'
+ group by n_name order by n_name;
+ordered rows:
+  ('CHINA', 339, 8324.00)
+  ('INDIA', 373, 10130.00)
+  ('INDONESIA', 371, 9434.00)
+  ('JAPAN', 410, 10444.00)
+  ('VIETNAM', 471, 11803.00)

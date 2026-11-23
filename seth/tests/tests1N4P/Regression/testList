@@ -16,3 +16,4 @@ derivedTableSubquery.test
 avgOverAggregate.test
 orFactor.test
 corrSemiJoin.test
+localGbyAgg.test

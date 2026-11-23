@@ -140,7 +140,8 @@ void XF::vXF(CardIter* pCI)
 // without. The names are the transformation names in lower case:
 //   scan_to_indexscan, cut_sort, early_projection, reduce_gbyagg_key,
 //   static_calc, max_to_top, aggreg_to_sort_ordagg, sortdesc_limit_to_top,
-//   sort_limit_all_levels, early_filter, late_projection, duplicate_filter
+//   sort_limit_all_levels, early_filter, late_projection, duplicate_filter,
+//   local_gbyagg
 // and, outside phase 3: join_rows (join ordering by estimated rows and the
 // index join on the index with the fewest rows per key: Card_StreamPer,
 // Card_IndexList), corr_semijoin (SQL compiler, CorrSemiJoin.cpp)
@@ -267,6 +268,11 @@ void XF::vTransform(void)
     XF_Optimise_Late_projection::vOptimise(m_pCI);
   if (! bOptimisationOff("duplicate_filter"))
     XF_Optimise_Duplicate_filter::vOptimise(m_pCI);
+  if (! bOptimisationOff("local_gbyagg")) {
+    m_pCI->vTransform(__FILE__, __func__, XF_OPTIMISE_LOCAL_GBYAGG);
+    m_pCI->E.p_deck->bLocalise_gbyAgg(m_pCI);   // Card_Deck.cpp
+    m_pCI->vEndTransform(__LINE__);
+  }
   //
   m_pCI->vEndPhase();                                  //
                                                        //

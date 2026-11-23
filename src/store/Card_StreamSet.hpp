@@ -18,6 +18,11 @@ namespace STORE
 
     static Card_StreamSet* pComputeAllPermutations(Card_TableList* p_tableList,
                                                    Card_JoinPredList* p_joinPredList);
+    static Card_StreamSet* pComputeConnectedPermutations(Card_TableList*    p_tableList,
+                                                         Card_JoinPredList* p_joinPredList,
+                                                         Card_FiltPredList* p_filtPredList,
+                                                         Card_Deck*         p_pipeline,
+                                                         bool               bPrune);
 
     void vEstCostsForAllPermutations(CardIter* pCI,
                                      Card_TableList*    p_tableList,
