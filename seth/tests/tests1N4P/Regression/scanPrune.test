@@ -1,0 +1,96 @@
+/*----------------------------------------------------------------------------*/
+/* scanPrune.test -- a table scan skips the columns a query never reads       */
+/*----------------------------------------------------------------------------*/
+
+// When the rows of a table scan are read only by filters and then a project,
+// the generated code steps over (vFLAT_SkipColumn.h) every column those
+// operators never name instead of inflating it (CombinedSrc::vPruneInflate),
+// as DuckDB reads only the columns a query uses. These queries check skipped
+// columns before, between and after the ones read, skipped strings before a
+// string that is read, the last column, and NULLs in skipped columns.
+// The lineitem rows were computed from DATA/TPCH/lineitem10k.csv with SQLite;
+// the datums rows were read off DATA/Transliterate/date.csv.
+
+create table ${testName2}_lineitem (
+  L_ORDERKEY      INTEGER       NOT NULL,
+  L_PARTKEY       INTEGER       NOT NULL,
+  L_SUPPKEY       INTEGER       NOT NULL,
+  L_LINENUMBER    INTEGER       NOT NULL,
+  L_QUANTITY      DECIMAL(15,2) NOT NULL,
+  L_EXTENDEDPRICE DECIMAL(15,2) NOT NULL,
+  L_DISCOUNT      DECIMAL(15,2) NOT NULL,
+  L_TAX           DECIMAL(15,2) NOT NULL,
+  L_RETURNFLAG    CHAR(1)       NOT NULL,
+  L_LINESTATUS    CHAR(1)       NOT NULL,
+  L_SHIPDATE      DATE          NOT NULL,
+  L_COMMITDATE    DATE          NOT NULL,
+  L_RECEIPTDATE   DATE          NOT NULL,
+  L_SHIPINSTRUCT  CHAR(25)      NOT NULL,
+  L_SHIPMODE      CHAR(10)      NOT NULL,
+  L_COMMENT       VARCHAR(44)   NOT NULL
+);
+success
+create index ${testName2}_IxL_ORDERKEY on ${testName2}_lineitem (L_ORDERKEY);
+affected: 0
+create index ${testName2}_IxL_SUPPKEY on ${testName2}_lineitem (L_SUPPKEY);
+affected: 0
+load ${testName2}_lineitem "../DATA/TPCH/lineitem10k.csv";
+success
+
+create table ${testName2}_datums (
+int_col0   INTEGER,
+int_col1   INTEGER,
+bol_col2   BOOLEAN,
+bol_col3   BOOLEAN,
+dte_col4   DATE,
+dte_col5   DATE,
+dec_col6   DECIMAL(19,2),
+dec_col7   DECIMAL(19,2),
+flt_col8   FLOAT,
+flt_col9   FLOAT,
+tme_col10  TIME,
+tme_col11  TIME,
+tsp_col12  TIMESTAMP,
+tsp_col13  TIMESTAMP,
+vch_col14  VARCHAR(32),
+vch_col15  VARCHAR(32)
+);
+success
+load ${testName2}_datums "../DATA/Transliterate/date.csv" ;
+success
+
+// skipped columns on both sides, a skipped string before the one read
+select l_shipmode, count(*), sum(l_quantity) from ${testName2}_lineitem
+ where l_shipdate <= DATE '1995-01-01' group by l_shipmode order by l_shipmode;
+ordered rows:
+  ('AIR', 575, 14425.00)
+  ('FOB', 668, 17623.00)
+  ('MAIL', 600, 15015.00)
+  ('RAIL', 597, 15350.00)
+  ('REG AIR', 592, 14646.00)
+  ('SHIP', 587, 14853.00)
+  ('TRUCK', 651, 16867.00)
+
+// the filter reads two columns, the project one more
+select sum(l_extendedprice * l_discount) from ${testName2}_lineitem
+ where l_discount between 0.05 and 0.07 and l_quantity < 24;
+rows: (1320487.1901)
+
+// the last column, after skipped strings
+select l_orderkey, l_comment from ${testName2}_lineitem where l_linenumber = 7
+ order by l_orderkey limit 3;
+ordered rows:
+  (7, 'ithely regula')
+  (68, 'eposits nag special ideas. furiousl')
+  (129, 'e carefully blithely bold dolp')
+
+select count(*) from ${testName2}_lineitem where l_linenumber = 7;
+rows: (354)
+
+// NULLs in skipped columns (int_col1, bol_col2, dte_col4, vch_col15 hold some)
+select int_col0, vch_col14 from ${testName2}_datums where int_col0 <= 4 order by int_col0;
+ordered rows:
+  (1, 'hello')
+  (2, 'life')
+  (3, 'x')
+  (4, 'life')
