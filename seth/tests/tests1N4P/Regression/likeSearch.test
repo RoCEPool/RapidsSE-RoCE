@@ -1,0 +1,105 @@
+/*----------------------------------------------------------------------------*/
+/* likeSearch.test -- LIKE patterns that search for fixed strings             */
+/*----------------------------------------------------------------------------*/
+
+// The fixed parts of a LIKE pattern between % are searched for with memchr
+// and memcmp (FunctionMacros.h _MATCH_STRSTR) instead of a byte-by-byte loop.
+// These queries count the matches and the non-matches of patterns with one,
+// two and three fixed parts, repeated parts, an empty pattern, a part that
+// never occurs, and leading and trailing parts.
+// The counts were computed from DATA/TPCH/lineitem10k.csv with a regular
+// expression in Python.
+
+create table ${testName2}_lineitem (
+  L_ORDERKEY      INTEGER       NOT NULL,
+  L_PARTKEY       INTEGER       NOT NULL,
+  L_SUPPKEY       INTEGER       NOT NULL,
+  L_LINENUMBER    INTEGER       NOT NULL,
+  L_QUANTITY      DECIMAL(15,2) NOT NULL,
+  L_EXTENDEDPRICE DECIMAL(15,2) NOT NULL,
+  L_DISCOUNT      DECIMAL(15,2) NOT NULL,
+  L_TAX           DECIMAL(15,2) NOT NULL,
+  L_RETURNFLAG    CHAR(1)       NOT NULL,
+  L_LINESTATUS    CHAR(1)       NOT NULL,
+  L_SHIPDATE      DATE          NOT NULL,
+  L_COMMITDATE    DATE          NOT NULL,
+  L_RECEIPTDATE   DATE          NOT NULL,
+  L_SHIPINSTRUCT  CHAR(25)      NOT NULL,
+  L_SHIPMODE      CHAR(10)      NOT NULL,
+  L_COMMENT       VARCHAR(44)   NOT NULL
+);
+success
+create index ${testName2}_IxL_ORDERKEY on ${testName2}_lineitem (L_ORDERKEY);
+affected: 0
+create index ${testName2}_IxL_SUPPKEY on ${testName2}_lineitem (L_SUPPKEY);
+affected: 0
+load ${testName2}_lineitem "../DATA/TPCH/lineitem10k.csv";
+success
+
+
+select count(*) from ${testName2}_lineitem where l_comment like '%special%requests%';
+rows: (28)
+
+select count(*) from ${testName2}_lineitem where l_comment not like '%special%requests%';
+rows: (9972)
+
+select count(*) from ${testName2}_lineitem where l_comment like '%furiously%';
+rows: (977)
+
+select count(*) from ${testName2}_lineitem where l_comment not like '%furiously%';
+rows: (9023)
+
+select count(*) from ${testName2}_lineitem where l_comment like '%ly%ly%';
+rows: (1870)
+
+select count(*) from ${testName2}_lineitem where l_comment not like '%ly%ly%';
+rows: (8130)
+
+select count(*) from ${testName2}_lineitem where l_comment like '%a%';
+rows: (8226)
+
+select count(*) from ${testName2}_lineitem where l_comment not like '%a%';
+rows: (1774)
+
+select count(*) from ${testName2}_lineitem where l_comment like '%%';
+rows: (10000)
+
+select count(*) from ${testName2}_lineitem where l_comment not like '%%';
+rows: (0)
+
+select count(*) from ${testName2}_lineitem where l_comment like '%e%e%e%';
+rows: (4954)
+
+select count(*) from ${testName2}_lineitem where l_comment not like '%e%e%e%';
+rows: (5046)
+
+select count(*) from ${testName2}_lineitem where l_comment like '%zz%';
+rows: (35)
+
+select count(*) from ${testName2}_lineitem where l_comment not like '%zz%';
+rows: (9965)
+
+select count(*) from ${testName2}_lineitem where l_comment like '%the%';
+rows: (3401)
+
+select count(*) from ${testName2}_lineitem where l_comment not like '%the%';
+rows: (6599)
+
+select count(*) from ${testName2}_lineitem where l_comment like '%s';
+rows: (776)
+
+select count(*) from ${testName2}_lineitem where l_comment not like '%s';
+rows: (9224)
+
+select count(*) from ${testName2}_lineitem where l_comment like 'ly%';
+rows: (335)
+
+select count(*) from ${testName2}_lineitem where l_comment not like 'ly%';
+rows: (9665)
+
+select count(*) from ${testName2}_lineitem where l_comment like '%ironic%deposits%';
+rows: (70)
+
+select count(*) from ${testName2}_lineitem where l_comment not like '%ironic%deposits%';
+rows: (9930)
+
