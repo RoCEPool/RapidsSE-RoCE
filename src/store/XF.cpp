@@ -148,7 +148,7 @@ void XF::vXF(CardIter* pCI)
 // CorrSemiJoin.cpp), eq_closure (SQL compiler, EqClosure.cpp), const_fold
 // (SQL compiler, ConstFold.cpp), scan_project (Card_Stage.cpp), sll_parse
 // (SqlPlanner.cpp, CommandParser.cpp), hash_gbyagg and scan_prune
-// (CombinedSrc.cpp) and scan_gbyagg (Card_Stage.cpp)
+// (CombinedSrc.cpp) and scan_gbyagg, join_project, join_gbyagg (Card_Stage.cpp)
 static bool bOptimisationOff(const char* szName)
 {
   if (AM::JOB::bHasTag("<optimiser_off_all>"_Stz))

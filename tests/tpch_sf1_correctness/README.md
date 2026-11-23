@@ -122,11 +122,13 @@ behind the filter of a scan stays in the stage of the scan), sll_parse (SQL pars
 SLL prediction first, full LL only when that fails), hash_gbyagg (a GROUP BY keeps
 its groups in a hash table, not in the payload tree), scan_prune (a table scan steps
 over the columns its filters and project never read instead of inflating them) and
-scan_gbyagg (a GROUP BY behind the project of a scan runs in the stage of the scan).
+scan_gbyagg (a GROUP BY behind the project of a scan runs in the stage of the scan),
+join_project (a projection behind an inner index join stays in the stage of the join) and
+join_gbyagg (a GROUP BY behind that projection runs in the stage of the join).
 
     python3 tests/tpch_sf1_correctness/scripts/run_optimiser_equivalence.py
 
-runs each of the 22 queries normally and with every switch (550 executions) and compares the
+runs each of the 22 queries normally and with every switch (594 executions) and compares the
 rows with the reference by the rules above. It writes `reports/OPTIMISER_EQUIVALENCE.md`.
 It needs more memory than the correctness test (plans without early projection carry every
 column); on a machine with 8 GB the node is killed for memory part of the way. CI has 16 GB.
