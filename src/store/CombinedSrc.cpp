@@ -3,6 +3,8 @@
 /* CombinedSrc.cpp -- Combined source                                         */
 /*============================================================================*/
 
+#include <string>
+#include <cstring>
 #include "BASE.h"
 
 #include "Stream.hpp"
@@ -91,6 +93,8 @@ void CombinedSrc::vSynthesizeCode(Stencil* pStencil, bool bFirstStage, bool bLas
   bool bOpened;
   bool bHasIndexInflate = false;
 	bool bHasOrdAgg = false;
+  char* azPruneStart = nullptr;   // start of a table-scan inflate whose columns may be pruned
+  i8 iPruneEnd = -1;              // sketch that ends the consumers of the inflated row
 	s32 sLabel_ordAgg;
 
   eHK ePreviousHandler = HK_NONE;
@@ -650,6 +654,24 @@ void CombinedSrc::vSynthesizeCode(Stencil* pStencil, bool bFirstStage, bool bLas
         // append to-stencil
         vAppendStencilTo(pOpSketch);
 
+        // Projection pushdown into the scan (DuckDB reads only the columns a query
+        // uses): when the inflated row is read only by filters and then a project
+        // in this handler, columns those operators never name are skipped, not
+        // inflated (see vPruneInflate).
+        if (! AM::JOB::bHasTag("<optimiser_off_scan_prune>"_Stz) &&
+            ! AM::JOB::bHasTag("<optimiser_off_all>"_Stz)) {
+          i8 j = iOpSketch + 1;
+          while (j < pStencil->nItems() &&
+                 pStencil->pGet(j)->eSketchKind() == SK_FILTER &&
+                 pStencil->pGet(j)->m_eHandlerKind == eCurrentHandler)
+            j++;
+          if (j < pStencil->nItems() &&
+              pStencil->pGet(j)->eSketchKind() == SK_PROJECT &&
+              pStencil->pGet(j)->m_eHandlerKind == eCurrentHandler) {
+            azPruneStart = m_azCodeCrs;
+            iPruneEnd = j;
+          }
+        }
         vAppendCodeFragment(pOpSketch, "vInflateCrwBegin"_Stz, pOperatorFile);
         vAppendCodeInflateCols(pOpSketch, "L_RetT_ColT"_Stz, pOperatorFile);
         vAppendCodeFragment(pOpSketch, "vInflateCrwReturn"_Stz, pOperatorFile);
@@ -905,6 +927,12 @@ void CombinedSrc::vSynthesizeCode(Stencil* pStencil, bool bFirstStage, bool bLas
         NEVER_REACH
     }
 
+    if (iOpSketch == iPruneEnd) {
+      vPruneInflate(azPruneStart, m_azCodeCrs);
+      azPruneStart = nullptr;
+      iPruneEnd = -1;
+    }
+
     // - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
     // save previous handler
     ePreviousHandler = eCurrentHandler;
@@ -921,6 +949,46 @@ void CombinedSrc::vSynthesizeCode(Stencil* pStencil, bool bFirstStage, bool bLas
   delete pIndexFile;
   delete pInflateFile;
   delete pFilterFile;
+}
+
+/*----------------------------------------------------------------------------*/
+/* Skip the inflation of columns no operator reads. The code between azStart  */
+/* and azEnd is a table-scan inflate followed by its only consumers (filters  */
+/* and a project). Each inflated column stores to "&<struct>-><cell>.m_iAsI8";*/
+/* when "<struct>-><cell>." appears nowhere else in that code, its jump to    */
+/* the inflate routine becomes a jump to the skip routine, in place and with  */
+/* the same length, so the column is stepped over instead of decoded.         */
+/*----------------------------------------------------------------------------*/
+void CombinedSrc::vPruneInflate(char* azStart, char* azEnd)
+{
+  _precondition_(_ADDRESS_,_MAGIC_,CN_COMBINEDSRC,_FOOTER_);
+
+  if (! azStart || azEnd <= azStart)
+    return;
+
+  std::string sCode(azStart, azEnd - azStart);
+  static const std::string sDst  = "ayDstByte = (byte*)&";
+  static const std::string sCell = ".m_iAsI8;";
+  static const std::string sJump = "goto L_InflateAColumn;";
+  static const std::string sSkip = "goto L_SkipAColumn;   ";   // same length as sJump
+
+  auto nCount = [&sCode](const std::string& sWhat) {
+    i8 n = 0;
+    for (size_t p = sCode.find(sWhat); p != std::string::npos; p = sCode.find(sWhat, p + 1))
+      n++;
+    return n;
+  };
+
+  for (size_t p = sCode.find(sDst); p != std::string::npos; p = sCode.find(sDst, p + 1)) {
+    size_t q = sCode.find(sCell, p);
+    size_t g = sCode.find(sJump, p);
+    size_t n = sCode.find(sDst, p + 1);
+    if (q == std::string::npos || g == std::string::npos || (n != std::string::npos && g > n))
+      continue;
+    std::string sRef = sCode.substr(p + sDst.size(), q - p - sDst.size()) + ".";
+    if (nCount(sRef) == 1)
+      memcpy(azStart + g, sSkip.data(), sSkip.size());
+  }
 }
 
 /*----------------------------------------------------------------------------*/
