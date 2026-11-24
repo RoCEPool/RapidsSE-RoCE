@@ -694,9 +694,19 @@ void CombinedSrc::vSynthesizeCode(Stencil* pStencil, bool bFirstStage, bool bLas
             iPruneEnd = j;
           }
         }
-        vAppendCodeFragment(pOpSketch, "vInflateCrwBegin"_Stz, pOperatorFile);
-        vAppendCodeInflateCols(pOpSketch, "L_RetT_ColT"_Stz, pOperatorFile);
-        vAppendCodeFragment(pOpSketch, "vInflateCrwReturn"_Stz, pOperatorFile);
+        {
+          char* azInflateStart = m_azCodeCrs;
+          vAppendCodeFragment(pOpSketch, "vInflateCrwBegin"_Stz, pOperatorFile);
+          vAppendCodeInflateCols(pOpSketch, "L_RetT_ColT"_Stz, pOperatorFile);
+          vAppendCodeFragment(pOpSketch, "vInflateCrwReturn"_Stz, pOperatorFile);
+          // a scan whose columns are not pruned (no filter and project behind
+          // it, e.g. a GROUP BY right after the scan) reads all of them: the
+          // column cache serves them now; a pruned scan is served after pruning
+          if (! azPruneStart &&
+              ! AM::JOB::bHasTag("<optimiser_off_col_cache>"_Stz) &&
+              ! AM::JOB::bHasTag("<optimiser_off_all>"_Stz))
+            vColCacheInflate(azInflateStart, m_azCodeCrs);
+        }
 
         // - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
         // close the inflateCrw code fragments file
@@ -1129,7 +1139,7 @@ void CombinedSrc::vPruneInflate(char* azStart, char* azEnd)
 /* still jump to L_InflateAColumn are the ones the handler reads. Before the  */
 /* first of them it inserts: at the first row of the buffer, a request for    */
 /* those columns; then, if the cache has them all, one load per column and a  */
-/* jump past the decoding. Any string column keeps the CRW path.             */
+/* jump past the decoding.                                                    */
 /*----------------------------------------------------------------------------*/
 void CombinedSrc::vColCacheInflate(char* azStart, char* azEnd)
 {
@@ -1174,7 +1184,7 @@ void CombinedSrc::vColCacheInflate(char* azStart, char* azEnd)
     if (t == std::string::npos)
       return;
     size_t l = sHead.rfind("union ", t);
-    if (l == std::string::npos || sHead.compare(l, 11, "union Vch_T") == 0)
+    if (l == std::string::npos)
       return;
     vCols.push_back({i_Col, sRef});
     uMask |= (u8)1 << i_Col;
