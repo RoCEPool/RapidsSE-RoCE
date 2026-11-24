@@ -877,7 +877,10 @@ void Weaver::vConcat_cmd(Stz* aFormat, ...)
 /*----------------------------------------------------------------------------*/
 void Weaver::vConcat_cmd_vArg_s(Stz* aFormat, va_list xArgs)
 {
-  char caFormatted[C_1MB] = {'\0'};
+  // Not zero-filled: vSprint ends the text it writes. Filling the 1 MB on
+  // every call (a few hundred per query) cost several ms of each optimisation.
+  char caFormatted[C_1MB];
+  caFormatted[0] = '\0';
 
   // produce formatted line
   StrLib::vSprint(caFormatted, sizeof(caFormatted) - 3, xArgs, aFormat->azChar());
