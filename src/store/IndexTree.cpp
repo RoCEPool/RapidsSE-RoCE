@@ -1862,6 +1862,136 @@ namespace
   };
 }
 
+
+/*----------------------------------------------------------------------------*/
+/* HashJoin: the rows of a hash join's input, by key (DuckDB's build side).   */
+/* A hash join stage first stores every arriving row (a copy of its cells,    */
+/* with the strings copied too) under its integer join key; at the end of     */
+/* its input it walks the joined table's index once in key order and, for     */
+/* each entry whose key has stored rows, joins the entry's row with each of   */
+/* them (CombinedSrc::vAppendCodeHashJoin). A stored row is laid out as       */
+/* [next row with the same key (8 bytes)][the cells].                         */
+/*----------------------------------------------------------------------------*/
+namespace {
+  struct HashJoin {
+    struct Slot { i8 iKey; char* aFirst; char* aLast; };
+    std::vector<Slot> axSlot;            // aFirst null: empty
+    u8 uMask = 0;
+    u8 nUsed = 0;
+    std::vector<char*> aaBlock;          // the memory of the rows and strings
+    char* aFree = nullptr;
+    u8 nFree = 0;
+
+    static u8 uHash(i8 iKey) { u8 u = (u8) iKey * 0x9E3779B97F4A7C15ull; return u ^ (u >> 29); }
+
+    char* aAlloc(u8 nBytes)
+    {
+      nBytes = (nBytes + 7) & ~(u8)7;
+      if (nBytes > nFree) {
+        u8 nBlock = nBytes > (1u << 20) ? nBytes : (1u << 20);
+        aFree = (char*) malloc(nBlock);
+        aaBlock.push_back(aFree);
+        nFree = nBlock;
+      }
+      char* a = aFree;
+      aFree += nBytes;
+      nFree -= nBytes;
+      return a;
+    }
+
+    void vGrow(void)
+    {
+      std::vector<Slot> axOld;
+      axOld.swap(axSlot);
+      u8 n = axOld.empty() ? 1024 : axOld.size() * 2;
+      axSlot.assign(n, Slot{0, nullptr, nullptr});
+      uMask = n - 1;
+      for (const Slot& x : axOld)
+        if (x.aFirst) {
+          u8 u = uHash(x.iKey) & uMask;
+          while (axSlot[u].aFirst)
+            u = (u + 1) & uMask;
+          axSlot[u] = x;
+        }
+    }
+
+    char* aInsert(i8 iKey, i8 nRowBytes)
+    {
+      if ((nUsed + 1) * 2 > axSlot.size())
+        vGrow();
+      char* aRow = aAlloc(8 + nRowBytes);
+      *(char**) aRow = nullptr;
+      u8 u = uHash(iKey) & uMask;
+      while (axSlot[u].aFirst) {
+        if (axSlot[u].iKey == iKey) {
+          *(char**) axSlot[u].aLast = aRow;
+          axSlot[u].aLast = aRow;
+          return aRow + 8;
+        }
+        u = (u + 1) & uMask;
+      }
+      axSlot[u] = Slot{iKey, aRow, aRow};
+      nUsed++;
+      return aRow + 8;
+    }
+
+    char* aFirst(i8 iKey)
+    {
+      if (axSlot.empty())
+        return nullptr;
+      u8 u = uHash(iKey) & uMask;
+      while (axSlot[u].aFirst) {
+        if (axSlot[u].iKey == iKey)
+          return axSlot[u].aFirst;
+        u = (u + 1) & uMask;
+      }
+      return nullptr;
+    }
+
+    ~HashJoin()
+    {
+      for (char* a : aaBlock)
+        free(a);
+    }
+  };
+}
+
+// a place for the cells of a row with the key (nRowBytes of them)
+extern "C" void* aExtern_HashJoinInsert(void* aIndexInfo, i8 iKey, i8 nRowBytes)
+{
+  IndexInfo* pIndexInfo = (IndexInfo*) aIndexInfo;
+  if (! pIndexInfo->m_aHashJoin)
+    pIndexInfo->m_aHashJoin = new HashJoin;
+  return ((HashJoin*) pIndexInfo->m_aHashJoin)->aInsert(iKey, nRowBytes);
+}
+
+// a copy of a string of a stored row
+extern "C" char* aExtern_HashJoinStr(void* aIndexInfo, const char* szStr)
+{
+  IndexInfo* pIndexInfo = (IndexInfo*) aIndexInfo;
+  HashJoin* pHash = (HashJoin*) pIndexInfo->m_aHashJoin;
+  size_t n = strlen(szStr) + 1;
+  char* a = pHash->aAlloc(n);
+  memcpy(a, szStr, n);
+  return a;
+}
+
+// the first stored row with the key ([next][cells]), or null
+extern "C" void* aExtern_HashJoinFirst(void* aIndexInfo, i8 iKey)
+{
+  IndexInfo* pIndexInfo = (IndexInfo*) aIndexInfo;
+  if (! pIndexInfo->m_aHashJoin)
+    return nullptr;
+  return ((HashJoin*) pIndexInfo->m_aHashJoin)->aFirst(iKey);
+}
+
+extern "C" void vExtern_HashJoinFree(void* aIndexInfo)
+{
+  IndexInfo* pIndexInfo = (IndexInfo*) aIndexInfo;
+  delete (HashJoin*) pIndexInfo->m_aHashJoin;
+  pIndexInfo->m_aHashJoin = nullptr;
+}
+
 // m_aGbyHash: the groups are in the tree (job tag /optimiser_off_hash_gbyagg)
 static void* const C_GBYHASH_OFF = (void*) 1;
 

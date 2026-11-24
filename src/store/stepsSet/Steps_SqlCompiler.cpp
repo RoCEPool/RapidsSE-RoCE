@@ -1386,6 +1386,10 @@ void Step::vSqlCompilerTransliterate(void)
 
   delete pBackend;
 
+  // job tag /show_pipeline: trace the pipeline statement the SQL became
+  if (AM::JOB::bHasTag("<show_pipeline>"_Stz))
+    vTrace("Transliterated pipeline:\n%s\nEnd of transliterated pipeline\n"_Stz, sPipelineStmt.azChar());
+
   // return the pipeline
   m_oDataStack.vPushStr(sPipelineStmt);
 

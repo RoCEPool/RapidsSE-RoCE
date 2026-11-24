@@ -6,6 +6,7 @@
 
 #include "Dynamic.hpp"
 extern "C" void vExtern_GbyHashFree(void* aIndexInfo);
+extern "C" void vExtern_HashJoinFree(void* aIndexInfo);
 #include "LogicUnit.hpp"
 
 //#include "IndexDef.hpp"
@@ -219,6 +220,7 @@ Dynamic::Dynamic(LogicUnit* pLogicUnit)
 
     // index join with J
     m_xDynamicT.m_iJoinedRows = 0;
+    m_xDynamicT.m_bHashProbe = 0;
     m_xDynamicT.m_xIndexInfoJ[iIndex].m_bInitialize = true;
 
 #ifdef WITH_CHECK_INITIALISED
@@ -239,6 +241,7 @@ Dynamic::Dynamic(LogicUnit* pLogicUnit)
     m_xDynamicT.m_xIndexInfoJ[iIndex].m_aEntBottom = nullptr;
     m_xDynamicT.m_xIndexInfoJ[iIndex].m_aEntUpper = nullptr;
     m_xDynamicT.m_xIndexInfoJ[iIndex].m_aEntBuffer = nullptr;
+    m_xDynamicT.m_xIndexInfoJ[iIndex].m_aHashJoin = nullptr;
     m_xDynamicT.m_xIndexInfoJ[iIndex].m_aEntInt = (Ent_int *) pLogicUnit->m_oEntWrkJ.aEnt();
 
     // payload (gby/srt/top)
@@ -334,8 +337,10 @@ Dynamic::~Dynamic(void) noexcept(false)
     delete pIndexTree;
   }
 
-  for (i8 iIndex = 0; iIndex < C_MAX_DUP_OPS; iIndex++)
+  for (i8 iIndex = 0; iIndex < C_MAX_DUP_OPS; iIndex++) {
     vExtern_GbyHashFree(&m_xDynamicT.m_xIndexInfoPL[iIndex]);
+    vExtern_HashJoinFree(&m_xDynamicT.m_xIndexInfoJ[iIndex]);
+  }
 
   if (m_xDynamicT.m_xIndexInfoPL[0].m_aIndexDef) {
     IndexDef* pIndexDef = _pIndexDef(m_xDynamicT.m_xIndexInfoPL[0].m_aIndexDef);
