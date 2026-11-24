@@ -1,0 +1,105 @@
+/*----------------------------------------------------------------------------*/
+/* havingGroups.test -- HAVING over the groups kept in memory                 */
+/*----------------------------------------------------------------------------*/
+
+// A HAVING that compares each group with an aggregate of the same groups
+// (TPC-H Q11: sum > c * the sum of the same rows; TPC-H Q15: a WITH query
+// whose sum equals the max over it) is done by the last GROUP BY at the origin
+// in two passes over its groups in memory (Steps_SqlCompiler.cpp
+// bRewriteHavingGroups and bRewriteHavingCte, CombinedSrc
+// vAppendCodeHavingGroups), not by a second pass over the table. These
+// queries check both shapes and a sub-query over other rows (left as it
+// is). The rows were computed from DATA/TPCH/lineitem10k.csv and
+// supplier_2k.tbl with exact decimals in Python.
+
+create table ${testName2}_lineitem (
+  L_ORDERKEY      INTEGER       NOT NULL,
+  L_PARTKEY       INTEGER       NOT NULL,
+  L_SUPPKEY       INTEGER       NOT NULL,
+  L_LINENUMBER    INTEGER       NOT NULL,
+  L_QUANTITY      DECIMAL(15,2) NOT NULL,
+  L_EXTENDEDPRICE DECIMAL(15,2) NOT NULL,
+  L_DISCOUNT      DECIMAL(15,2) NOT NULL,
+  L_TAX           DECIMAL(15,2) NOT NULL,
+  L_RETURNFLAG    CHAR(1)       NOT NULL,
+  L_LINESTATUS    CHAR(1)       NOT NULL,
+  L_SHIPDATE      DATE          NOT NULL,
+  L_COMMITDATE    DATE          NOT NULL,
+  L_RECEIPTDATE   DATE          NOT NULL,
+  L_SHIPINSTRUCT  CHAR(25)      NOT NULL,
+  L_SHIPMODE      CHAR(10)      NOT NULL,
+  L_COMMENT       VARCHAR(44)   NOT NULL
+);
+success
+create index ${testName2}_IxL_ORDERKEY on ${testName2}_lineitem (L_ORDERKEY);
+affected: 0
+load ${testName2}_lineitem "../DATA/TPCH/lineitem10k.csv";
+success
+
+create table ${testName2}_nation (
+  N_NATIONKEY  INTEGER      NOT NULL,
+  N_NAME       CHAR(25)     NOT NULL,
+  N_REGIONKEY  INTEGER      NOT NULL,
+  N_COMMENT    VARCHAR(152)
+);
+success
+create index ${testName2}_IxN_NATIONKEY on ${testName2}_nation (N_NATIONKEY);
+affected: 0
+create index ${testName2}_IxN_REGIONKEY on ${testName2}_nation (N_REGIONKEY);
+affected: 0
+load ${testName2}_nation "../DATA/TPCH/nation.tbl" <field_delimiter> = "|";
+success
+create table ${testName2}_supplier (
+  S_SUPPKEY    INTEGER       NOT NULL,
+  S_NAME       CHAR(25)      NOT NULL,
+  S_ADDRESS    VARCHAR(40)   NOT NULL,
+  S_NATIONKEY  INTEGER       NOT NULL,
+  S_PHONE      CHAR(15)      NOT NULL,
+  S_ACCTBAL    DECIMAL(15,2) NOT NULL,
+  S_COMMENT    VARCHAR(101)  NOT NULL
+);
+success
+create index ${testName2}_IxS_SUPPKEY on ${testName2}_supplier (S_SUPPKEY);
+affected: 0
+load ${testName2}_supplier "../DATA/TPCH/supplier_2k.tbl" <field_delimiter> = "|";
+success
+
+create index ${testName2}_IxL_SUPPKEY on ${testName2}_lineitem (L_SUPPKEY);
+affected: 0
+
+
+// Q11 shape: groups whose sum is above a fraction of the sum of all the rows
+select l_suppkey, sum(l_quantity) as v from ${testName2}_lineitem where l_shipmode = 'MAIL'
+ group by l_suppkey
+having sum(l_quantity) > (select sum(l_quantity) * 0.001 from ${testName2}_lineitem where l_shipmode = 'MAIL')
+ order by v desc, l_suppkey limit 6;
+ordered rows:
+  (7250, 102.00)
+  (6878, 95.00)
+  (305, 93.00)
+  (5841, 91.00)
+  (8776, 89.00)
+  (874, 87.00)
+
+select count(*) from (select l_suppkey, sum(l_quantity) as v from ${testName2}_lineitem where l_shipmode = 'MAIL'
+ group by l_suppkey
+having sum(l_quantity) > (select sum(l_quantity) * 0.001 from ${testName2}_lineitem where l_shipmode = 'MAIL'));
+rows: (431)
+
+// the sub-query reads other rows: left as it is
+select l_suppkey, sum(l_quantity) as v from ${testName2}_lineitem where l_shipmode = 'SHIP'
+ group by l_suppkey
+having sum(l_quantity) > (select sum(l_quantity) * 0.0005 from ${testName2}_lineitem where l_shipmode = 'RAIL')
+ order by v desc, l_suppkey limit 3;
+ordered rows:
+  (3189, 108.00)
+  (2331, 104.00)
+  (6939, 94.00)
+
+// Q15 shape: the groups of a WITH query equal to its max
+with r (k, v) as (select l_suppkey, sum(l_extendedprice) from ${testName2}_lineitem
+                   where l_shipmode = 'AIR' and l_suppkey <= 2000 group by l_suppkey)
+select s_suppkey, s_name, v from ${testName2}_supplier, r
+ where s_suppkey = k and v = (select max(v) from r) order by s_suppkey;
+ordered rows:
+  (967, 'Supplier#000000967', 146464.29)

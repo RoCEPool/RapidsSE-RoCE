@@ -97,6 +97,11 @@ void CombinedSrc::vSynthesizeCode(Stencil* pStencil, bool bFirstStage, bool bLas
   char* azPruneStart = nullptr;   // start of a table-scan inflate whose columns may be pruned
   i8 iPruneEnd = -1;              // sketch that ends the consumers of the inflated row
   std::vector<char*> vJoinPrune;  // starts of index joins whose unread columns may be skipped
+  bool bStageGbyAgg = false;      // the stage has a group by (its EOS emits the groups)
+  if (bFirstStage) {
+    m_iHgBefore = -1;
+    m_iHgInside = -1;
+  }
   const bool bJoinPrune = ! AM::JOB::bHasTag("<optimiser_off_join_prune>"_Stz) &&
                           ! AM::JOB::bHasTag("<optimiser_off_all>"_Stz);
   // An index (or cross) join inflates the columns of the joined table into its
@@ -272,6 +277,7 @@ void CombinedSrc::vSynthesizeCode(Stencil* pStencil, bool bFirstStage, bool bLas
         break;
 
       case SK_GBYAGG:
+        bStageGbyAgg = true;
 
         // - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
         // open the gbyagg code fragments file
@@ -832,10 +838,17 @@ void CombinedSrc::vSynthesizeCode(Stencil* pStencil, bool bFirstStage, bool bLas
         if (pOpSketch->m_eHandlerKind == HK_EOS) {
           if (pOpSketch->m_eStencilFrom == SR_PL) {
 
+            // (the groups of the last group by may be filtered: <havingGroups>)
+            bool bHg = bStageGbyAgg && m_bHavingGroupsHere && pOpSketch->m_pIndexDef->eKeyKind() == KE_INT &&
+                       AM::JOB::bHasTag("<havingGroups>"_Stz);
+            if (bHg)
+              m_iHgBefore = m_azCodeCrs - m_caCode;
             if (pOpSketch->m_pIndexDef->eKeyKind() == KE_INT)
               vAppendCodeFragment(pOpSketch, "vEosPLIntKeyTraversal"_Stz);
             else
               vAppendCodeFragment(pOpSketch, "vEosPLGenKeyTraversal"_Stz);
+            if (bHg)
+              m_iHgInside = m_azCodeCrs - m_caCode;
 
 						// generate code for the hash value
 						if (pOpSketch->eSketchKind() == SK_POT)
@@ -902,10 +915,17 @@ void CombinedSrc::vSynthesizeCode(Stencil* pStencil, bool bFirstStage, bool bLas
 				if (pOpSketch->m_eHandlerKind == HK_EOS) {
 					if (pOpSketch->m_eStencilFrom == SR_PL) {
 
+            // (the groups of the last group by may be filtered: <havingGroups>)
+            bool bHg = bStageGbyAgg && m_bHavingGroupsHere && pOpSketch->m_pIndexDef->eKeyKind() == KE_INT &&
+                       AM::JOB::bHasTag("<havingGroups>"_Stz);
+            if (bHg)
+              m_iHgBefore = m_azCodeCrs - m_caCode;
 						if (pOpSketch->m_pIndexDef->eKeyKind() == KE_INT)
 							vAppendCodeFragment(pOpSketch, "vEosPLIntKeyTraversal"_Stz);
 						else
 							vAppendCodeFragment(pOpSketch, "vEosPLGenKeyTraversal"_Stz);
+            if (bHg)
+              m_iHgInside = m_azCodeCrs - m_caCode;
 
 						// generate code for the hash value
 						if (pOpSketch->eSketchKind() == SK_POT)
@@ -961,12 +981,99 @@ void CombinedSrc::vSynthesizeCode(Stencil* pStencil, bool bFirstStage, bool bLas
   vJoinPruneFlush();
   vAppendFunctionFooter(nullptr, eCurrentHandler, bHasIndexInflate);
 
+  if (m_iHgInside >= 0)
+    vAppendCodeHavingGroups();
+
   // - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
   // delete the code file pointers
   delete pOperatorFile;
   delete pIndexFile;
   delete pInflateFile;
   delete pFilterFile;
+}
+
+// insert text at a place in the code already generated
+void CombinedSrc::vInsertText(char* azAt, const char* szText)
+{
+  _precondition_(_ADDRESS_,_MAGIC_,CN_COMBINEDSRC,_FOOTER_);
+
+  size_t n = strlen(szText);
+  RASSERT(m_azCodeCrs + n < m_caCode + sizeof(m_caCode));
+  memmove(azAt + n, azAt, (size_t)(m_azCodeCrs - azAt));
+  memcpy(azAt, szText, n);
+  m_azCodeCrs += n;
+  *m_azCodeCrs = '\0';
+}
+
+/*----------------------------------------------------------------------------*/
+/* HAVING over the groups kept in memory (job tag <havingGroups>, set by the  */
+/* SQL compiler: Steps_SqlCompiler.cpp, bRewriteHavingGroups). At the end of  */
+/* the input of the last group by (at the origin) all the groups are in its  */
+/* payload: a first pass over them aggregates one DECIMAL payload column (sum */
+/* or max), and the pass that emits the groups skips those whose value * den  */
+/* does not compare as asked with that aggregate * num.                       */
+/* <havingGroups> = <sum|max>.<payload column>.<gt|ge|lt|le|eq>.<num>.<den>   */
+/*----------------------------------------------------------------------------*/
+void CombinedSrc::vAppendCodeHavingGroups(void)
+{
+  _precondition_(_ADDRESS_,_MAGIC_,CN_COMBINEDSRC,_FOOTER_);
+
+  std::string sSpec(AM::JOB::szTagValue("<havingGroups>"_Stz)->azChar());
+  std::vector<std::string> as;
+  for (size_t p = 0, e; p <= sSpec.size(); p = e + 1) {
+    e = sSpec.find('.', p);
+    if (e == std::string::npos) e = sSpec.size();
+    as.push_back(sSpec.substr(p, e - p));
+  }
+  RASSERT(as.size() == 5);
+  std::string sFn = as[0], sIdx = as[1], sCmp = as[2];
+  std::string sNum = std::to_string(std::stoll(as[3])), sDen = std::to_string(std::stoll(as[4]));
+  std::string sOp = sCmp == "gt" ? ">" : sCmp == "ge" ? ">=" : sCmp == "lt" ? "<" : sCmp == "le" ? "<=" : "==";
+  RASSERT(sFn == "sum" || sFn == "max");
+
+  std::string sInside =
+    "    // having over the groups: skip a group that does not pass\n"
+    "    {\n"
+    "      union Bcd_T xHgV;\n"
+    "      xHgV.m_iAsI8 = aDynamicT->m_aiPayload[" + sIdx + "];\n"
+    "      bool bHgKeep = false;\n"
+    "      if (bHgAny && xHgV.m_iAsI8 != C_DATUM_NULL) {\n"
+    "        __int128 xV = xHgV.m_iMantissa, xA = xHgAgg;\n"
+    "        int iSV = xHgV.m_iScale, iSA = iHgScale;\n"
+    "        while (iSV < iSA) { xV *= 10; iSV++; }\n"
+    "        while (iSA < iSV) { xA *= 10; iSA++; }\n"
+    "        bHgKeep = xV * (__int128)" + sDen + " " + sOp + " xA * (__int128)" + sNum + ";\n"
+    "      }\n"
+    "      if ( ! bHgKeep) {\n"
+    "        aDynamicT->m_xIndexInfoPL[0].m_aEntInt = (struct Ent_int*)aExtern_PLNext(\n"
+    "            &aDynamicT->m_xIndexInfoPL[0], aDynamicT->m_xIndexInfoPL[0].m_aEntInt);\n"
+    "        continue;\n"
+    "      }\n"
+    "    }\n";
+  std::string sAccum = sFn == "sum" ? "      xHgAgg += xV;\n"
+                                    : "      if ( ! bHgAny || xV > xHgAgg) xHgAgg = xV;\n";
+  std::string sBefore =
+    "  // having over the groups: first pass, the " + sFn + " of payload column " + sIdx + "\n"
+    "  __int128 xHgAgg = 0;\n"
+    "  int iHgScale = 0;\n"
+    "  bool bHgAny = false;\n"
+    "  for (void* aHgEnt = aExtern_PLBegin(&aDynamicT->m_xIndexInfoPL[0]); aHgEnt;\n"
+    "       aHgEnt = aExtern_PLNext(&aDynamicT->m_xIndexInfoPL[0], aHgEnt)) {\n"
+    "    union Bcd_T xHgV;\n"
+    "    xHgV.m_iAsI8 = ((i8*)((char*)aHgEnt + sizeof(struct Ent_int) + 8))[" + sIdx + "];\n"
+    "    if (xHgV.m_iAsI8 == C_DATUM_NULL)\n"
+    "      continue;\n"
+    "    {\n"
+    "      __int128 xV = xHgV.m_iMantissa;\n"
+    "      int iSV = xHgV.m_iScale;\n"
+    "      while (iHgScale < iSV) { xHgAgg *= 10; iHgScale++; }\n"
+    "      while (iSV < iHgScale) { xV *= 10; iSV++; }\n" + sAccum +
+    "      bHgAny = true;\n"
+    "    }\n"
+    "  }\n";
+  vInsertText(m_caCode + m_iHgInside, sInside.c_str());
+  vInsertText(m_caCode + m_iHgBefore, sBefore.c_str());
+  m_iHgBefore = m_iHgInside = -1;
 }
 
 /*----------------------------------------------------------------------------*/
