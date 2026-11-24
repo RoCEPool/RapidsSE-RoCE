@@ -19,7 +19,7 @@ namespace STORE
 
     static Card_Predicate* pTo_boolPred(CardIter* pCI, Card_Expr* p_expr_arg);
 
-    void vAppend_and_rlnConj(Card_RlnConj *p_rlnConj);
+    void vAppend_and_rlnConj(Card *p_rlnConj);
     void vApplyCast(CardIter* pCI, Card_Emit* p_Dic_expr);
     void vBump_term_ordCol(eSF eFacet, i8 nBumpBy=1);
     bool bContains(Symbol* pGivenSymbol);
@@ -37,7 +37,7 @@ namespace STORE
     void vMark_rlnConj_Wrt_table(CardIter* pCI, Stz* szWithMark);
     void vOntoRpnExpr(String* psRpnExpr);
     void vReduce_not(CardIter* pCI);
-    void vRemove_rlnConj(Card_RlnConj *p_rlnConj);
+    void vRemove_rlnConj(Card *p_rlnConj);
     Card_CONJ* pRoot_conj(void);
      void vX_expCol_To_tblCol(CardIter* pCI);
     void vX_tblCol_To_expCol(CardIter* pCI);

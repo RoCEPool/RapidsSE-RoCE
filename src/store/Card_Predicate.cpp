@@ -183,7 +183,7 @@ Card_Predicate* Card_Predicate::pTo_boolPred(CardIter* pCI, Card_Expr* p_expr_ar
 /*----------------------------------------------------------------------------*/
 /* add given rlnConj to this boolPred                                         */
 /*----------------------------------------------------------------------------*/
-void Card_Predicate::vAppend_and_rlnConj(Card_RlnConj *p_rlnConj)
+void Card_Predicate::vAppend_and_rlnConj(Card *p_rlnConj)
 {
   _precondition_(_ADDRESS_, _MAGIC_, CN_CARD, _FOOTER_);
 
@@ -282,16 +282,15 @@ void Card_Predicate::vCopyMarked_rlnConj_To_table_filter(CardIter* pCI, Stz* szW
     if (! p_card->bMark1(szWithMark))
       return C_CONTINUE_RECURSION;
 
-    Card_RlnConj* p_rlnConj = _pCard_RlnConj(p_card);
-
+    // a comparison, or a NOT over one (see vMark_rlnConj_Wrt_table)
     Card *pMainCard;
-    char cTableSyn = p_rlnConj->cMark2();
+    char cTableSyn = p_card->cMark2();
     Card_Table *p_table = pCI->E.p_deck->pFind_table(cTableSyn, pMainCard);
     if (! p_table)
       return C_CONTINUE_RECURSION;
 
     pCI->E.p_filter = ((Card_OP *) pMainCard)->pEnsure_filter();
-    pCI->E.p_filter->pSub_predicate()->vAppend_and_rlnConj(p_rlnConj->pClone());
+    pCI->E.p_filter->pSub_predicate()->vAppend_and_rlnConj(p_card->pDupCardRecursive());
 
     pCI->E.p_filter->vMark1(p_table->cMark1());
     pCI->E.p_filter->vMark2(p_table->cMark2());
@@ -378,9 +377,9 @@ bool Card_Predicate::bCullMarked_rlnConj(Card_CONJ* p_conj, Stz* szWithMark)
   if (CK_TERM == eCard_conj)
     return false;
 
-  if (CK_RLNCONJ == eCard_conj) {
+  if (CK_RLNCONJ == eCard_conj || (CK_NOTCONJ == eCard_conj && p_conj->bMark1(szWithMark))) {
     if (p_conj->bMark1(szWithMark)) {
-      vRemove_rlnConj(_pCard_RlnConj(p_conj));
+      vRemove_rlnConj(p_conj);
       delete p_conj;
       return true;
     }
@@ -607,6 +606,19 @@ void Card_Predicate::vMark_rlnConj_Wrt_table(CardIter* pCI, Stz* szWithMark)
 
     if (p_card->bIsCard(CK_NOTCONJ)) {
       p_card->vMark1(MARK_NOT);
+      // NOT over one comparison (NOT LIKE in TPC-H Q16) that reads one table
+      // and is ANDed with the rest moves to the filter of that table as a whole,
+      // as a comparison does, instead of staying behind the joins.
+      if (! pCI->pAncestor(CK_NOTCONJ) && ! pCI->pAncestor(CK_ORCONJ) &&
+          1 == p_card->nChildCards() && p_card->pPeekChild()->bIsCard(CK_RLNCONJ) &&
+          ! p_card->pPeekChild()->bHasChildFacet(SF_SQY_NO) &&
+          ! p_card->pPeekChild()->pSymbol()->bHasFacet(SF_SQY_OP)) {
+        Symbol* pWhichTable = static_cast<Card_CONJ*>(p_card)->pTable_WhichTableFor_Conj(pCI);
+        if (pWhichTable) {
+          p_card->vMark1(szWithMark);
+          p_card->vMark2(pWhichTable->cTblSyn());
+        }
+      }
       return C_CONTINUE_RECURSION;
     }
     if (pCI->pAncestor(CK_NOTCONJ))
@@ -710,7 +722,7 @@ void Card_Predicate::vReduce_not(CardIter* pCI)
 /*----------------------------------------------------------------------------*/
 /* remove given rlnConj from this boolPred                                    */
 /*----------------------------------------------------------------------------*/
-void Card_Predicate::vRemove_rlnConj(Card_RlnConj *p_rlnConj)
+void Card_Predicate::vRemove_rlnConj(Card *p_rlnConj)
 {
   _precondition_(_ADDRESS_,_MAGIC_,CN_CARD,_FOOTER_);
 

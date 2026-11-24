@@ -144,7 +144,13 @@ void Card_Stage::vReinstate_stages_v0(CardIter* pCI)
       bSawSortOp = false;
       // (an outer join too: the project stays a card of its own, see
       // XF_Epilog_Fuse_project, and also runs on the NULL-extended rows)
-      bJoinStage = CK_o_INDEXJOIN == e_main;
+      // A key (not) exists test (IN, NOT IN, EXISTS) passes the arriving row
+      // on as it is, so a project and GROUP BY behind it stay in its stage
+      // too (TPC-H Q16: the NOT IN on supplier). Job tag
+      // /optimiser_off_keyexists_project splits them as before.
+      bJoinStage = CK_o_INDEXJOIN == e_main ||
+                   ((CK_o_KEYEXISTS == e_main || CK_o_KEYNOTEXISTS == e_main) &&
+                    ! AM::JOB::bHasTag("<optimiser_off_keyexists_project>"_Stz));
       continue;
     }
 
