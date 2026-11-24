@@ -103,6 +103,7 @@ void Step::vDynamicExecute(void)
       aDynamicT->m_aHeadLine0 = (HeadLine_T *) pCrwBuffer->aGetHead(0);
       aDynamicT->m_iHeadSize  = pCrwBuffer->nHeadSize();
       aDynamicT->m_nRows      = pCrwBuffer->nRows();
+      aDynamicT->m_pCrwBuffer = pCrwBuffer;
     }
     else {
       // PDSROWBUFFER
@@ -113,6 +114,7 @@ void Step::vDynamicExecute(void)
       aDynamicT->m_xRowInfoIT[0].m_aPdsRowBuffer = pPdsRowBuffer;
       //aDynamicT->m_xRowInfoIT.m_acStrArea = (char*)pPdsRowBuffer->szStzAllot_begin(); // ALKA TO COME BACK
       aDynamicT->m_nRows       = pPdsRowBuffer->nItems();
+      aDynamicT->m_pCrwBuffer  = nullptr;
     }
   }
 

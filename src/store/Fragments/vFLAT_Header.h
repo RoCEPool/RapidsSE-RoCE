@@ -120,6 +120,7 @@ i8 iStartHandler(struct Dynamic_T* aDynamicT) {
 #ifdef WITH_CLANG
 	aDynamicT->m_fp_vExtern_EntWrkAppendElementStz = &vExtern_EntWrkAppendElementStz;
 	aDynamicT->m_fp_aExtern_EntBufferNextEntry     = &aExtern_EntBufferNextEntry;
+	aDynamicT->m_fp_iExtern_ColCache              = &iExtern_ColCache;
 	aDynamicT->m_fp_vExtern_EntPayloadCreate       = &vExtern_EntPayloadCreate;
 	aDynamicT->m_fp_vExtern_EntWrkReset            = &vExtern_EntWrkReset;
 

@@ -5,6 +5,7 @@
 
 // Entry Buffer
 extern void* aExtern_EntBufferNextEntry(void** ppEntBuffer, void* aPrevEntry) __attribute__((weak_import));
+extern i8 iExtern_ColCache(void* aDynamicT, u8 uColMask) __attribute__((weak_import));
 extern void  vExtern_EntPayloadCreate(void* pEntWrk, i8 nPayloadBytes) __attribute__((weak_import));
 extern void  vExtern_EntWrkAppendElementInt(void* pEntWrk, i8 iInt) __attribute__((weak_import));
 extern void  vExtern_EntWrkAppendElementStz(void* pEntWrk, char* sValue) __attribute__((weak_import));
