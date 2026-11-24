@@ -71,6 +71,9 @@ namespace STORE {
     void vColCacheInflate(char* azStart, char* azEnd);
     void vAppendCodeHavingGroups(void);
     void vInsertText(char* azAt, const char* szText);
+    bool bHashJoinEligible(Stencil* pStencil, i8 iOpSketch, eHK eHandler);
+    void vAppendText(const char* szText);
+    void vAppendCodeHashJoin(OpSketch* pOpSketch, File* pOperatorFile);
     void vAppendCodeInflateCols(OpSketch* pOpSketch, Stz* szReturnPrefix, File* pCodeFile = nullptr);
     void vAppendCodeInflateInjCols(OpSketch* pOpSketch, Stz* szReturnPrefix, File* pCodeFile = nullptr);
 		void vAppendCodeInflateRightCols(OpSketch* pOpSketch, Stz* szReturnPrefix, File* pCodeFile = nullptr);

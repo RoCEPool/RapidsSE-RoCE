@@ -102,6 +102,7 @@ void CombinedSrc::vSynthesizeCode(Stencil* pStencil, bool bFirstStage, bool bLas
     m_iHgBefore = -1;
     m_iHgInside = -1;
   }
+  std::vector<std::string> vsHashJoinStages;   // stages whose first operator is a hash join
   const bool bJoinPrune = ! AM::JOB::bHasTag("<optimiser_off_join_prune>"_Stz) &&
                           ! AM::JOB::bHasTag("<optimiser_off_all>"_Stz);
   // An index (or cross) join inflates the columns of the joined table into its
@@ -224,6 +225,20 @@ void CombinedSrc::vSynthesizeCode(Stencil* pStencil, bool bFirstStage, bool bLas
         // - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
         // begin new EOS handler (by appending its function header)
         vAppendFunctionHeader(pOpSketch, eCurrentHandler, pStencil->szStageNm(), bHasIndexInflate);
+
+        // a hash join probes now, through the row handler of the stage
+        for (const std::string& sStage : vsHashJoinStages)
+          if (sStage == pStencil->szStageNm()->azChar()) {
+            std::string sProbe =
+                "  if (aDynamicT->m_xIndexInfoJ[0].m_aHashJoin) {\n"
+                "    aDynamicT->m_bHashProbe = 1;\n"
+                "    iPdsRowHandler_" + sStage + "(aDynamicT);\n"
+                "    aDynamicT->m_bHashProbe = 0;\n"
+                "    if (aDynamicT->m_iErrorCode != (i8)EC_NONE)\n"
+                "      return 0;\n"
+                "  }\n";
+            vAppendText(sProbe.c_str());
+          }
         break;
 
       case SK_AGGREG:
@@ -625,8 +640,12 @@ void CombinedSrc::vSynthesizeCode(Stencil* pStencil, bool bFirstStage, bool bLas
 					vAppendCodeFragment(pOpSketch, "vExprStack"_Stz);
 
           // - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-          // position the index
-					if (pOpSketch->m_pIndexDef->eKeyKind() == KE_INT)
+          // position the index (or build and probe a hash join)
+          if (bHashJoinEligible(pStencil, iOpSketch, eCurrentHandler)) {
+            vAppendCodeHashJoin(pOpSketch, pOperatorFile);
+            vsHashJoinStages.push_back(pStencil->szStageNm()->azChar());
+          }
+					else if (pOpSketch->m_pIndexDef->eKeyKind() == KE_INT)
             vAppendCodeFragment(pOpSketch, "vIndexJoinPosition_int"_Stz, pOperatorFile);
 					else
 						vAppendCodeFragment(pOpSketch, "vIndexJoinPosition_gen"_Stz, pOperatorFile);
@@ -998,19 +1017,6 @@ void CombinedSrc::vSynthesizeCode(Stencil* pStencil, bool bFirstStage, bool bLas
   delete pFilterFile;
 }
 
-// insert text at a place in the code already generated
-void CombinedSrc::vInsertText(char* azAt, const char* szText)
-{
-  _precondition_(_ADDRESS_,_MAGIC_,CN_COMBINEDSRC,_FOOTER_);
-
-  size_t n = strlen(szText);
-  RASSERT(m_azCodeCrs + n < m_caCode + sizeof(m_caCode));
-  memmove(azAt + n, azAt, (size_t)(m_azCodeCrs - azAt));
-  memcpy(azAt, szText, n);
-  m_azCodeCrs += n;
-  *m_azCodeCrs = '\0';
-}
-
 /*----------------------------------------------------------------------------*/
 /* HAVING over the groups kept in memory (job tag <havingGroups>, set by the  */
 /* SQL compiler: Steps_SqlCompiler.cpp, bRewriteHavingGroups). At the end of  */
@@ -1080,6 +1086,100 @@ void CombinedSrc::vAppendCodeHavingGroups(void)
   vInsertText(m_caCode + m_iHgInside, sInside.c_str());
   vInsertText(m_caCode + m_iHgBefore, sBefore.c_str());
   m_iHgBefore = m_iHgInside = -1;
+}
+
+/*----------------------------------------------------------------------------*/
+/* Hash join (DuckDB's build and probe) in place of an index join. The rows   */
+/* of the stage's input are stored by key as they arrive (build); at the end  */
+/* of the input the EOS handler calls the row handler again to probe: it     */
+/* walks the joined table's index once in key order and joins each entry     */
+/* with the stored rows of its key, instead of descending the index for every */
+/* arriving row (about 1 us each for a large table). For now only an inner    */
+/* join on one integer key that is the first operator of a row handler, and   */
+/* only with job tag /hash_join.                                              */
+/*----------------------------------------------------------------------------*/
+bool CombinedSrc::bHashJoinEligible(Stencil* pStencil, i8 iOpSketch, eHK eHandler)
+{
+  _precondition_(_ADDRESS_,_MAGIC_,CN_COMBINEDSRC,_FOOTER_);
+
+  if (AM::JOB::bHasTag("<optimiser_off_hash_join>"_Stz) ||
+      AM::JOB::bHasTag("<optimiser_off_all>"_Stz))
+    return false;
+  OpSketch* pOpSketch = pStencil->pGet(iOpSketch);
+  if (pOpSketch->m_bCrossJoin || pOpSketch->m_bLeftOuter || pOpSketch->m_iDupOpNo != 0 ||
+      pOpSketch->m_pIndexDef->eKeyKind() != KE_INT)
+    return false;
+  if (eHandler != HK_PDSROWBUFFER && eHandler != HK_PDSROWBUFFER_FULL)
+    return false;
+  if (iOpSketch == 0 || pStencil->pGet(iOpSketch - 1)->eSketchKind() != SK_INFLATE_ROW)
+    return false;
+  return true;
+}
+
+// insert text at a place in the code already generated
+void CombinedSrc::vInsertText(char* azAt, const char* szText)
+{
+  _precondition_(_ADDRESS_,_MAGIC_,CN_COMBINEDSRC,_FOOTER_);
+
+  size_t n = strlen(szText);
+  RASSERT(m_azCodeCrs + n < m_caCode + sizeof(m_caCode));
+  memmove(azAt + n, azAt, (size_t)(m_azCodeCrs - azAt));
+  memcpy(azAt, szText, n);
+  m_azCodeCrs += n;
+  *m_azCodeCrs = '\0';
+}
+
+// append text to the code
+void CombinedSrc::vAppendText(const char* szText)
+{
+  _precondition_(_ADDRESS_,_MAGIC_,CN_COMBINEDSRC,_FOOTER_);
+
+  vInsertText(m_azCodeCrs, szText);
+}
+
+void CombinedSrc::vAppendCodeHashJoin(OpSketch* pOpSketch, File* pOperatorFile)
+{
+  _precondition_(_ADDRESS_,_MAGIC_,CN_COMBINEDSRC,_FOOTER_);
+
+  char* azStart = m_azCodeCrs;
+  vAppendCodeFragment(pOpSketch, "vHashJoinPosition_int"_Stz, pOperatorFile);
+
+  // the string cells of the arriving row, and the operator number of the labels
+  std::string sVch = "{";
+  for (i8 i_Col = 0; i_Col < pOpSketch->m_pStreamDefLft->nColumns(); i_Col++)
+    if (pOpSketch->m_pStreamDefLft->pGetColumn(i_Col)->eColumnType() == CT_VARCHAR)
+      sVch += std::to_string(i_Col) + ", ";
+  sVch += "-1}";
+  std::string sNo = std::to_string(pOpSketch->m_iOperatorNo);
+  std::string sCode(azStart, m_azCodeCrs - azStart);
+  for (size_t p; (p = sCode.find("__HJ_VCH__")) != std::string::npos; )
+    sCode.replace(p, 10, sVch);
+  for (size_t p; (p = sCode.find("__HJ_N__")) != std::string::npos; )
+    sCode.replace(p, 8, sNo);
+  m_azCodeCrs = azStart;
+  *m_azCodeCrs = '\0';
+  vAppendText(sCode.c_str());
+
+  // in the row handler: its locals, the entry to the probe, and the return to
+  // the next stored row where an index join returns to the next arriving row
+  char* azHandler = nullptr;
+  for (char* a = azStart; a > m_caCode; a--)
+    if (strncmp(a, "int iPdsRowHandler_", 19) == 0) {
+      azHandler = a;
+      break;
+    }
+  RASSERT(azHandler);
+  const char* szPaW = "paW = &aDynamicT->m_aW[0];\n";
+  char* azPaW = strstr(azHandler, szPaW);
+  RASSERT(azPaW && azPaW < azStart);
+  std::string sEntry = "  void* hjEnt = 0; void* hjBuf = 0; void* hjNextEnt = 0; void* hjNextBuf = 0; char* hjNode = 0;\n"
+                       "  if (aDynamicT->m_bHashProbe)\n    goto L_HJProbe" + sNo + ";\n";
+  vInsertText(azPaW + strlen(szPaW), sEntry.c_str());
+  std::string sLoop = std::string(pOpSketch->m_sLabelOuterLoop.azChar()) + ":\n";
+  char* azLoop = strstr(azHandler, sLoop.c_str());
+  RASSERT(azLoop);
+  std::string sNext = "  if (aDynamicT->m_bHashProbe)\n    goto L_HJNext" + sNo + ";\n";
+  vInsertText(azLoop + sLoop.size(), sNext.c_str());
 }
 
 /*----------------------------------------------------------------------------*/
