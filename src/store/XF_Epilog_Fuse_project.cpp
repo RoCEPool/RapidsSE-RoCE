@@ -82,6 +82,11 @@ void XF_Epilog_Fuse_project::vFuse_project(void)
       goto L_UPDATE_PRIOR_EMITTED;
     }
 
+    // An outer join keeps its own columns: its join constraint can read a
+    // column that the project drops (TPC-H Q13 reads o_comment in the ON).
+    if (m_pCI->E.p_Op->bIsCard(CK_o_INDEXJOIN) && m_pCI->E.p_Op->pFindSubCard(CK_OUTERJOIN))
+      goto L_UPDATE_PRIOR_EMITTED;
+
     m_pCI->E.p_Op->vFuse_project_Viable(m_pCI);
     m_pCI->E.p_deck->vDeleteChild(m_pCI->Next.m_pProject);
     m_pCI->E.p_Op->pSymbol()->Y_vSet(P_FusedProject);

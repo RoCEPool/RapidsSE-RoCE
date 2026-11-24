@@ -1,0 +1,95 @@
+/*----------------------------------------------------------------------------*/
+/* outerJoinProject.test -- a projection behind an outer join in its stage    */
+/*----------------------------------------------------------------------------*/
+
+// The projection behind a left outer index join stays in the stage of the
+// join (Card_Stage.cpp), so the join no longer copies every column of the
+// inner table out of the stage (TPC-H Q13 copied the 9 columns of orders,
+// comments included, to keep 2). The projection is not fused into the join
+// (XF_Epilog_Fuse_project.cpp): the ON clause reads o_comment, which the
+// projection drops. The rows were computed from TPCH/SF_0001/orders.tbl
+// and customer.tbl in Python.
+
+create table ${testName2}_orders (
+  O_ORDERKEY      INTEGER       NOT NULL,
+  O_CUSTKEY       INTEGER       NOT NULL,
+  O_ORDERSTATUS   CHAR(1)       NOT NULL,
+  O_TOTALPRICE    DECIMAL(15,2) NOT NULL,
+  O_ORDERDATE     DATE          NOT NULL,
+  O_ORDERPRIORITY CHAR(15)      NOT NULL,
+  O_CLERK         CHAR(15)      NOT NULL,
+  O_SHIPPRIORITY  INTEGER       NOT NULL,
+  O_COMMENT       VARCHAR(79)   NOT NULL
+) partition by (O_CUSTKEY);
+success
+create index ${testName2}_IxO_ORDERKEY on ${testName2}_orders (O_ORDERKEY);
+affected: 0
+create index ${testName2}_IxO_CUSTKEY on ${testName2}_orders (O_CUSTKEY);
+affected: 0
+load ${testName2}_orders "../TPCH/SF_0001/orders.tbl" <field_delimiter> = "|";
+success
+
+create table ${testName2}_customer (
+  C_CUSTKEY    INTEGER       NOT NULL,
+  C_NAME       VARCHAR(25)   NOT NULL,
+  C_ADDRESS    VARCHAR(40)   NOT NULL,
+  C_NATIONKEY  INTEGER       NOT NULL,
+  C_PHONE      CHAR(15)      NOT NULL,
+  C_ACCTBAL    DECIMAL(15,2) NOT NULL,
+  C_MKTSEGMENT CHAR(10)      NOT NULL,
+  C_COMMENT    VARCHAR(117)  NOT NULL
+);
+success
+create index ${testName2}_IxC_CUSTKEY on ${testName2}_customer (C_CUSTKEY);
+affected: 0
+create index ${testName2}_IxC_NATIONKEY on ${testName2}_customer (C_NATIONKEY);
+affected: 0
+load ${testName2}_customer "../TPCH/SF_0001/customer.tbl" <field_delimiter> = "|";
+success
+
+// Q13 shape
+select c_count, count(*) as custdist
+  from (select c_custkey, count(o_orderkey)
+          from ${testName2}_customer left outer join ${testName2}_orders
+               on c_custkey = o_custkey and o_comment not like '%special%requests%'
+         group by c_custkey) as c_orders (c_custkey, c_count)
+ group by c_count
+ order by custdist desc, c_count desc
+ limit 6;
+ordered rows:
+  (0, 50)
+  (16, 8)
+  (17, 7)
+  (20, 6)
+  (13, 6)
+  (12, 6)
+
+select count(*) from (select c_count, count(*) as custdist
+  from (select c_custkey, count(o_orderkey)
+          from ${testName2}_customer left outer join ${testName2}_orders
+               on c_custkey = o_custkey and o_comment not like '%special%requests%'
+         group by c_custkey) as c_orders (c_custkey, c_count)
+ group by c_count);
+rows: (27)
+
+// the NULL-extended rows go through the projection too
+select count(*), count(o_orderkey), sum(o_totalprice)
+  from ${testName2}_customer left outer join ${testName2}_orders
+       on c_custkey = o_custkey and o_comment like '%deposits%';
+rows: (341, 284, 27721557.72)
+
+select c_custkey, count(o_orderkey), max(o_orderkey)
+  from ${testName2}_customer left outer join ${testName2}_orders
+       on c_custkey = o_custkey and o_comment like '%deposits%'
+ where c_custkey <= 10
+ group by c_custkey
+having count(o_orderkey) > 0
+ order by c_custkey;
+ordered rows:
+  (1, 1, 1602)
+  (2, 2, 1603)
+  (4, 5, 4263)
+  (5, 3, 5859)
+  (7, 5, 5670)
+  (8, 4, 5572)
+  (10, 6, 4867)
