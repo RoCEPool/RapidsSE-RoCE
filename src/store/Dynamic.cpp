@@ -215,6 +215,8 @@ Dynamic::Dynamic(LogicUnit* pLogicUnit)
     m_xDynamicT.m_xIndexInfoT[iIndex].m_aEntBottom = nullptr;
     m_xDynamicT.m_xIndexInfoT[iIndex].m_aEntUpper = nullptr;
     m_xDynamicT.m_xIndexInfoT[iIndex].m_aEntBuffer = nullptr;
+    m_xDynamicT.m_xIndexInfoT[iIndex].m_aEntLast = nullptr;
+    m_xDynamicT.m_xIndexInfoT[iIndex].m_iKeyLast = 0;
     m_xDynamicT.m_xIndexInfoT[iIndex].m_aEntInt = (Ent_int *) pLogicUnit->m_oEntWrkT.aEnt();
 
     // index join with J
@@ -239,6 +241,8 @@ Dynamic::Dynamic(LogicUnit* pLogicUnit)
     m_xDynamicT.m_xIndexInfoJ[iIndex].m_aEntBottom = nullptr;
     m_xDynamicT.m_xIndexInfoJ[iIndex].m_aEntUpper = nullptr;
     m_xDynamicT.m_xIndexInfoJ[iIndex].m_aEntBuffer = nullptr;
+    m_xDynamicT.m_xIndexInfoJ[iIndex].m_aEntLast = nullptr;
+    m_xDynamicT.m_xIndexInfoJ[iIndex].m_iKeyLast = 0;
     m_xDynamicT.m_xIndexInfoJ[iIndex].m_aEntInt = (Ent_int *) pLogicUnit->m_oEntWrkJ.aEnt();
 
     // payload (gby/srt/top)
