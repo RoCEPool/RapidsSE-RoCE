@@ -1426,7 +1426,9 @@ void CardIter::vEndPhase(void)
 
   m_pBench->vEndPhase(this);
 
-  vValidateBench(true);
+  // The full check of all cards runs once after the last phase (XF::vXF);
+  // after the other phases only when the job asks for checks.
+  vValidateBench();
 
   RASSERT(0 == nItems());
 }

@@ -49,7 +49,7 @@ void Heap::operator delete(void* pHeapAddress)
 /*----------------------------------------------------------------------------*/
 Heap::Heap(eCN eClassNo, i8 iObjectSize, eHT eHeap)
 : PoolBuffer(eClassNo)
-, m_okLock(this)
+, m_okLock(this, false)  // a leaf lock: not kept in the lock set of the task
 {
   _precondition_(_ADDRESS_,_MAGIC_,eClassNo);
   
