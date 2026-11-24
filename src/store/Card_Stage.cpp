@@ -142,8 +142,9 @@ void Card_Stage::vReinstate_stages_v0(CardIter* pCI)
       bSawIndexJoinOp = true;
       bSawProjectOp = false;
       bSawSortOp = false;
-      // (not an outer join: its NULL rows come from a separate path)
-      bJoinStage = CK_o_INDEXJOIN == e_main && ! p_main->pFindSubCard(CK_OUTERJOIN);
+      // (an outer join too: the project stays a card of its own, see
+      // XF_Epilog_Fuse_project, and also runs on the NULL-extended rows)
+      bJoinStage = CK_o_INDEXJOIN == e_main;
       continue;
     }
 
