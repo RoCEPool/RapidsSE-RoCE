@@ -126,11 +126,12 @@ scan_gbyagg (a GROUP BY behind the project of a scan runs in the stage of the sc
 join_project (a projection behind an inner index join stays in the stage of the join) and
 join_gbyagg (a GROUP BY behind that projection runs in the stage of the join) and
 join_prune (an index or cross join skips the columns of the joined table that no operator
-of its stage reads).
+of its stage reads) and le_shortcut (an index join finds the upper end of its range from
+the lower end instead of a second descent of the tree).
 
     python3 tests/tpch_sf1_correctness/scripts/run_optimiser_equivalence.py
 
-runs each of the 22 queries normally and with every switch (638 executions) and compares the
+runs each of the 22 queries normally and with every switch (660 executions) and compares the
 rows with the reference by the rules above. It writes `reports/OPTIMISER_EQUIVALENCE.md`.
 It needs more memory than the correctness test (plans without early projection carry every
 column); on a machine with 8 GB the node is killed for memory part of the way. CI has 16 GB.

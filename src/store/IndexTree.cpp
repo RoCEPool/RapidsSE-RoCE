@@ -400,6 +400,9 @@ extern "C" void vExtern_IndexTreePositionGE_int(void* aIndexInfo) {
 
 	pIndexInfo->m_aEntBuffer = pEntBuffer;
 	pIndexInfo->m_aEntInt = (Ent_int*)aEnt;
+	// for vExtern_IndexTreePositionLE_int with the same key
+	pIndexInfo->m_aEntLast = aEnt;
+	pIndexInfo->m_iKeyLast = ELM0_OF_KEY(aKey);
 }
 
 /*----------------------------------------------------------------------------*/
@@ -510,6 +513,19 @@ extern "C" void vExtern_IndexTreePositionLE_int(void* aIndexInfo) {
 	Ent* aEnt = nullptr;
 
 	pIndexInfo->m_aEntUpper = nullptr;
+
+	// An index join positions at the first entry >= key (PositionGE) and then
+	// here at the first entry > the same key: when PositionGE has just found
+	// the first entry for this key, move on from it instead of descending the
+	// tree a second time.
+	if (pIndexInfo->m_aEntLast && pIndexInfo->m_aEntLast == (void*) pIndexInfo->m_aEntInt &&
+	    pIndexInfo->m_iKeyLast == ELM0_OF_KEY(aKey) && pIndexInfo->m_aEntBuffer &&
+	    ! AM::JOB::bHasTag("<optimiser_off_le_shortcut>"_Stz)) {
+		pEntBuffer = (EntBuffer*) pIndexInfo->m_aEntBuffer;
+		aEnt = EntBuffer::pMoveToGreaterThanEntry_int((Ent*) pIndexInfo->m_aEntInt, aKey, &pEntBuffer);
+		pIndexInfo->m_aEntUpper = (Ent_int*)aEnt;
+		return;
+	}
 
 	// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
