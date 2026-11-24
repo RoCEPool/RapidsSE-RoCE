@@ -3,6 +3,9 @@
 /*============================================================================*/
 
 #include "BASE.h"
+#include <regex>
+#include <functional>
+#include <string>
 #include "Step.hpp"
 #include "EnterExit.h"
 #include "StepAccum.hpp"
@@ -30,6 +33,7 @@
 #include "PlanDefinitionParser.hpp"
 #include "SqlPlanner.hpp"
 #include "ShadowRoot.hpp"
+#include "MetadataNode.hpp"
 #include "ShadowPlan.hpp"
 #include "PlanOperand.hpp"
 
@@ -1355,6 +1359,199 @@ void Step::vSqlCompilerStageMarkers(void)
 }
 
 
+
+/*----------------------------------------------------------------------------*/
+/* HAVING over the groups, from the groups kept in memory                     */
+/*----------------------------------------------------------------------------*/
+// TPC-H Q11 compares each group's sum with a fraction of the same sum over
+// all the rows the groups were made from:
+//
+//   select k, sum(e) as value from T where W group by k
+//   having sum(e) > (select sum(e) * c from T where W)
+//
+// The sub-query is a second pass over T (its scans and joins). The sum over
+// all the rows is the sum of the group sums, and the groups are all in memory
+// at the origin once the last GROUP BY level has them: the GROUP BY there
+// adds them up in a first pass over its groups and emits, in a second pass,
+// the groups that pass the comparison (CombinedSrc, job tag <havingGroups>),
+// as DuckDB would reuse the materialised groups instead of a second pass over
+// T. This rewrites the pipeline statement for that: the sub-query pipeline
+// and the filter on it go; the job gets the tags <havingGroups> (what to
+// compare) and <optimiser_off_local_gbyagg> (the groups must reach the
+// origin). Job tag /optimiser_off_having_groups keeps the statement as is.
+namespace {
+  std::string sNormaliseStages(const std::string& s)
+  {
+    static const std::regex xMarker("stageMarker[0-9]+");
+    return std::regex_replace(s, xMarker, "stageMarker");
+  }
+
+  bool bRewriteHavingGroups(std::string& sStmt, std::string& sTags)
+  {
+    // the filter on the sub-query, right behind the group by in its stage
+    static const std::regex xFilter(
+        "(gbyAgg \" groupBy  ([^\"]*?) aggregates  ([^\"]*?) \\)  ([^\"]*?) sum  \")\n"
+        "( *)\\| filter \" type BOOLEAN  \\$([0-9]+) (__subquery[0-9]+)  (>|>=|<|<=)  \"\n");
+    std::smatch m;
+    if (! std::regex_search(sStmt, m, xFilter))
+      return false;
+    std::string sAggrs = m[3].str();      // e.g. "type INTEGER ( 19 ) $K1 , type DECIMAL ( 19 2 )"
+    std::string sCol   = m[6].str();
+    std::string sSqy   = m[7].str();
+    std::string sCmp   = m[8].str();
+
+    // the compared column is the sum: the last aggregate, the only one not a key copy
+    i8 nAggrs = 1;
+    for (char c : sAggrs) if (c == ',') nAggrs++;
+    i8 nKeys = 0;
+    for (size_t p = sAggrs.find("$K"); p != std::string::npos; p = sAggrs.find("$K", p + 2)) nKeys++;
+    if (nAggrs - nKeys != 1 || std::to_string(nAggrs) != sCol)
+      return false;
+
+    // the sub-query pipeline: the same stages as the main pipeline up to the
+    // group by, with aggreg sum of the same expression, then times a constant
+    std::string sBegin = "  pipeline " + sSqy + "\n  begin\n";
+    size_t iSqy = sStmt.find(sBegin);
+    if (iSqy == std::string::npos)
+      return false;
+    size_t iSqyEnd = sStmt.find("\n  end\n", iSqy);
+    if (iSqyEnd == std::string::npos)
+      return false;
+    iSqyEnd += 7;
+    std::string sSub = sStmt.substr(iSqy + sBegin.size(), iSqyEnd - 7 - iSqy - sBegin.size());
+
+    static const std::regex xAggreg("\\| aggreg \" ([^\"]*?) \\)  ([^\"]*?) sum  \"\n");
+    std::smatch ma;
+    if (! std::regex_search(sSub, ma, xAggreg))
+      return false;
+    std::string sSubPrefix = sNormaliseStages(sSub.substr(0, ma.position(0)));
+    static const std::regex xFactor("project \" type [^\"]*? \\$1 ([0-9]+)\\.([0-9]+)  \\*  \"");
+    std::smatch mf;
+    if (! std::regex_search(sSub, mf, xFactor))
+      return false;
+    std::string sNum = mf[1].str() + mf[2].str();
+    std::string sDen = "1" + std::string(mf[2].str().size(), '0');
+
+    // the main pipeline from its first stage to its first group by (on the
+    // partitions), which must sum the same expression
+    size_t iMain = sStmt.find("  stage stageStart", iSqyEnd);
+    if (iMain == std::string::npos)
+      return false;
+    static const std::regex xGby1("\\| gbyAgg \" groupBy  ([^\"]*?) aggregates  ([^\"]*?) \\)  ([^\"]*?) sum  \"\n");
+    std::smatch mg;
+    std::string sMain = sStmt.substr(iMain);
+    if (! std::regex_search(sMain, mg, xGby1) || mg[3].str() != ma[2].str())
+      return false;
+    std::string sMainPrefix = sNormaliseStages(sMain.substr(0, (size_t) mg.position(0)));
+    // the sub-query's prefix is indented two more (it is a nested pipeline)
+    std::string sSubOut;
+    for (size_t p = 0; p < sSubPrefix.size(); ) {
+      size_t e = sSubPrefix.find('\n', p);
+      std::string sLine = sSubPrefix.substr(p, e == std::string::npos ? std::string::npos : e - p + 1);
+      if (sLine.compare(0, 2, "  ") == 0)
+        sLine = sLine.substr(2);
+      sSubOut += sLine;
+      if (e == std::string::npos) break;
+      p = e + 1;
+    }
+    if (sSubOut != sMainPrefix)
+      return false;
+
+    // rewrite: drop the filter and the sub-query pipeline
+    std::string sNew = sStmt.substr(0, (size_t) m.position(0)) + m[1].str() + "\n" +
+                       sStmt.substr((size_t) m.position(0) + m.length(0));
+    sNew.erase(iSqy, iSqyEnd - iSqy);
+    // keep a group when its sum (payload 0) * den <cmp> (sum of the sums) * num
+    std::string sCmpNm = sCmp == ">" ? "gt" : sCmp == ">=" ? "ge" : sCmp == "<" ? "lt" : "le";
+    sTags = "sum." + std::string("0.") + sCmpNm + "." + sNum + "." + sDen;
+    sStmt = sNew;
+    return true;
+  }
+
+  // TPC-H Q15 (a WITH query read twice, once by a scalar sub-query):
+  //
+  //   with r (k, v) as (select k, sum(e) from T where W group by k)
+  //   select ... from S, r where S.x = r.k and r.v = (select max(v) from r)
+  //
+  // The groups of r are in memory at the origin: the GROUP BY there finds
+  // the max (or min, or sum) of v in a first pass and emits the groups that
+  // equal it, instead of a second pass over T for the sub-query. Done when
+  // the WITH query is called by the sub-query and once by a cross join behind
+  // the scan of one table (the column numbers of r are then known).
+  bool bRewriteHavingCte(std::string& sStmt, std::string& sTags,
+                         const std::function<i8(const std::string&)>& nColumns)
+  {
+    static const std::regex xSqy(
+        "  pipeline (__subquery[0-9]+)\n  begin\n"
+        "    stage stageStart on origin :\n      start\n      \\| pulse once\n      \\| stageMarker[0-9]+\n"
+        "    stage stageMarker[0-9]+ on origin :\n"
+        "      call \"([A-Za-z0-9_]+) \"\n"
+        "      \\| aggreg \" type DECIMAL \\( [0-9]+ [0-9]+ \\) \\)  \\$([0-9]+) (max|min|sum)  \"\n"
+        "      \\| combined 0\n      \\| stageLast\n"
+        "    stage stageLast on origin :\n      output\n      \\| sink\n      \\| stageStart\n"
+        "  end\n");
+    std::smatch m;
+    if (! std::regex_search(sStmt, m, xSqy))
+      return false;
+    std::string sSqy = m[1].str(), sCte = m[2].str(), sFn = m[4].str();
+    i8 iCol = std::stoll(m[3].str());
+    size_t iSqy = (size_t) m.position(0), nSqy = (size_t) m.length(0);
+
+    // the WITH query ends in a group by whose output column iCol is a sum
+    std::string sBegin = "  pipeline " + sCte + "\n  begin\n";
+    size_t iCte = sStmt.find(sBegin);
+    if (iCte == std::string::npos)
+      return false;
+    size_t iCteEnd = sStmt.find("\n  end\n", iCte);
+    if (iCteEnd == std::string::npos)
+      return false;
+    std::string sCteBody = sStmt.substr(iCte, iCteEnd - iCte);
+    static const std::regex xGby("gbyAgg \" groupBy  ([^\"]*?) aggregates  ([^\"]*?) \\)  ([^\"]*?) sum  \"");
+    std::smatch mg;
+    std::string sLastGby;
+    for (auto it = std::sregex_iterator(sCteBody.begin(), sCteBody.end(), xGby); it != std::sregex_iterator(); ++it)
+      sLastGby = (*it)[2].str();
+    if (sLastGby.empty())
+      return false;
+    i8 nCols = 1, nKeys = 0;
+    for (char c : sLastGby) if (c == ',') nCols++;
+    for (size_t p = sLastGby.find("$K"); p != std::string::npos; p = sLastGby.find("$K", p + 2)) nKeys++;
+    if (nCols - nKeys != 1 || iCol != nCols || sLastGby.find("DECIMAL") == std::string::npos)
+      return false;
+
+    // the main query: scan of one table, cross join with the WITH query,
+    // then the filter that compares column iCol of the WITH query
+    static const std::regex xMain(
+        "      scan rapids public ([A-Za-z0-9_]+)\n    \\| stageMarker[0-9]+ broadcast\n"
+        "  stage stageMarker[0-9]+ on all partitions :\n"
+        "    call \"([A-Za-z0-9_]+) \"\n    \\| abstractJoin \"CROSS true  \"\n");
+    std::smatch mm;
+    std::string sMain = sStmt.substr(iCteEnd);
+    std::string sMainNorm = std::regex_replace(sMain, std::regex("\n    scan rapids"), "\n      scan rapids");
+    if (! std::regex_search(sMainNorm, mm, xMain) || mm[2].str() != sCte)
+      return false;
+    i8 nLeft = nColumns(mm[1].str());
+    if (nLeft <= 0)
+      return false;
+    std::string sRef = "$" + std::to_string(nLeft + iCol) + " " + sSqy + "  ==  and  ";
+    size_t iRef = sStmt.find(sRef);
+    if (iRef == std::string::npos || sStmt.find(sSqy, iRef + sRef.size()) != std::string::npos)
+      return false;
+    // the WITH query is called by the sub-query and the cross join only
+    i8 nCalls = 0;
+    for (size_t p = sStmt.find("call \"" + sCte + " \""); p != std::string::npos; p = sStmt.find("call \"" + sCte + " \"", p + 1))
+      nCalls++;
+    if (nCalls != 2)
+      return false;
+
+    sStmt.erase(iRef, sRef.size());
+    sStmt.erase(iSqy, nSqy);
+    sTags = sFn + ".0.eq.1.1";
+    return true;
+  }
+
+}
+
 /*----------------------------------------------------------------------------*/
 /* sqlCompiler::transliterate -- plan to pipeline transliterate               */
 /*----------------------------------------------------------------------------*/
@@ -1385,6 +1582,42 @@ void Step::vSqlCompilerTransliterate(void)
   UNUSED(bTransliterate);
 
   delete pBackend;
+
+  if (! AM::JOB::bHasTag("<optimiser_off_having_groups>"_Stz) &&
+      ! AM::JOB::bHasTag("<optimiser_off_all>"_Stz)) {
+    std::string sStmt(sPipelineStmt.azChar());
+    std::string sHaving;
+    auto nColumns = [pPlanRoot](const std::string& sTable) -> i8 {
+      s256 sTbl;
+      sTbl.vSprint("%s"_Stz, sTable.c_str());
+      Parser::QueryNode* pMetadataNode = Parser::ShadowRoot::pMetadataNode(pPlanRoot);
+      if (! pMetadataNode)
+        return 0;
+      Parser::PlanNodeIter* pIter = Parser::MetadataNode::pColumnDefIter(pMetadataNode,
+          "rapids"_Stz, "public"_Stz, (Stz*) sTbl.azChar());
+      if (! pIter)
+        return 0;
+      i8 n = 0;
+      while (pIter->bHasNext()) {
+        pIter->pNext();
+        n++;
+      }
+      delete pIter;
+      return n;
+    };
+    if (bRewriteHavingGroups(sStmt, sHaving) || bRewriteHavingCte(sStmt, sHaving, nColumns)) {
+      size_t iBegin = sStmt.find("\nbegin\n");
+      if (iBegin != std::string::npos) {
+        sStmt.insert(iBegin + 1, "  tag <havingGroups> = " + sHaving + " endTag\n"
+                                 "  tag <optimiser_off_local_gbyagg> = 1 endTag\n");
+        sPipelineStmt.vSprint("%s"_Stz, sStmt.c_str());
+      }
+    }
+  }
+
+  // job tag /show_pipeline: trace the pipeline statement the SQL became
+  if (AM::JOB::bHasTag("<show_pipeline>"_Stz))
+    vTrace("Transliterated pipeline:\n%s\nEnd of transliterated pipeline\n"_Stz, sPipelineStmt.azChar());
 
   // return the pipeline
   m_oDataStack.vPushStr(sPipelineStmt);

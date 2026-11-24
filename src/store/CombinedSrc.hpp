@@ -31,11 +31,15 @@ namespace STORE {
 
     char m_caCode[C_FLATTEN_SOURCE_V2];
     char *m_azCodeCrs;
+    bool m_bHavingGroupsHere = false;   // this stage's group by is the last one (Stencil.cpp)
+    i8 m_iHgBefore = -1;    // having over the groups: where its first pass goes
+    i8 m_iHgInside = -1;    // and where its test goes
 
     // must be last
     Footer m_xFooter;
 
   public:
+    void vHavingGroupsHere(bool b) { m_bHavingGroupsHere = b; }
     void *operator new(size_t);
 
     void operator delete(void *);
@@ -64,6 +68,8 @@ namespace STORE {
 		void vAppendCodeHashCols(OpSketch* pOpSketch);
 		void vAppendCodeHashCols2(OpSketch* pOpSketch);
     void vPruneInflate(char* azStart, char* azEnd);
+    void vAppendCodeHavingGroups(void);
+    void vInsertText(char* azAt, const char* szText);
     void vAppendCodeInflateCols(OpSketch* pOpSketch, Stz* szReturnPrefix, File* pCodeFile = nullptr);
     void vAppendCodeInflateInjCols(OpSketch* pOpSketch, Stz* szReturnPrefix, File* pCodeFile = nullptr);
 		void vAppendCodeInflateRightCols(OpSketch* pOpSketch, Stz* szReturnPrefix, File* pCodeFile = nullptr);

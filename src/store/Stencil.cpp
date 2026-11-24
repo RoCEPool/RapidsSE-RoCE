@@ -92,6 +92,16 @@ eEC Stencil::eSynthesise(PipelineDef *pPipelineDef) {
 
   i8 nStages = pPipelineDef->nItems();
 
+  // the last stage with a group by: the one at the origin, whose groups a
+  // HAVING over the groups filters (job tag <havingGroups>, CombinedSrc)
+  i8 iLastGbyStage = -1;
+  for (i8 i_Stage = 0; i_Stage < nStages; i_Stage++) {
+    StageDef *pStageDef = pPipelineDef->pGet(i_Stage);
+    for (i8 i_Op = 0; i_Op < pStageDef->nItems(); i_Op++)
+      if (pStageDef->pGet(i_Op)->szOpNm()->bSame("gbyAgg"_Stz))
+        iLastGbyStage = i_Stage;
+  }
+
   // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
   // synthesise the code for each stage
   for (i8 i_Stage = 0; i_Stage < nStages; i_Stage++) {
@@ -101,6 +111,7 @@ eEC Stencil::eSynthesise(PipelineDef *pPipelineDef) {
     if (eErrorCode != EC_NONE) {
       return eErrorCode;
     }
+    pStencil->m_pOpSource->vHavingGroupsHere(i_Stage == iLastGbyStage);
 
     // synthesise the code for the stage
     pStencil->vSynthesise(i_Stage == 0           ? true : false /* firstStage */,
