@@ -1,6 +1,7 @@
 # Columnar scan for RapidsSE (phase 1)
 
-Status: design, prototype pending.
+Status: phase 1 (fixed-width columns of table scans) implemented in
+`src/store/ColCache.cpp` and `CombinedSrc::vColCacheInflate`.
 
 ## 1. Why
 
@@ -48,15 +49,15 @@ projection, aggregation, tub output) is unchanged.
 
 ### 2.1 Cache key and validity
 
-- Key: the `BufferId` of the CRW buffer (stable when the buffer is paged out
-  and back in; the in-memory address is not).
-- An entry is valid only while the buffer has the same number of heads and
-  no deleted heads (`RowNub::nHeads()`, `nHeadsDeleted()`), and while the
-  global write epoch is the one it was built in.
-- The write epoch is bumped by every statement that changes table data or
-  layout: load, insert, update, delete, truncate, drop table, create/drop
-  index, compactidx. Bumping clears the whole cache. This is coarse but
-  safe: phase 1 targets read-mostly analytic tables.
+- Key: the CRW buffer (its address), checked against the first head and the
+  number of heads it was built from.
+- The entry is dropped whenever its buffer is constructed (also when a
+  paged-in buffer reuses the memory), destroyed, appended to, copied, has its
+  nub restored after a page-in, or has a row deleted (hooks in
+  `CrwBuffer.cpp`). Truncate drops the whole cache. A buffer with deleted
+  heads is never served from the cache.
+- Arrays handed to a running scan are pinned to its `Dynamic_T` until that
+  scan asks again, so dropping an entry never frees memory under a scan.
 - Any invalid or missing entry makes that buffer use the CRW path, so the
   result never depends on the cache.
 
@@ -68,8 +69,9 @@ asked-for columns are copied into arrays. The first query pays about one
 normal scan; later queries read arrays.
 
 Memory: 8 bytes per row per cached column (lineitem SF1: 48 MB per column).
-The cache has a byte budget (node argument or environment variable, default
-1 GB) and drops the least recently used columns when it is full.
+The cache has a byte budget (environment variable `SE_COLCACHE_MB`, default
+1024). A column that does not fit is not cached and its scans keep the CRW
+path (an LRU is a later refinement).
 
 ### 2.3 Which columns
 
@@ -83,10 +85,11 @@ the format the generated code already expects for string cells.
 
 `CombinedSrc` generates the CRW handler of a scan stage. It adds:
 
-1. At the start of each buffer, for each column the scan inflates, a call
-   `aExtern_ColCache(aDynamicT, i_Col)` that returns the array (building it
-   if needed) or null. If any array is null the handler takes the CRW path
-   for the whole buffer.
+1. At the first row of each buffer, one call
+   `iExtern_ColCache(aDynamicT, uColMask)` for the columns the scan reads;
+   it points `m_aaColCache[c]` at the arrays (building the missing ones in
+   one pass) or returns 0, and then the handler takes the CRW path for the
+   whole buffer.
 2. In the row loop, instead of the meta-code walk, one load per needed
    column: `pSR_IT_0->C<n>_<NAME>.m_iAsI8 = aCol_<n>[i_Row];`
 
@@ -111,14 +114,17 @@ optimiser equivalence test and for A/B timing).
 - SF1 22/22 against the reference results, with and without
   `/optimiser_off_col_cache`.
 - Regression batch: no new failures.
-- New test `Regression/colCache.test`: scan the same table before and after
-  insert, delete, update and truncate, and check that the cache is not used
-  stale (results equal to the CRW path).
+- New test `Regression/colCache.test`: the same scan before and after an
+  appending load, a truncate and a reload, and with the cache switched off.
 - `run_optimiser_equivalence.py` gets the `col_cache` switch.
 - A/B timing: server-side execute time per query, and paired CI runs.
 
-## 5. Expected gain
+## 5. Measured gain (phase 1, local SF1, execute time)
 
-Phase 1 alone: the decode share of Q6, Q14 and Q15 (about 40-60% of their
-execute time) mostly goes away. Q1 and Q12 need 1b; the join-heavy queries
-need 1c and 3.
+| Query | CRW path | Column cache |
+|---|---|---|
+| Q6  | 268 ms | 110 ms |
+| Q14 | 285 ms | 161 ms |
+| Q15 | 248 ms | 135 ms |
+
+Q1 and Q12 need 1b (string columns); the join-heavy queries need 1c and 3.
