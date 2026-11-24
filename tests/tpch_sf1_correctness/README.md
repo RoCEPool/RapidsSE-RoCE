@@ -129,7 +129,9 @@ join_prune (an index or cross join skips the columns of the joined table that no
 of its stage reads) and le_shortcut (an index join finds the upper end of its range from
 the lower end instead of a second descent of the tree) and having_groups (a HAVING that compares each group with an aggregate
 of the same groups, as in Q11 and Q15, is done in two passes over the groups in memory
-instead of a second pass over the tables).
+instead of a second pass over the tables) and col_cache (a table scan reads its
+fixed-width columns from the column cache of each CRW buffer instead of decoding
+every row; see doc/design/columnar-scan.md).
 
     python3 tests/tpch_sf1_correctness/scripts/run_optimiser_equivalence.py
 

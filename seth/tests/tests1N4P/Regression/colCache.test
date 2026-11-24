@@ -1,0 +1,64 @@
+/*----------------------------------------------------------------------------*/
+/* colCache.test -- the column cache of CRW buffers is never read stale       */
+/*----------------------------------------------------------------------------*/
+
+// A table scan reads its fixed-width columns from the column cache of each
+// CRW buffer (store/ColCache.cpp, doc/design/columnar-scan.md). The same scan
+// runs before and after rows are inserted, after a truncate and after a
+// reload: each answer must count the rows the table holds at that moment.
+// The expected rows were computed from TPCH/SF_0001/orders.tbl in Python.
+
+create table ${testName2}_orders (
+  O_ORDERKEY      INTEGER       NOT NULL,
+  O_CUSTKEY       INTEGER       NOT NULL,
+  O_ORDERSTATUS   CHAR(1)       NOT NULL,
+  O_TOTALPRICE    DECIMAL(15,2) NOT NULL,
+  O_ORDERDATE     DATE          NOT NULL,
+  O_ORDERPRIORITY CHAR(15)      NOT NULL,
+  O_CLERK         CHAR(15)      NOT NULL,
+  O_SHIPPRIORITY  INTEGER       NOT NULL,
+  O_COMMENT       VARCHAR(79)   NOT NULL
+);
+success
+create index ${testName2}_IxO_ORDERKEY on ${testName2}_orders (O_ORDERKEY);
+affected: 0
+load ${testName2}_orders "../TPCH/SF_0001/orders.tbl" <field_delimiter> = "|";
+success
+
+// first scan builds the cache, the second reads it
+select count(*), sum(o_totalprice), sum(o_orderkey) from ${testName2}_orders
+ where o_orderdate >= date '1995-01-01' and o_orderdate < date '1996-01-01';
+rows: (213, 21316036.95, 597881)
+
+select count(*), sum(o_totalprice), sum(o_orderkey) from ${testName2}_orders
+ where o_orderdate >= date '1995-01-01' and o_orderdate < date '1996-01-01';
+rows: (213, 21316036.95, 597881)
+
+// the same scan without the cache
+/optimiser_off_col_cache
+select count(*), sum(o_totalprice), sum(o_orderkey) from ${testName2}_orders
+ where o_orderdate >= date '1995-01-01' and o_orderdate < date '1996-01-01';
+rows: (213, 21316036.95, 597881)
+
+// rows loaded into the table (two in the date range, one outside) are seen
+load ${testName2}_orders "../DATA/ColCache/orders_extra.tbl" <field_delimiter> = "|";
+success
+
+select count(*), sum(o_totalprice), sum(o_orderkey) from ${testName2}_orders
+ where o_orderdate >= date '1995-01-01' and o_orderdate < date '1996-01-01';
+rows: (215, 21319037.70, 777884)
+
+// after a truncate the table is empty
+truncate ${testName2}_orders;
+success
+
+select count(*) from ${testName2}_orders where o_orderdate >= date '1995-01-01';
+rows: (0)
+
+// after a reload the answer is the first one again
+load ${testName2}_orders "../TPCH/SF_0001/orders.tbl" <field_delimiter> = "|";
+success
+
+select count(*), sum(o_totalprice), sum(o_orderkey) from ${testName2}_orders
+ where o_orderdate >= date '1995-01-01' and o_orderdate < date '1996-01-01';
+rows: (213, 21316036.95, 597881)

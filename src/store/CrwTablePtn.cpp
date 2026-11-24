@@ -3,6 +3,7 @@
 /*============================================================================*/
 
 #include "BASE.h"
+namespace STORE { void vColCacheBumpEpoch(void); }
 
 #include "RowCoder.hpp"
 #include "HeadLine.hpp"
@@ -364,6 +365,8 @@ Table* CrwTablePtn::pTable(void)
 void CrwTablePtn::vTruncate(void)
 {
   _precondition_(_ADDRESS_,_MAGIC_,CN_CRWTABLEPTN,_FOOTER_);
+
+  vColCacheBumpEpoch();   // drop the whole column cache
 
   // first truncate all indexes for this table ptn
   // This code gets moved to TablePtn

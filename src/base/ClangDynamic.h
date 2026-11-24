@@ -165,6 +165,12 @@ struct Dynamic_T
 	// Tub
 	void  (*m_fp_vExtern_TubAllotRowPds)(void*,char**,i8*);
 	void  (*m_fp_vExtern_TubRowStrSize)(void*,i8);
+
+	// column cache of the CRW buffer being scanned (store/ColCache.cpp)
+	void* m_pCrwBuffer;
+	bool  m_bColCache;
+	i8*   m_aaColCache[64];
+	i8    (*m_fp_iExtern_ColCache)(void*,u8);
 };
 
 /*============================================================================*/

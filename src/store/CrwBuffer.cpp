@@ -18,6 +18,8 @@
 
 #include "SkipRoots.hpp"
 #include "EntBuffer.hpp"
+
+namespace STORE { void vColCacheDrop(void* pCrwBuffer); }
 #include "IndexTree.hpp"
 #include "CrvBuffer.hpp"
 #include "TablePtn.hpp"
@@ -49,6 +51,8 @@ void* CrwBuffer::operator new(size_t, void* aAddress)
 CrwBuffer::CrwBuffer(void)
 : DataBuffer(CN_CRWBUFFER, false)
 {
+  vColCacheDrop(this);   // the column cache of this buffer is stale
+
   _precondition_(_ADDRESS_,_MAGIC_,CN_CRWBUFFER,_FOOTER_);
   
   ASSERT(CacheLine::bOnCacheLineBoundary(this));
@@ -68,6 +72,8 @@ CrwBuffer::CrwBuffer(void)
 /*----------------------------------------------------------------------------*/
 CrwBuffer::~CrwBuffer(void) noexcept(false)
 {
+  vColCacheDrop(this);   // the column cache of this buffer is stale
+
   _precondition_(_ADDRESS_,_MAGIC_,CN_CRWBUFFER,_FOOTER_);
   
   AM::METRICS::vDerefMetrics((i8)this,CN_CRWBUFFER,DR_DELETE);
@@ -90,6 +96,8 @@ bool CrwBuffer::bDeleteRefdCrw(Rrf xRef)
   
   // get the referenced row
   Crw* aCrw = pCrwBuffer->aCrw(xRef.iItem());
+
+  vColCacheDrop(pCrwBuffer);   // the column cache of this buffer is stale
   
   pCrwBuffer->m_oRowTray.pNub()->vDelete(aCrw);
   
@@ -262,6 +270,8 @@ RowTray* CrwBuffer::pRowTray(void)
 /*----------------------------------------------------------------------------*/
 void CrwBuffer::vAppendClose(void)
 {
+  vColCacheDrop(this);   // the column cache of this buffer is stale
+
   _precondition_(_ADDRESS_,_MAGIC_,CN_CRWBUFFER,_FOOTER_);
   
   if (m_pRowCompactor)
@@ -275,6 +285,8 @@ void CrwBuffer::vAppendClose(void)
 /*----------------------------------------------------------------------------*/
 bool CrwBuffer::bAppendCrw(Crw* aCrwSrc)
 {
+  vColCacheDrop(this);   // the column cache of this buffer is stale
+
   _precondition_(_ADDRESS_,_MAGIC_,CN_CRWBUFFER,_FOOTER_);
   
   StreamDef* pStreamDef = this->pStreamDef_dbuff();
@@ -297,6 +309,8 @@ bool CrwBuffer::bAppendCrw(Crw* aCrwSrc)
 /*----------------------------------------------------------------------------*/
 void CrwBuffer::vAppendOpen(RowCompactor* pRowCompactor, bool bCollectSamples)
 {
+  vColCacheDrop(this);   // the column cache of this buffer is stale
+
   _precondition_(_ADDRESS_,_MAGIC_,CN_CRWBUFFER,_FOOTER_);
  
   ASSERT(! m_pRowCompactor);
@@ -311,6 +325,8 @@ void CrwBuffer::vAppendOpen(RowCompactor* pRowCompactor, bool bCollectSamples)
 /*----------------------------------------------------------------------------*/
 bool CrwBuffer::bAppendRow(Row* aRowSrc)
 {
+  vColCacheDrop(this);   // the column cache of this buffer is stale
+
   _precondition_(_ADDRESS_,_MAGIC_,CN_CRWBUFFER,_FOOTER_);
   
   bool bAppended = m_pRowCompactor->bCompactRow(aRowSrc);
@@ -331,6 +347,8 @@ void CrwBuffer::vAssertCrwBuffer(void)
 /*----------------------------------------------------------------------------*/
 void CrwBuffer::vCopy(CrwBuffer* pArgCrwBuffer)
 {
+  vColCacheDrop(this);   // the column cache of this buffer is stale
+
   _precondition_(_ADDRESS_,_MAGIC_,CN_CRWBUFFER,_FOOTER_);
   
   m_pTable_dbuff     = pArgCrwBuffer->m_pTable_dbuff;
@@ -598,6 +616,8 @@ i8 CrwBuffer::nHeadSize(void)
 /*----------------------------------------------------------------------------*/
 void CrwBuffer::vRestoreNub(void)
 {
+  vColCacheDrop(this);   // the column cache of this buffer is stale
+
   _precondition_(_ADDRESS_,_MAGIC_,CN_CRWBUFFER,_FOOTER_);
   
   m_oRowTray.vRestoreNub();

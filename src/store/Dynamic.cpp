@@ -284,6 +284,9 @@ Dynamic::Dynamic(LogicUnit* pLogicUnit)
 	m_xDynamicT.m_fp_vExtern_EntWrkAppendElementStz = nullptr;
 
 	m_xDynamicT.m_fp_aExtern_EntBufferNextEntry = nullptr;
+	m_xDynamicT.m_fp_iExtern_ColCache = nullptr;
+	m_xDynamicT.m_pCrwBuffer = nullptr;
+	m_xDynamicT.m_bColCache = false;
 	m_xDynamicT.m_fp_vExtern_EntPayloadCreate = nullptr;
 	m_xDynamicT.m_fp_vExtern_EntWrkReset = nullptr;
 

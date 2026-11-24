@@ -966,6 +966,12 @@ void CombinedSrc::vSynthesizeCode(Stencil* pStencil, bool bFirstStage, bool bLas
 
     if (iOpSketch == iPruneEnd) {
       vPruneInflate(azPruneStart, m_azCodeCrs);
+      // Columnar scan (doc/design/columnar-scan.md): read the cells from the
+      // column cache of the buffer. Job tag /optimiser_off_col_cache decodes
+      // the rows as before.
+      if (! AM::JOB::bHasTag("<optimiser_off_col_cache>"_Stz) &&
+          ! AM::JOB::bHasTag("<optimiser_off_all>"_Stz))
+        vColCacheInflate(azPruneStart, m_azCodeCrs);
       azPruneStart = nullptr;
       iPruneEnd = -1;
     }
@@ -1114,6 +1120,85 @@ void CombinedSrc::vPruneInflate(char* azStart, char* azEnd)
     if (nCount(sRef) == 1)
       memcpy(azStart + g, sSkip.data(), sSkip.size());
   }
+}
+
+/*----------------------------------------------------------------------------*/
+/* columnar scan: read the inflated cells of a table scan from the column    */
+/* cache of the CRW buffer (store/ColCache.cpp) instead of decoding each row. */
+/* Runs after vPruneInflate on the inflate code of the scan: the columns that */
+/* still jump to L_InflateAColumn are the ones the handler reads. Before the  */
+/* first of them it inserts: at the first row of the buffer, a request for    */
+/* those columns; then, if the cache has them all, one load per column and a  */
+/* jump past the decoding. Any string column keeps the CRW path.             */
+/*----------------------------------------------------------------------------*/
+void CombinedSrc::vColCacheInflate(char* azStart, char* azEnd)
+{
+  _precondition_(_ADDRESS_,_MAGIC_,CN_COMBINEDSRC,_FOOTER_);
+
+  if (! azStart || azEnd <= azStart)
+    return;
+
+  std::string sCode(azStart, azEnd - azStart);
+  static const std::string sColNo = "i_Col = ";
+  static const std::string sDst   = "ayDstByte = (byte*)&";
+  static const std::string sCell  = ".m_iAsI8;";
+  static const std::string sJump  = "goto L_InflateAColumn;";
+
+  size_t pFirst = sCode.find(sColNo);
+  if (pFirst == std::string::npos)
+    return;
+
+  std::string sHead(m_caCode, azStart - m_caCode);
+  std::vector<std::pair<i8, std::string>> vCols;
+  u8 uMask = 0;
+  for (size_t p = pFirst; p != std::string::npos; p = sCode.find(sColNo, p + 1)) {
+    i8 i_Col = atoll(sCode.c_str() + p + sColNo.size());
+    size_t pNext = sCode.find(sColNo, p + 1);
+    size_t d = sCode.find(sDst, p);
+    size_t g = sCode.find("goto L_", p);
+    if (d == std::string::npos || g == std::string::npos ||
+        (pNext != std::string::npos && (d > pNext || g > pNext)))
+      return;
+    if (sCode.compare(g, sJump.size(), sJump) != 0)
+      continue;                                   // stepped over, not read
+    size_t q = sCode.find(sCell, d);
+    if (q == std::string::npos || i_Col < 0 || i_Col >= 64)
+      return;
+    std::string sRef = sCode.substr(d + sDst.size(), q - d - sDst.size());
+    // the cell type, from the declaration of the row struct
+    size_t a = sRef.rfind("->");
+    if (a == std::string::npos)
+      return;
+    std::string sMember = sRef.substr(a + 2);
+    size_t t = sHead.rfind(" " + sMember + ";");
+    if (t == std::string::npos)
+      return;
+    size_t l = sHead.rfind("union ", t);
+    if (l == std::string::npos || sHead.compare(l, 11, "union Vch_T") == 0)
+      return;
+    vCols.push_back({i_Col, sRef});
+    uMask |= (u8)1 << i_Col;
+  }
+  if (vCols.empty())
+    return;
+
+  std::string sFast;
+  sFast += "  // column cache (store/ColCache.cpp)\n";
+  sFast += "  if (i_Row == 0)\n";
+  sFast += "    aDynamicT->m_bColCache = aDynamicT->m_fp_iExtern_ColCache(aDynamicT, (u8)" +
+           std::to_string((unsigned long long)uMask) + "ULL) != 0;\n";
+  sFast += "  if (aDynamicT->m_bColCache) {\n";
+  for (auto& rCol : vCols)
+    sFast += "    " + rCol.second + ".m_iAsI8 = aDynamicT->m_aaColCache[" +
+             std::to_string((long long)rCol.first) + "][i_Row];\n";
+  sFast += "    goto L_InflateCrwRet;\n";
+  sFast += "  }\n";
+
+  // insert at the start of the line of the first column
+  char* azAt = azStart + pFirst;
+  while (azAt > azStart && azAt[-1] != '\n')
+    azAt--;
+  vInsertText(azAt, sFast.c_str());
 }
 
 /*----------------------------------------------------------------------------*/

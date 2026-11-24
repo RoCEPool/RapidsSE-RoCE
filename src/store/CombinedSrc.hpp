@@ -68,6 +68,7 @@ namespace STORE {
 		void vAppendCodeHashCols(OpSketch* pOpSketch);
 		void vAppendCodeHashCols2(OpSketch* pOpSketch);
     void vPruneInflate(char* azStart, char* azEnd);
+    void vColCacheInflate(char* azStart, char* azEnd);
     void vAppendCodeHavingGroups(void);
     void vInsertText(char* azAt, const char* szText);
     void vAppendCodeInflateCols(OpSketch* pOpSketch, Stz* szReturnPrefix, File* pCodeFile = nullptr);
