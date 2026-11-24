@@ -254,25 +254,20 @@ Card* ChildCards::pFindSubCard(eCK eSub)
 {
   //_precondition_(_ADDRESS_,_MAGIC_,CN_CARD,_FOOTER_);
 
-  ListExoIter2_t<Card>* pSubCard_I = pNewIter();
+  // Walk the nodes of the list directly: an iterator object from the heap for
+  // each card visited made this search a large part of the optimiser time.
+  for (ListExoNode_t<Card>* pNode = pHeadNode(); pNode; pNode = pNode->pNextNode()) {
+    Card* pSubCard = pNode->pItem();
 
-  Card* pFoundCard = nullptr;
-  while (pSubCard_I->bHasNext()) {
-    Card* pSubCard = pSubCard_I->pNext();
+    if (eSub == pSubCard->eCard())
+      return pSubCard;
 
-    if (eSub == pSubCard->eCard()) {
-      pFoundCard = pSubCard;
-      break;
-    }
-
-    pFoundCard = pSubCard->pFindSubCard(eSub);
+    Card* pFoundCard = pSubCard->pFindSubCard(eSub);
     if (pFoundCard)
-      break;
+      return pFoundCard;
   }
 
-  delete pSubCard_I;
-
-  return pFoundCard;
+  return nullptr;
 }
 
 /*----------------------------------------------------------------------------*/
