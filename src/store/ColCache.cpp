@@ -35,6 +35,7 @@
 #include <atomic>
 #include <cstdlib>
 #include <memory>
+#include <unistd.h>
 
 using namespace BASE;
 using namespace STORE;
@@ -62,15 +63,24 @@ namespace {
   std::atomic<i8> g_iColCacheEpoch(0);
   i8 g_nColCacheBytes = 0;
 
-  // byte budget of the cache: environment variable SE_COLCACHE_MB (default
-  // 1024); a column that does not fit is not cached (its scans keep the CRW path)
+  // byte budget of the cache: environment variable SE_COLCACHE_MB, by default
+  // a quarter of the physical memory; a column that does not fit is not
+  // cached (its scans keep the CRW path)
   i8 nColCacheBudget(void)
   {
     static i8 nBudget = -1;
     if (nBudget < 0) {
       const char* az = getenv("SE_COLCACHE_MB");
-      i8 nMB = az ? atoll(az) : 1024;
-      nBudget = (nMB < 0 ? 0 : nMB) * 1024 * 1024;
+      if (az) {
+        i8 nMB = atoll(az);
+        nBudget = (nMB < 0 ? 0 : nMB) * 1024 * 1024;
+      }
+      else {
+        long nPages = sysconf(_SC_PHYS_PAGES);
+        long nPageSize = sysconf(_SC_PAGESIZE);
+        nBudget = (nPages > 0 && nPageSize > 0) ? (i8)nPages * nPageSize / 4
+                                                : (i8)1024 * 1024 * 1024;
+      }
     }
     return nBudget;
   }

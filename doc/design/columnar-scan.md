@@ -70,8 +70,9 @@ asked-for columns are copied into arrays. The first query pays about one
 normal scan; later queries read arrays.
 
 Memory: 8 bytes per row per cached column (lineitem SF1: 48 MB per column).
-The cache has a byte budget (environment variable `SE_COLCACHE_MB`, default
-1024). A column that does not fit is not cached and its scans keep the CRW
+The cache has a byte budget (environment variable `SE_COLCACHE_MB`; by
+default a quarter of the physical memory; the lineitem columns that the 22
+TPC-H queries read take about 0.6 GB at SF1). A column that does not fit is not cached and its scans keep the CRW
 path (an LRU is a later refinement).
 
 ### 2.3 Which columns
