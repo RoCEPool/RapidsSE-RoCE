@@ -582,18 +582,14 @@ void Lock::vGrabWrite(void)
     ++AM::pLocks()->m_ixWriteCollisions[m_eLockKind];
 #endif
   
-  Timer oTimer;
-  oTimer.vStart();
-  
+  // Spin with a pause between attempts. (A timer used to be read on every
+  // attempt, a clock_gettime call whose result changed nothing: both of its
+  // branches went on spinning.)
   while (! Lock::iLockGrabWrite(&m_uLockWord)) {
-
-    if (! m_pObjectLocked )
-      continue;
-    
-    oTimer.vUpdate();
-    if (oTimer.iMilliseconds() < 100)
-      continue;
-    
+#if defined(__x86_64__) || defined(__i386__)
+    __builtin_ia32_pause();
+#endif
+    __asm__ __volatile__("" ::: "memory");   // the lock word is read again
   }
   
   // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
