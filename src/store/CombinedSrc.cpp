@@ -1242,7 +1242,10 @@ void CombinedSrc::vPruneInflate(char* azStart, char* azEnd)
     if (q == std::string::npos || g == std::string::npos || (n != std::string::npos && g > n))
       continue;
     std::string sRef = sCode.substr(p + sDst.size(), q - p - sDst.size()) + ".";
-    if (nCount(sRef) == 1)
+    // The null row of an outer join (L_JoinNulls) assigns NULL to every cell
+    // of the joined table; such an assignment writes the cell and does not
+    // read it, so it does not keep the column from being skipped.
+    if (nCount(sRef) - nCount(sRef + "m_iAsI8 = C_DATUM_NULL;") == 1)
       memcpy(azStart + g, sSkip.data(), sSkip.size());
   }
 }
