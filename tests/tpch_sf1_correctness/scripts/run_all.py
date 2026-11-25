@@ -25,6 +25,11 @@ def fixes():
     return json.load(open(p)) if os.path.exists(p) else {}
 
 
+def se_timed_runs():
+    import run_rapidsse
+    return run_rapidsse.TIMED_RUNS
+
+
 def matrix(rounds, info, src, out_dir, duck_ms=None):
     fx = fixes()
     last = rounds[-1]
@@ -74,22 +79,26 @@ def matrix(rounds, info, src, out_dir, duck_ms=None):
     if duck_ms:
         over = last.get('client_overhead_ms') or 0
         md += ['', '## Time against DuckDB on the same machine', '',
-               'RapidsSE: wall time of the last round minus the client overhead (%d ms); the query ran just '
-               'before with the optimiser trace, so its compiled code comes from the cache. DuckDB %s: best of '
-               'three executions in process, %d threads. %s' % (over, src['engine'].split()[-1], os.cpu_count(),
-                                                               os.environ.get('TPCH_BUILD_NOTE', '')), '',
-               '| Query | RapidsSE ms | DuckDB ms | RapidsSE / DuckDB |', '|---|---:|---:|---:|']
+               'RapidsSE: time in the engine, best of %d runs of the last round, from the start of the SQL '
+               'compiler to the end of the job (the /phaseTimes marks; the JDBC client and the printing of '
+               'the rows are left out); the compiled code comes from the cache. Wall: one run as the JDBC '
+               'client sees it, minus the client overhead (%d ms). DuckDB %s: best of three executions in '
+               'process, %d threads. %s' % (se_timed_runs(), over, src['engine'].split()[-1], os.cpu_count(),
+                                             os.environ.get('TPCH_BUILD_NOTE', '')), '',
+               '| Query | RapidsSE ms | Wall ms | DuckDB ms | RapidsSE / DuckDB |', '|---|---:|---:|---:|---:|']
         tot_r = tot_d = 0
         for r in rows:
             q = r['query'][1:]
+            eng = last['queries'][q].get('engine_ms')
             if not r['time_ms'] or q not in duck_ms:
                 continue
-            net = max(int(r['time_ms']) - over, 1)
+            wall = max(int(r['time_ms']) - over, 1)
+            net = eng if eng else wall
             tot_r += net
             tot_d += duck_ms[q]
-            md.append('| %s | %d | %.0f | %.1f |' % (r['query'], net, duck_ms[q], net / max(duck_ms[q], 0.1)))
+            md.append('| %s | %d | %d | %.0f | %.1f |' % (r['query'], net, wall, duck_ms[q], net / max(duck_ms[q], 0.1)))
         if tot_d:
-            md.append('| **Total** | **%d** | **%.0f** | **%.1f** |' % (tot_r, tot_d, tot_r / tot_d))
+            md.append('| **Total** | **%d** | | **%.0f** | **%.1f** |' % (tot_r, tot_d, tot_r / tot_d))
     md += ['', 'Stage columns: Parser, Binder and Logical plan come from `EXPLAIN` (SQL compiler); Optimizer and '
            'Physical plan from the optimised pipeline of the run-time optimiser; Runtime from the execution; '
            'Result from the comparison with the reference. Plans, logs and rows of every query are next to '
@@ -100,6 +109,7 @@ def matrix(rounds, info, src, out_dir, duck_ms=None):
          'reference': src['engine'], 'blockers': [r['query'] for r in blockers],
          'status': {r['query']: r['final_status'] for r in rows},
          'time_ms': {r['query']: r['time_ms'] for r in rows},
+         'engine_ms': {'Q' + q: d.get('engine_ms') for q, d in last['queries'].items()},
          'client_overhead_ms': last.get('client_overhead_ms'), 'duckdb_ms': duck_ms or {}}, indent=2) + '\n')
     return passed
 

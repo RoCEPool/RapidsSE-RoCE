@@ -157,8 +157,34 @@ def run_query(q, sql, out_dir, timeout, data_dir, node_log):
             rows = parse_rows(out)
             c.save_rows(os.path.join(out_dir, 'results', 'q%s.csv' % q), rows)
             r.update(runtime='PASS', rows=len(rows), **{'class': 'EXECUTED'})
+            r['engine_ms'] = engine_time(stmt, timeout)
     c.write(os.path.join(out_dir, 'logs', 'q%s.log' % q), '\n'.join(log) + '\n')
     return r
+
+
+TIMED_RUNS = int(os.environ.get('TPCH_TIMED_RUNS', '3'))
+
+
+def engine_time(stmt, timeout):
+    """Best of TIMED_RUNS runs of the time the engine spends on the statement, in ms: from the start
+    of the SQL compiler to the end of the pipeline job, read from the /phaseTimes marks in the engine
+    log (see phase_times.py). It leaves out the JDBC client (a new JVM per run, about half a second
+    whose spread is larger than many queries) and the printing of the rows, so that it compares with
+    DuckDB timed in process. None when no run left its marks."""
+    import phase_times            # imports this module, so it is imported here and not at the top
+    best = None
+    for _ in range(TIMED_RUNS):
+        n0 = sum(1 for _ in open(ENGINE_LOG, errors='replace')) if os.path.exists(ENGINE_LOG) else 0
+        rc, out, dt = shell('/phaseTimes\n' + stmt + ';', timeout)
+        time.sleep(0.3)               # the engine writes its log lines after the result is sent
+        if rc or error_of(out) or not alive():
+            break
+        marks = phase_times.marks_since(n0)
+        p = phase_times.phases(marks, dt * 1000)
+        if p:
+            span = p['wall'] - p['client']
+            best = span if best is None else min(best, span)
+    return None if best is None else int(round(best))
 
 
 def run(out_dir, data_dir=c.DATA, queries=None, timeout=1200):
