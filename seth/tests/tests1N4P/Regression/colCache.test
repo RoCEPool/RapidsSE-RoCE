@@ -2,7 +2,7 @@
 /* colCache.test -- the column cache of CRW buffers is never read stale       */
 /*----------------------------------------------------------------------------*/
 
-// A table scan reads its fixed-width columns from the column cache of each
+// A table scan reads its columns from the column cache of each
 // CRW buffer (store/ColCache.cpp, doc/design/columnar-scan.md). The same scan
 // runs before and after rows are inserted, after a truncate and after a
 // reload: each answer must count the rows the table holds at that moment.
@@ -34,6 +34,27 @@ select count(*), sum(o_totalprice), sum(o_orderkey) from ${testName2}_orders
  where o_orderdate >= date '1995-01-01' and o_orderdate < date '1996-01-01';
 rows: (213, 21316036.95, 597881)
 
+// a string column (o_orderpriority) read from the cache
+select o_orderpriority, count(*) from ${testName2}_orders
+ where o_orderdate >= date '1995-01-01' and o_orderdate < date '1996-01-01'
+ group by o_orderpriority order by o_orderpriority;
+ordered rows:
+  ('1-URGENT', 46)
+  ('2-HIGH', 53)
+  ('3-MEDIUM', 36)
+  ('4-NOT SPECIFIED', 39)
+  ('5-LOW', 39)
+
+select o_orderpriority, count(*) from ${testName2}_orders
+ where o_orderdate >= date '1995-01-01' and o_orderdate < date '1996-01-01'
+ group by o_orderpriority order by o_orderpriority;
+ordered rows:
+  ('1-URGENT', 46)
+  ('2-HIGH', 53)
+  ('3-MEDIUM', 36)
+  ('4-NOT SPECIFIED', 39)
+  ('5-LOW', 39)
+
 // the same scan without the cache
 /optimiser_off_col_cache
 select count(*), sum(o_totalprice), sum(o_orderkey) from ${testName2}_orders
@@ -47,6 +68,16 @@ success
 select count(*), sum(o_totalprice), sum(o_orderkey) from ${testName2}_orders
  where o_orderdate >= date '1995-01-01' and o_orderdate < date '1996-01-01';
 rows: (215, 21319037.70, 777884)
+
+select o_orderpriority, count(*) from ${testName2}_orders
+ where o_orderdate >= date '1995-01-01' and o_orderdate < date '1996-01-01'
+ group by o_orderpriority order by o_orderpriority;
+ordered rows:
+  ('1-URGENT', 48)
+  ('2-HIGH', 53)
+  ('3-MEDIUM', 36)
+  ('4-NOT SPECIFIED', 39)
+  ('5-LOW', 39)
 
 // after a truncate the table is empty
 truncate ${testName2}_orders;

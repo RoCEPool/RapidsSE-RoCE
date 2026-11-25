@@ -1,7 +1,8 @@
 # Columnar scan for RapidsSE (phase 1)
 
-Status: phase 1 (fixed-width columns of table scans) implemented in
-`src/store/ColCache.cpp` and `CombinedSrc::vColCacheInflate`.
+Status: phase 1 (fixed-width columns of table scans) and 1b (string
+columns, unpruned scans) implemented in `src/store/ColCache.cpp` and
+`CombinedSrc::vColCacheInflate`.
 
 ## 1. Why
 
@@ -69,17 +70,19 @@ asked-for columns are copied into arrays. The first query pays about one
 normal scan; later queries read arrays.
 
 Memory: 8 bytes per row per cached column (lineitem SF1: 48 MB per column).
-The cache has a byte budget (environment variable `SE_COLCACHE_MB`, default
-1024). A column that does not fit is not cached and its scans keep the CRW
+The cache has a byte budget (environment variable `SE_COLCACHE_MB`; by
+default a quarter of the physical memory; the lineitem columns that the 22
+TPC-H queries read take about 0.6 GB at SF1). A column that does not fit is not cached and its scans keep the CRW
 path (an LRU is a later refinement).
 
 ### 2.3 Which columns
 
-Phase 1 caches fixed-width columns only: INTEGER, DECIMAL, DATE, TIME,
-TIMESTAMP, FLOAT, BOOLEAN. A scan that needs a VARCHAR/CHAR column keeps the
-CRW path for now (Q1 and Q12 read l_returnflag/l_linestatus/l_shipmode).
-Phase 1b adds strings as an offset array plus a string area per buffer, in
-the format the generated code already expects for string cells.
+Phase 1 cached fixed-width columns only (INTEGER, DECIMAL, DATE, TIME,
+TIMESTAMP, FLOAT, BOOLEAN). Phase 1b adds CHAR/VARCHAR: the entry keeps the
+strings of the column (each with its terminating NUL, as the CRW encoding
+stores it) and the cells hold their addresses, as the CRW inflater's cells
+hold addresses into the string area of the row (`SI_STRAREA_ADR`). A NULL
+string is `C_DATUM_NULL`, as from the inflater.
 
 ### 2.4 Code generation
 
@@ -91,7 +94,11 @@ the format the generated code already expects for string cells.
    one pass) or returns 0, and then the handler takes the CRW path for the
    whole buffer.
 2. In the row loop, instead of the meta-code walk, one load per needed
-   column: `pSR_IT_0->C<n>_<NAME>.m_iAsI8 = aCol_<n>[i_Row];`
+   column: `pSR_IT_0->C<n>_<NAME>.m_iAsI8 = aDynamicT->m_aaColCache[n][i_Row];`
+
+This is done after column pruning for a scan behind which filters and a
+project read the row, and right after the inflate code for other scans
+(which then read all their columns).
 
 `vDynamicExecute` passes the CRW buffer to the handler (new field
 `m_pCrwBuffer` in `Dynamic_T`).
@@ -101,7 +108,6 @@ optimiser equivalence test and for A/B timing).
 
 ## 3. Later phases
 
-- 1b: VARCHAR/CHAR columns in the cache (Q1, Q12).
 - 1c: index joins fetch only the needed columns of the joined row from the
   cache by `Rrf` (buffer, item): Q13, Q3, Q5, Q7, Q8, Q10, Q21.
 - 2: evaluate the filter on a batch of rows with a selection vector before
@@ -127,4 +133,13 @@ optimiser equivalence test and for A/B timing).
 | Q14 | 285 ms | 161 ms |
 | Q15 | 248 ms | 135 ms |
 
-Q1 and Q12 need 1b (string columns); the join-heavy queries need 1c and 3.
+Phase 1b (string columns; scans whose columns are not pruned, such as a
+GROUP BY right behind the scan):
+
+| Query | CRW path | Column cache |
+|---|---|---|
+| Q1  | 499 ms | 334 ms |
+| Q12 | 329 ms | 205 ms |
+| Q18 | 667 ms | 619 ms |
+
+The join-heavy queries need 1c and 3.
