@@ -853,7 +853,8 @@ void Scheduler::vThread_WaitForTaskAssignment(Thread* pThread)
 ////////////////////////////////////////////////////////////////////////////////
 
 /*----------------------------------------------------------------------------*/
-/* attempt to pop an idle general thread and assign given task to it          */
+/* attempt to pop an idle general thread and assign given task to it; called */
+/* with the idle queue lock held, which it drops when it found a thread       */
 /*----------------------------------------------------------------------------*/
 bool Scheduler::bThread_AssignIdle(Task* pKnownTask)
 {
@@ -869,7 +870,14 @@ bool Scheduler::bThread_AssignIdle(Task* pKnownTask)
     return false;
   
   // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-  
+  // The thread is off the idle queue, so no other caller can assign it: the
+  // idle queue lock (a spin lock) is dropped before the thread's mutex is
+  // taken and signalled. Signalling wakes the thread with a system call; done
+  // under the spin lock, every other thread that schedules a task or looks for
+  // one spins for the length of that call. The idle thread holds its mutex
+  // until it waits on it, so the task set here is seen when it wakes.
+  pSchedule->vDropThreadIdleQueue();
+
   RASSERT(HS_IDLE == pThread->eThreadState());
 
   pThread->pMutex()->vLock(pKnownTask);
@@ -988,10 +996,8 @@ void Scheduler::vScheduleTask(Task* pKnownTask)
   
   pSchedule->vGrabThreadIdleQueue();
   
-  if (bThread_AssignIdle(pKnownTask)) {
-    pSchedule->vDropThreadIdleQueue();
-    return;
-  }
+  if (bThread_AssignIdle(pKnownTask))
+    return;                               // it dropped the idle queue lock
   
 //  Thread* pMyThread = MY::pThread();
 //  if (pMyThread &&
