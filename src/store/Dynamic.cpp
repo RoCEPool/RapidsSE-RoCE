@@ -6,7 +6,9 @@
 
 #include "Dynamic.hpp"
 extern "C" void vExtern_GbyHashFree(void* aIndexInfo);
+extern "C" void vExtern_HashJoinFree(void* aIndexInfo);
 #include "LogicUnit.hpp"
+#include "AM.hpp"
 
 //#include "IndexDef.hpp"
 //#include "IndexTree.hpp"
@@ -26,6 +28,9 @@ __aFooterFunction(Dynamic)
 Dynamic::Dynamic(LogicUnit* pLogicUnit)
 : Object(CN_DYNAMIC)
 {
+  // read the job tag here, in the job, not by every lookup on a worker thread
+  const i8 bNoLeShortcut = AM::JOB::bHasTag("<optimiser_off_le_shortcut>"_Stz) ? 1 : 0;
+
   _precondition_(_ADDRESS_,_MAGIC_,CN_DYNAMIC,_FOOTER_);
 
   for (i8 i_Stack = 0; i_Stack < 256; i_Stack++)
@@ -216,11 +221,13 @@ Dynamic::Dynamic(LogicUnit* pLogicUnit)
     m_xDynamicT.m_xIndexInfoT[iIndex].m_aEntUpper = nullptr;
     m_xDynamicT.m_xIndexInfoT[iIndex].m_aEntBuffer = nullptr;
     m_xDynamicT.m_xIndexInfoT[iIndex].m_aEntLast = nullptr;
+    m_xDynamicT.m_xIndexInfoT[iIndex].m_bNoLeShortcut = bNoLeShortcut;
     m_xDynamicT.m_xIndexInfoT[iIndex].m_iKeyLast = 0;
     m_xDynamicT.m_xIndexInfoT[iIndex].m_aEntInt = (Ent_int *) pLogicUnit->m_oEntWrkT.aEnt();
 
     // index join with J
     m_xDynamicT.m_iJoinedRows = 0;
+    m_xDynamicT.m_bHashProbe = 0;
     m_xDynamicT.m_xIndexInfoJ[iIndex].m_bInitialize = true;
 
 #ifdef WITH_CHECK_INITIALISED
@@ -242,7 +249,13 @@ Dynamic::Dynamic(LogicUnit* pLogicUnit)
     m_xDynamicT.m_xIndexInfoJ[iIndex].m_aEntUpper = nullptr;
     m_xDynamicT.m_xIndexInfoJ[iIndex].m_aEntBuffer = nullptr;
     m_xDynamicT.m_xIndexInfoJ[iIndex].m_aEntLast = nullptr;
+    m_xDynamicT.m_xIndexInfoJ[iIndex].m_bNoLeShortcut = bNoLeShortcut;
     m_xDynamicT.m_xIndexInfoJ[iIndex].m_iKeyLast = 0;
+    m_xDynamicT.m_xIndexInfoJ[iIndex].m_aHashJoin = nullptr;
+    m_xDynamicT.m_xIndexInfoJ[iIndex].m_auHjBloom = nullptr;
+    m_xDynamicT.m_xIndexInfoJ[iIndex].m_uHjBloomMask = 0;
+    m_xDynamicT.m_xIndexInfoJ[iIndex].m_iHjEntries = 0;
+    m_xDynamicT.m_xIndexInfoJ[iIndex].m_iHjSeen = 0;
     m_xDynamicT.m_xIndexInfoJ[iIndex].m_aEntInt = (Ent_int *) pLogicUnit->m_oEntWrkJ.aEnt();
 
     // payload (gby/srt/top)
@@ -262,6 +275,7 @@ Dynamic::Dynamic(LogicUnit* pLogicUnit)
     m_xDynamicT.m_xIndexInfoPL[iIndex].m_aIndexTree = nullptr;
     m_xDynamicT.m_xIndexInfoPL[iIndex].m_aIndexDef = nullptr;
     m_xDynamicT.m_xIndexInfoPL[iIndex].m_aEntLast = nullptr;
+    m_xDynamicT.m_xIndexInfoPL[iIndex].m_bNoLeShortcut = bNoLeShortcut;
     m_xDynamicT.m_xIndexInfoPL[iIndex].m_aGbyHash = nullptr;
     m_xDynamicT.m_xIndexInfoPL[iIndex].m_aEntWrk = (void *) &pLogicUnit->m_oEntWrkPL;
     m_xDynamicT.m_xIndexInfoPL[iIndex].m_aEntKey = ((EntWrk *) m_xDynamicT.m_xIndexInfoPL[iIndex].m_aEntWrk)->aKey();
@@ -341,8 +355,10 @@ Dynamic::~Dynamic(void) noexcept(false)
     delete pIndexTree;
   }
 
-  for (i8 iIndex = 0; iIndex < C_MAX_DUP_OPS; iIndex++)
+  for (i8 iIndex = 0; iIndex < C_MAX_DUP_OPS; iIndex++) {
     vExtern_GbyHashFree(&m_xDynamicT.m_xIndexInfoPL[iIndex]);
+    vExtern_HashJoinFree(&m_xDynamicT.m_xIndexInfoJ[iIndex]);
+  }
 
   if (m_xDynamicT.m_xIndexInfoPL[0].m_aIndexDef) {
     IndexDef* pIndexDef = _pIndexDef(m_xDynamicT.m_xIndexInfoPL[0].m_aIndexDef);

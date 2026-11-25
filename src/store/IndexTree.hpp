@@ -132,6 +132,7 @@ namespace STORE
 			PayStr *pAllotPayStr(Stz *szStz);
 
 			i8 nBufferCount(void);
+			i8 nEntriesNow(void) { return m_nTreeInsertCnt - m_nTreeDeleteCnt; }
 
 			void vCompact(void);
 

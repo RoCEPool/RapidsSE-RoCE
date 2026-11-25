@@ -45,9 +45,17 @@ struct IndexInfo {
   // key (Fragments/GbyAgg.cpp). Valid until the next insert into the tree.
   void* m_aEntLast;
   i8    m_iKeyLast;
+  i8    m_bNoLeShortcut;  // job tag /optimiser_off_le_shortcut (read when made)
   // group by on one integer column: the groups in a hash table instead of
   // the tree (IndexTree.cpp, GbyHash); null when the tree is used
   void* m_aGbyHash;
+  // hash join (IndexTree.cpp, HashJoin): the rows of the stage input by key;
+  // null for an index join
+  void* m_aHashJoin;
+  u8*   m_auHjBloom;     // hash join walk: Bloom filter of the stored keys
+  u8    m_uHjBloomMask;  // its bits - 1
+  i8    m_iHjEntries;    // entries of the joined index (0: not looked up yet)
+  i8    m_iHjSeen;       // rows joined straight through the index so far
 };
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -109,6 +117,8 @@ struct Dynamic_T
 
   // index join with J
   i8 m_iJoinedRows;
+  // hash join: the row handler is called by the EOS handler to probe
+  i8 m_bHashProbe;
   struct IndexInfo m_xIndexInfoJ[C_MAX_DUP_OPS];
 
   // payload (gby/srt/top)

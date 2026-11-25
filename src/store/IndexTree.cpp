@@ -520,7 +520,7 @@ extern "C" void vExtern_IndexTreePositionLE_int(void* aIndexInfo) {
 	// tree a second time.
 	if (pIndexInfo->m_aEntLast && pIndexInfo->m_aEntLast == (void*) pIndexInfo->m_aEntInt &&
 	    pIndexInfo->m_iKeyLast == ELM0_OF_KEY(aKey) && pIndexInfo->m_aEntBuffer &&
-	    ! AM::JOB::bHasTag("<optimiser_off_le_shortcut>"_Stz)) {
+	    ! pIndexInfo->m_bNoLeShortcut) {
 		pEntBuffer = (EntBuffer*) pIndexInfo->m_aEntBuffer;
 		aEnt = EntBuffer::pMoveToGreaterThanEntry_int((Ent*) pIndexInfo->m_aEntInt, aKey, &pEntBuffer);
 		pIndexInfo->m_aEntUpper = (Ent_int*)aEnt;
@@ -1876,6 +1876,219 @@ namespace
       return p;
     }
   };
+}
+
+
+/*----------------------------------------------------------------------------*/
+/* HashJoin: the rows of a hash join's input, by key (DuckDB's build side).   */
+/* A hash join stage first stores every arriving row (a copy of its cells,    */
+/* with the strings copied too) under its integer join key; at the end of     */
+/* its input it walks the joined table's index once in key order and, for     */
+/* each entry whose key has stored rows, joins the entry's row with each of   */
+/* them (CombinedSrc::vAppendCodeHashJoin). A stored row is laid out as       */
+/* [next row with the same key][next stored row][key][the cells] (8 bytes      */
+/* each before the cells). When few rows are stored compared with the entries  */
+/* of the index, the probe instead looks each stored row up in the index       */
+/* (replay, as an index join does); else it walks the index, skipping with a  */
+/* Bloom filter the entries whose key has no stored row.                       */
+/*----------------------------------------------------------------------------*/
+namespace {
+  struct HashJoin {
+    struct Slot { i8 iKey; char* aFirst; char* aLast; };
+    std::vector<Slot> axSlot;            // aFirst null: empty
+    u8 uMask = 0;
+    u8 nUsed = 0;
+    std::vector<char*> aaBlock;          // the memory of the rows and strings
+    char* aFree = nullptr;
+    u8 nFree = 0;
+    char* aAllFirst = nullptr;           // the stored rows in arrival order
+    char* aAllLast = nullptr;
+    i8 nRows = 0;
+    std::vector<u8> auBloom;             // Bloom filter of the keys (walk)
+
+    static u8 uHash(i8 iKey) { u8 u = (u8) iKey * 0x9E3779B97F4A7C15ull; return u ^ (u >> 29); }
+
+    char* aAlloc(u8 nBytes)
+    {
+      nBytes = (nBytes + 7) & ~(u8)7;
+      if (nBytes > nFree) {
+        u8 nBlock = nBytes > (1u << 20) ? nBytes : (1u << 20);
+        aFree = (char*) malloc(nBlock);
+        aaBlock.push_back(aFree);
+        nFree = nBlock;
+      }
+      char* a = aFree;
+      aFree += nBytes;
+      nFree -= nBytes;
+      return a;
+    }
+
+    void vGrow(void)
+    {
+      std::vector<Slot> axOld;
+      axOld.swap(axSlot);
+      u8 n = axOld.empty() ? 1024 : axOld.size() * 2;
+      axSlot.assign(n, Slot{0, nullptr, nullptr});
+      uMask = n - 1;
+      for (const Slot& x : axOld)
+        if (x.aFirst) {
+          u8 u = uHash(x.iKey) & uMask;
+          while (axSlot[u].aFirst)
+            u = (u + 1) & uMask;
+          axSlot[u] = x;
+        }
+    }
+
+    char* aInsert(i8 iKey, i8 nRowBytes)
+    {
+      if ((nUsed + 1) * 2 > axSlot.size())
+        vGrow();
+      char* aRow = aAlloc(24 + nRowBytes);
+      *(char**) aRow = nullptr;
+      *(char**) (aRow + 8) = nullptr;
+      *(i8*) (aRow + 16) = iKey;
+      if (aAllLast)
+        *(char**) (aAllLast + 8) = aRow;
+      else
+        aAllFirst = aRow;
+      aAllLast = aRow;
+      nRows++;
+      u8 u = uHash(iKey) & uMask;
+      while (axSlot[u].aFirst) {
+        if (axSlot[u].iKey == iKey) {
+          *(char**) axSlot[u].aLast = aRow;
+          axSlot[u].aLast = aRow;
+          return aRow + 24;
+        }
+        u = (u + 1) & uMask;
+      }
+      axSlot[u] = Slot{iKey, aRow, aRow};
+      nUsed++;
+      return aRow + 24;
+    }
+
+    char* aFirst(i8 iKey)
+    {
+      if (axSlot.empty())
+        return nullptr;
+      u8 u = uHash(iKey) & uMask;
+      while (axSlot[u].aFirst) {
+        if (axSlot[u].iKey == iKey)
+          return axSlot[u].aFirst;
+        u = (u + 1) & uMask;
+      }
+      return nullptr;
+    }
+
+    ~HashJoin()
+    {
+      for (char* a : aaBlock)
+        free(a);
+    }
+  };
+}
+
+// how to probe, once all rows are stored: 0 none stored, 1 walk the index
+// (and the Bloom filter of the keys is ready), 2 look each stored row up in
+// the index (replay). A walk visits every entry of the index, mostly only
+// testing the Bloom filter; a lookup descends the index. Measured on SF1,
+// walking pays when the join's rows (those that went straight to the index
+// too) are at least one per HJ_ENTRIES_PER_ROW entries: Q3, Q7 (1 per 41-50)
+// and Q9 (1 per 75) are faster walking, Q19 (1 per 423) slower.
+static const i8 HJ_ENTRIES_PER_ROW = 150;
+
+// iFlags (job tags, read when the code was made: the tag set is not read
+// here, on a worker thread): 1 /hash_join_walk, 2 /hash_join_replay,
+// 4 /optimiser_off_hash_join_bloom, 8 /hash_join_trace
+extern "C" i8 iExtern_HashJoinMode(void* aIndexInfo, i8 iFlags)
+{
+  IndexInfo* pIndexInfo = (IndexInfo*) aIndexInfo;
+  HashJoin* pHash = (HashJoin*) pIndexInfo->m_aHashJoin;
+  if (! pHash || pHash->nRows == 0)
+    return 0;
+  IndexTree* pIndexTree = (IndexTree*) pIndexInfo->m_aIndexTree;
+  i8 nEntries = pIndexTree->nEntriesNow();
+  bool bWalk = (iFlags & 1) ||
+               (! (iFlags & 2) &&
+                (pHash->nRows + pIndexInfo->m_iHjSeen) * HJ_ENTRIES_PER_ROW >= nEntries);
+  if (iFlags & 8)
+    vTrace("hash join: %lld rows stored, %lld index entries: %s\n"_Stz,
+           (long long) pHash->nRows, (long long) nEntries, bWalk ? "walk" : "replay");
+  if (! bWalk)
+    return 2;
+  // the Bloom filter: 16 bits per key, two bits per key (job tag
+  // /optimiser_off_hash_join_bloom: none, every entry looks in the hash)
+  if (iFlags & 4)
+    return 1;
+  u8 nBits = 64;
+  while (nBits < (u8) pHash->nUsed * 16)
+    nBits <<= 1;
+  pHash->auBloom.assign(nBits / 64, 0);
+  for (const HashJoin::Slot& x : pHash->axSlot)
+    if (x.aFirst) {
+      u8 u = HashJoin::uHash(x.iKey);
+      pHash->auBloom[(u & (nBits - 1)) >> 6] |= 1ull << (u & 63);
+      u8 v = u >> 32;
+      pHash->auBloom[(v & (nBits - 1)) >> 6] |= 1ull << (v & 63);
+    }
+  pIndexInfo->m_auHjBloom = pHash->auBloom.data();
+  pIndexInfo->m_uHjBloomMask = nBits - 1;
+  return 1;
+}
+
+// the entries of the joined index (the rows of its table partition)
+extern "C" i8 iExtern_HashJoinEntries(void* aIndexInfo)
+{
+  IndexInfo* pIndexInfo = (IndexInfo*) aIndexInfo;
+  IndexTree* pIndexTree = (IndexTree*) pIndexInfo->m_aIndexTree;
+  i8 n = pIndexTree ? pIndexTree->nEntriesNow() : 0;
+  return n > 0 ? n : 1;
+}
+
+// the first stored row in arrival order (replay), or null
+extern "C" void* aExtern_HashJoinAll(void* aIndexInfo)
+{
+  IndexInfo* pIndexInfo = (IndexInfo*) aIndexInfo;
+  HashJoin* pHash = (HashJoin*) pIndexInfo->m_aHashJoin;
+  return pHash ? pHash->aAllFirst : nullptr;
+}
+
+// a place for the cells of a row with the key (nRowBytes of them)
+extern "C" void* aExtern_HashJoinInsert(void* aIndexInfo, i8 iKey, i8 nRowBytes)
+{
+  IndexInfo* pIndexInfo = (IndexInfo*) aIndexInfo;
+  if (! pIndexInfo->m_aHashJoin)
+    pIndexInfo->m_aHashJoin = new HashJoin;
+  return ((HashJoin*) pIndexInfo->m_aHashJoin)->aInsert(iKey, nRowBytes);
+}
+
+// a copy of a string of a stored row
+extern "C" char* aExtern_HashJoinStr(void* aIndexInfo, const char* szStr)
+{
+  IndexInfo* pIndexInfo = (IndexInfo*) aIndexInfo;
+  HashJoin* pHash = (HashJoin*) pIndexInfo->m_aHashJoin;
+  size_t n = strlen(szStr) + 1;
+  char* a = pHash->aAlloc(n);
+  memcpy(a, szStr, n);
+  return a;
+}
+
+// the first stored row with the key ([next][cells]), or null
+extern "C" void* aExtern_HashJoinFirst(void* aIndexInfo, i8 iKey)
+{
+  IndexInfo* pIndexInfo = (IndexInfo*) aIndexInfo;
+  if (! pIndexInfo->m_aHashJoin)
+    return nullptr;
+  return ((HashJoin*) pIndexInfo->m_aHashJoin)->aFirst(iKey);
+}
+
+extern "C" void vExtern_HashJoinFree(void* aIndexInfo)
+{
+  IndexInfo* pIndexInfo = (IndexInfo*) aIndexInfo;
+  delete (HashJoin*) pIndexInfo->m_aHashJoin;
+  pIndexInfo->m_aHashJoin = nullptr;
+  pIndexInfo->m_auHjBloom = nullptr;
+  pIndexInfo->m_uHjBloomMask = 0;
 }
 
 // m_aGbyHash: the groups are in the tree (job tag /optimiser_off_hash_gbyagg)

@@ -273,6 +273,159 @@ void vIndexJoinPosition_gen(Dynamic_T* aDynamicT) {
 /*----------------------------------------------------------------------------*/
 /*-- vIndexJoinPosition_int -----------------------------------------------------*/
 /*----------------------------------------------------------------------------*/
+// function-vHashJoinPosition_int
+void vHashJoinPosition_int(Dynamic_T* aDynamicT) {
+
+	IndexInfo __INDEX_INFO__[C_MAX_DUP_OPS];
+  RowInfo __ROW_INFO_TO__[C_MAX_DUP_OPS];
+  i8 CURRENT_DUP_OP;
+  bool bPdsRowBuffer;
+  char* szStrArea;
+  struct __STRUCT_FROM___PREV_OP { i8 iCell; };
+  struct __STRUCT_TO___CURRENT_OP { i8 iCell; };
+  struct __STRUCT_FROM___PREV_OP* p__STRUCT_FROM___PREV_OP;
+  struct __STRUCT_TO___CURRENT_OP* p__STRUCT_TO___CURRENT_OP;
+  void* hjEnt;
+  void* hjBuf;
+  void* hjNextEnt;
+  void* hjNextBuf;
+  char* hjNode;
+#define __HJ_VCH__ {-1}
+
+	__L_LABEL_OUTER_LOOP__:
+
+	// marker-start
+
+#ifdef WITH_CLANG
+  // - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+  // hash join, build: store the arriving row under its key
+  if ( ! aDynamicT->m_bHashProbe) {
+    // the first rows, one per 1000 entries of the index, go straight to the
+    // index as in an index join: a join of few rows (TPC-H Q17) stays one
+    if (__INDEX_INFO__[CURRENT_DUP_OP].m_iHjEntries == 0)
+      __INDEX_INFO__[CURRENT_DUP_OP].m_iHjEntries = iExtern_HashJoinEntries(&__INDEX_INFO__[CURRENT_DUP_OP]);
+    if (__INDEX_INFO__[CURRENT_DUP_OP].m_iHjSeen * 1000 < __INDEX_INFO__[CURRENT_DUP_OP].m_iHjEntries) {
+      __INDEX_INFO__[CURRENT_DUP_OP].m_iHjSeen++;
+      goto L_HJPosition__HJ_N__;
+    }
+    char* aHjRow = (char*)aExtern_HashJoinInsert(&__INDEX_INFO__[CURRENT_DUP_OP],
+        *(i8*)__INDEX_INFO__[CURRENT_DUP_OP].m_aEntKey, sizeof(struct __STRUCT_FROM___PREV_OP));
+    memcpy(aHjRow, p__STRUCT_FROM___PREV_OP, sizeof(struct __STRUCT_FROM___PREV_OP));
+    {
+      static const i8 aiHjVch[] = __HJ_VCH__;
+      for (i8 k = 0; aiHjVch[k] >= 0; k++) {
+        i8* piHjCell = (i8*)p__STRUCT_FROM___PREV_OP + aiHjVch[k];
+        if (*piHjCell != C_DATUM_NULL) {
+          char* szHjStr = (char*)*piHjCell;
+          if (bPdsRowBuffer)
+            szHjStr += (i8)piHjCell;
+          ((i8*)aHjRow)[aiHjVch[k]] = (i8)aExtern_HashJoinStr(&__INDEX_INFO__[CURRENT_DUP_OP], szHjStr);
+        }
+      }
+    }
+    aDynamicT->m_bProcessRow = false;
+    goto __L_LABEL_OUTER_LOOP__;
+  }
+
+  // - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+  // hash join, probe (called by the EOS handler): the joined table's index in
+  // key order; each entry with stored rows is joined with each of them
+  L_HJProbe__HJ_N__:
+  if (aDynamicT->m_bHashProbe == 2)
+    goto L_HJReplay__HJ_N__;
+  hjEnt = aExtern_IndexTreeBegin(__INDEX_INFO__[CURRENT_DUP_OP].m_aIndexTree, &hjBuf);
+
+  L_HJEntry__HJ_N__:
+  if ( ! hjEnt)
+    goto L_Return;
+  hjNextBuf = hjBuf;
+  hjNextEnt = aExtern_EntBufferNextEntry(&hjNextBuf, hjEnt);
+  // the Bloom filter skips most entries whose key has no stored row
+  {
+    u8 uHjKey = (u8)((struct Ent_int*)hjEnt)->m_iIntElm0 * 0x9E3779B97F4A7C15ull;
+    uHjKey ^= uHjKey >> 29;
+    u8 uHjMask = __INDEX_INFO__[CURRENT_DUP_OP].m_uHjBloomMask;
+    u8* auHjBloom = __INDEX_INFO__[CURRENT_DUP_OP].m_auHjBloom;
+    u8 vHjKey = uHjKey >> 32;
+    if (auHjBloom &&
+        ( ! (auHjBloom[(uHjKey & uHjMask) >> 6] & (1ull << (uHjKey & 63))) ||
+          ! (auHjBloom[(vHjKey & uHjMask) >> 6] & (1ull << (vHjKey & 63))) )) {
+      hjEnt = hjNextEnt;
+      hjBuf = hjNextBuf;
+      goto L_HJEntry__HJ_N__;
+    }
+  }
+  hjNode = (char*)aExtern_HashJoinFirst(&__INDEX_INFO__[CURRENT_DUP_OP], ((struct Ent_int*)hjEnt)->m_iIntElm0);
+  if ( ! hjNode) {
+    hjEnt = hjNextEnt;
+    hjBuf = hjNextBuf;
+    goto L_HJEntry__HJ_N__;
+  }
+
+  L_HJUse__HJ_N__:
+  p__STRUCT_FROM___PREV_OP = (struct __STRUCT_FROM___PREV_OP*)(hjNode + 24);
+  bPdsRowBuffer = false;
+  p__STRUCT_TO___CURRENT_OP = (struct __STRUCT_TO___CURRENT_OP*)__ROW_INFO_TO__[CURRENT_DUP_OP].m_aRowCellArray;
+  __ROW_INFO_TO__[CURRENT_DUP_OP].m_acStrArea = __ROW_INFO_TO__[CURRENT_DUP_OP].m_acStrAreaSav;
+  szStrArea = __ROW_INFO_TO__[CURRENT_DUP_OP].m_acStrArea;
+  __INDEX_INFO__[CURRENT_DUP_OP].m_aEntInt = (struct Ent_int*)hjEnt;
+  __INDEX_INFO__[CURRENT_DUP_OP].m_aEntBuffer = hjBuf;
+  __INDEX_INFO__[CURRENT_DUP_OP].m_aEntUpper = (struct Ent_int*)hjNextEnt;
+  goto __L_LABEL_INDEX_DEREF__;
+
+  L_HJNext__HJ_N__:
+  hjNode = *(char**)hjNode;
+  if (hjNode)
+    goto L_HJUse__HJ_N__;
+  hjEnt = hjNextEnt;
+  hjBuf = hjNextBuf;
+  goto L_HJEntry__HJ_N__;
+
+  // - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+  // hash join, replay (few rows stored): each stored row, in arrival order,
+  // is looked up in the index as an index join does
+  L_HJReplay__HJ_N__:
+  hjNode = (char*)aExtern_HashJoinAll(&__INDEX_INFO__[CURRENT_DUP_OP]);
+
+  L_HJReplayRow__HJ_N__:
+  if ( ! hjNode)
+    goto L_Return;
+  p__STRUCT_FROM___PREV_OP = (struct __STRUCT_FROM___PREV_OP*)(hjNode + 24);
+  bPdsRowBuffer = false;
+  p__STRUCT_TO___CURRENT_OP = (struct __STRUCT_TO___CURRENT_OP*)__ROW_INFO_TO__[CURRENT_DUP_OP].m_aRowCellArray;
+  __ROW_INFO_TO__[CURRENT_DUP_OP].m_acStrArea = __ROW_INFO_TO__[CURRENT_DUP_OP].m_acStrAreaSav;
+  szStrArea = __ROW_INFO_TO__[CURRENT_DUP_OP].m_acStrArea;
+  *(i8*)__INDEX_INFO__[CURRENT_DUP_OP].m_aEntKey = *(i8*)(hjNode + 16);
+
+  L_HJPosition__HJ_N__:
+  __INDEX_POSITION_LOWER__(&__INDEX_INFO__[CURRENT_DUP_OP]);
+  if ( ! __INDEX_INFO__[CURRENT_DUP_OP].m_aEntInt) {
+    aDynamicT->m_bProcessRow = false;
+    goto __L_LABEL_OUTER_LOOP__;
+  }
+  aDynamicT->m_fp_vExtern_IndexTreePositionLE_int(&__INDEX_INFO__[CURRENT_DUP_OP]);
+  goto __L_LABEL_INDEX_DEREF__;
+
+  L_HJReplayNext__HJ_N__:
+  hjNode = *(char**)(hjNode + 8);
+  goto L_HJReplayRow__HJ_N__;
+
+#endif
+	__L_LABEL_INDEX_DEREF__:
+	aDynamicT->m_bProcessRow = true;
+
+	if (aDynamicT->m_xIndexInfoJ[CURRENT_DUP_OP].m_aEntInt == aDynamicT->m_xIndexInfoJ[CURRENT_DUP_OP].m_aEntUpper) {
+
+		aDynamicT->m_bProcessRow = false;
+		goto __L_LABEL_OUTER_LOOP__;
+	}
+
+	// marker-end
+
+  L_Return:
+  return;
+}
+
 // function-vIndexJoinPosition_int
 void vIndexJoinPosition_int(Dynamic_T* aDynamicT) {
 
