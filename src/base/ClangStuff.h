@@ -24,6 +24,9 @@ extern void* aExtern_PLNext(void* aIndexInfo, void* aPrevEntry) __attribute__((w
 extern void* aExtern_HashJoinInsert(void* aIndexInfo, i8 iKey, i8 nRowBytes) __attribute__((weak_import));
 extern char* aExtern_HashJoinStr(void* aIndexInfo, const char* szStr) __attribute__((weak_import));
 extern void* aExtern_HashJoinFirst(void* aIndexInfo, i8 iKey) __attribute__((weak_import));
+extern i8 iExtern_HashJoinMode(void* aIndexInfo, i8 iFlags) __attribute__((weak_import));
+extern i8 iExtern_HashJoinEntries(void* aIndexInfo) __attribute__((weak_import));
+extern void* aExtern_HashJoinAll(void* aIndexInfo) __attribute__((weak_import));
 extern void* aExtern_IndexTreeInsertEntTop(void* aIndexTree, void* aEnt, void** aaEntBottom, i8 iTopCount, i8* piErrorCode)
 __attribute__((weak_import));
 extern void vExtern_IndexTreeTop(void* aDynamic, i8 iTopCol, i8 iTopCount) __attribute__((weak_import));

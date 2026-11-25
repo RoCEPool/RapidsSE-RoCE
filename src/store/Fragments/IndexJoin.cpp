@@ -300,6 +300,14 @@ void vHashJoinPosition_int(Dynamic_T* aDynamicT) {
   // - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
   // hash join, build: store the arriving row under its key
   if ( ! aDynamicT->m_bHashProbe) {
+    // the first rows, one per 1000 entries of the index, go straight to the
+    // index as in an index join: a join of few rows (TPC-H Q17) stays one
+    if (__INDEX_INFO__[CURRENT_DUP_OP].m_iHjEntries == 0)
+      __INDEX_INFO__[CURRENT_DUP_OP].m_iHjEntries = iExtern_HashJoinEntries(&__INDEX_INFO__[CURRENT_DUP_OP]);
+    if (__INDEX_INFO__[CURRENT_DUP_OP].m_iHjSeen * 1000 < __INDEX_INFO__[CURRENT_DUP_OP].m_iHjEntries) {
+      __INDEX_INFO__[CURRENT_DUP_OP].m_iHjSeen++;
+      goto L_HJPosition__HJ_N__;
+    }
     char* aHjRow = (char*)aExtern_HashJoinInsert(&__INDEX_INFO__[CURRENT_DUP_OP],
         *(i8*)__INDEX_INFO__[CURRENT_DUP_OP].m_aEntKey, sizeof(struct __STRUCT_FROM___PREV_OP));
     memcpy(aHjRow, p__STRUCT_FROM___PREV_OP, sizeof(struct __STRUCT_FROM___PREV_OP));
@@ -323,6 +331,8 @@ void vHashJoinPosition_int(Dynamic_T* aDynamicT) {
   // hash join, probe (called by the EOS handler): the joined table's index in
   // key order; each entry with stored rows is joined with each of them
   L_HJProbe__HJ_N__:
+  if (aDynamicT->m_bHashProbe == 2)
+    goto L_HJReplay__HJ_N__;
   hjEnt = aExtern_IndexTreeBegin(__INDEX_INFO__[CURRENT_DUP_OP].m_aIndexTree, &hjBuf);
 
   L_HJEntry__HJ_N__:
@@ -330,6 +340,21 @@ void vHashJoinPosition_int(Dynamic_T* aDynamicT) {
     goto L_Return;
   hjNextBuf = hjBuf;
   hjNextEnt = aExtern_EntBufferNextEntry(&hjNextBuf, hjEnt);
+  // the Bloom filter skips most entries whose key has no stored row
+  {
+    u8 uHjKey = (u8)((struct Ent_int*)hjEnt)->m_iIntElm0 * 0x9E3779B97F4A7C15ull;
+    uHjKey ^= uHjKey >> 29;
+    u8 uHjMask = __INDEX_INFO__[CURRENT_DUP_OP].m_uHjBloomMask;
+    u8* auHjBloom = __INDEX_INFO__[CURRENT_DUP_OP].m_auHjBloom;
+    u8 vHjKey = uHjKey >> 32;
+    if (auHjBloom &&
+        ( ! (auHjBloom[(uHjKey & uHjMask) >> 6] & (1ull << (uHjKey & 63))) ||
+          ! (auHjBloom[(vHjKey & uHjMask) >> 6] & (1ull << (vHjKey & 63))) )) {
+      hjEnt = hjNextEnt;
+      hjBuf = hjNextBuf;
+      goto L_HJEntry__HJ_N__;
+    }
+  }
   hjNode = (char*)aExtern_HashJoinFirst(&__INDEX_INFO__[CURRENT_DUP_OP], ((struct Ent_int*)hjEnt)->m_iIntElm0);
   if ( ! hjNode) {
     hjEnt = hjNextEnt;
@@ -338,7 +363,7 @@ void vHashJoinPosition_int(Dynamic_T* aDynamicT) {
   }
 
   L_HJUse__HJ_N__:
-  p__STRUCT_FROM___PREV_OP = (struct __STRUCT_FROM___PREV_OP*)(hjNode + 8);
+  p__STRUCT_FROM___PREV_OP = (struct __STRUCT_FROM___PREV_OP*)(hjNode + 24);
   bPdsRowBuffer = false;
   p__STRUCT_TO___CURRENT_OP = (struct __STRUCT_TO___CURRENT_OP*)__ROW_INFO_TO__[CURRENT_DUP_OP].m_aRowCellArray;
   __ROW_INFO_TO__[CURRENT_DUP_OP].m_acStrArea = __ROW_INFO_TO__[CURRENT_DUP_OP].m_acStrAreaSav;
@@ -355,6 +380,35 @@ void vHashJoinPosition_int(Dynamic_T* aDynamicT) {
   hjEnt = hjNextEnt;
   hjBuf = hjNextBuf;
   goto L_HJEntry__HJ_N__;
+
+  // - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+  // hash join, replay (few rows stored): each stored row, in arrival order,
+  // is looked up in the index as an index join does
+  L_HJReplay__HJ_N__:
+  hjNode = (char*)aExtern_HashJoinAll(&__INDEX_INFO__[CURRENT_DUP_OP]);
+
+  L_HJReplayRow__HJ_N__:
+  if ( ! hjNode)
+    goto L_Return;
+  p__STRUCT_FROM___PREV_OP = (struct __STRUCT_FROM___PREV_OP*)(hjNode + 24);
+  bPdsRowBuffer = false;
+  p__STRUCT_TO___CURRENT_OP = (struct __STRUCT_TO___CURRENT_OP*)__ROW_INFO_TO__[CURRENT_DUP_OP].m_aRowCellArray;
+  __ROW_INFO_TO__[CURRENT_DUP_OP].m_acStrArea = __ROW_INFO_TO__[CURRENT_DUP_OP].m_acStrAreaSav;
+  szStrArea = __ROW_INFO_TO__[CURRENT_DUP_OP].m_acStrArea;
+  *(i8*)__INDEX_INFO__[CURRENT_DUP_OP].m_aEntKey = *(i8*)(hjNode + 16);
+
+  L_HJPosition__HJ_N__:
+  __INDEX_POSITION_LOWER__(&__INDEX_INFO__[CURRENT_DUP_OP]);
+  if ( ! __INDEX_INFO__[CURRENT_DUP_OP].m_aEntInt) {
+    aDynamicT->m_bProcessRow = false;
+    goto __L_LABEL_OUTER_LOOP__;
+  }
+  aDynamicT->m_fp_vExtern_IndexTreePositionLE_int(&__INDEX_INFO__[CURRENT_DUP_OP]);
+  goto __L_LABEL_INDEX_DEREF__;
+
+  L_HJReplayNext__HJ_N__:
+  hjNode = *(char**)(hjNode + 8);
+  goto L_HJReplayRow__HJ_N__;
 
 #endif
 	__L_LABEL_INDEX_DEREF__:

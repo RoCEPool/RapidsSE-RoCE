@@ -1,0 +1,74 @@
+# Hash join with a Bloom filter
+
+Status: implemented for inner index joins on one integer key.
+
+## Why
+
+On TPC-H SF1 the join-heavy queries (Q7, Q8, Q9, Q21, Q3, Q5) spent most of
+their time in join stages, and most of that descending the joined table's
+index once per arriving row (`IndexTreePositionGE`, about 1 us per probe into
+lineitem or orders). DuckDB builds a hash table on one side and streams the
+other side through it.
+
+## How
+
+An index join that is the first operator of a row handler, inner, on one
+integer key, with no operator behind it in the stage that needs the arriving
+order or joins again (ordered aggregate, top, limit, sort, another join;
+`CombinedSrc::bHashJoinEligible`), is generated as a hash join
+(`vAppendCodeHashJoin`, fragment `vHashJoinPosition_int`, store `HashJoin` in
+`IndexTree.cpp`):
+
+1. **Stream first.** The first arriving rows, one per 1000 entries of the
+   joined index, go straight to the index as in an index join. A join of few
+   rows (Q17) stays an index join and keeps streaming to the next stage.
+2. **Build.** The other arriving rows are copied (strings too) into a hash
+   table keyed by the join key. A stored row is
+   `[next row with the key][next stored row][key][cells]`.
+3. **Probe, at the end of the input** (EOS handler), `iExtern_HashJoinMode`
+   chooses:
+   - **walk** when the join's rows are at least one per 150 index entries:
+     walk the joined index once in key order; for each entry test a Bloom
+     filter of the stored keys (16 bits per key, two hash bits) and only on
+     a hit look the key up in the hash table; join the entry with each
+     stored row of its key;
+   - **replay** otherwise: look each stored row up in the index, as an index
+     join does.
+
+The thresholds come from SF1 measurements: walking beat probing down to one
+row per 75 index entries (Q9) and lost at one per 423 (Q19).
+
+Job tags are read when the code is made and passed to the probe as flags:
+the stores' externs do not read the tag set on worker threads. (The
+le_shortcut tag of the index lookup is now read the same way, once per
+`Dynamic`.)
+
+## Switches
+
+- `/optimiser_off_hash_join`: index join as before.
+- `/optimiser_off_hash_join_bloom`: walk without the Bloom filter.
+- `/hash_join_walk`, `/hash_join_replay`: force the probe (tests).
+- `/hash_join_trace`: trace rows stored, index entries and the choice.
+
+## Results (local SF1, execute time, mean of 3)
+
+| Query | index join | hash join |
+|---|---|---|
+| Q9  | 919 ms | 547 ms |
+| Q21 | 527 ms | 369 ms |
+| Q8  | 575 ms | 414 ms |
+| Q7  | 570 ms | 462 ms |
+| Q3  | 340 ms | 268 ms |
+| Q5  | 302 ms | 290 ms |
+| Q10 | 429 ms | 413 ms |
+
+The Bloom filter alone: Q21 426 -> 380, Q7 516 -> 469, Q3 317 -> 287,
+Q8 442 -> 417 ms; Q9 (most keys hit) unchanged.
+
+## Limits and next steps
+
+- Outer joins, string or multi-column keys, joins that are not the first
+  operator of a row handler: still index joins.
+- The walk reads the whole joined index; pushing the Bloom filter into a
+  columnar scan of the joined table (doc/design/columnar-scan.md) would let
+  it skip rows before decoding them.

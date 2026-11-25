@@ -1,0 +1,118 @@
+/*----------------------------------------------------------------------------*/
+/* hashJoin.test -- an index join done as a hash join                         */
+/*----------------------------------------------------------------------------*/
+
+// An inner index join on one integer key stores the rows that arrive by key
+// and, at the end of its input, either walks the joined index once (with a
+// Bloom filter of the stored keys) or looks each stored row up in it, and
+// the first rows go straight to the index (IndexTree.cpp HashJoin,
+// CombinedSrc vAppendCodeHashJoin). Each query runs in each of the ways:
+// default, /hash_join_walk, /hash_join_replay, /optimiser_off_hash_join_bloom
+// and /optimiser_off_hash_join (index join). Many order rows join several
+// lineitem rows (duplicate keys); the stored rows hold strings. The expected
+// rows were computed from TPCH/SF_0001 in Python.
+
+create table ${testName2}_orders (
+  O_ORDERKEY      INTEGER       NOT NULL,
+  O_CUSTKEY       INTEGER       NOT NULL,
+  O_ORDERSTATUS   CHAR(1)       NOT NULL,
+  O_TOTALPRICE    DECIMAL(15,2) NOT NULL,
+  O_ORDERDATE     DATE          NOT NULL,
+  O_ORDERPRIORITY CHAR(15)      NOT NULL,
+  O_CLERK         CHAR(15)      NOT NULL,
+  O_SHIPPRIORITY  INTEGER       NOT NULL,
+  O_COMMENT       VARCHAR(79)   NOT NULL
+);
+success
+create index ${testName2}_IxO_ORDERKEY on ${testName2}_orders (O_ORDERKEY);
+affected: 0
+load ${testName2}_orders "../TPCH/SF_0001/orders.tbl" <field_delimiter> = "|";
+success
+
+create table ${testName2}_lineitem (
+   L_ORDERKEY      INTEGER       NOT NULL,
+   L_PARTKEY       INTEGER       NOT NULL,
+   L_SUPPKEY       INTEGER       NOT NULL,
+   L_LINENUMBER    INTEGER       NOT NULL,
+   L_QUANTITY      DECIMAL(15,2) NOT NULL,
+   L_EXTENDEDPRICE DECIMAL(15,2) NOT NULL,
+   L_DISCOUNT      DECIMAL(15,2) NOT NULL,
+   L_TAX           DECIMAL(15,2) NOT NULL,
+   L_RETURNFLAG    CHAR(1)       NOT NULL,
+   L_LINESTATUS    CHAR(1)       NOT NULL,
+   L_SHIPDATE      DATE          NOT NULL,
+   L_COMMITDATE    DATE          NOT NULL,
+   L_RECEIPTDATE   DATE          NOT NULL,
+   L_SHIPINSTRUCT  CHAR(25)      NOT NULL,
+   L_SHIPMODE      CHAR(10)      NOT NULL,
+   L_COMMENT       VARCHAR(44)   NOT NULL
+);
+success
+create index ${testName2}_IxL_ORDERKEY on ${testName2}_lineitem (L_ORDERKEY);
+affected: 0
+load ${testName2}_lineitem "../TPCH/SF_0001/lineitem.tbl" <field_delimiter> = "|";
+success
+
+// default
+select count(*), sum(l_quantity), max(o_orderpriority), sum(o_custkey)
+  from ${testName2}_orders, ${testName2}_lineitem
+ where o_orderkey = l_orderkey and o_orderdate < date '1995-01-01';
+rows: (2740, 69302.00, '5-LOW', 206420)
+
+select count(*), sum(l_quantity), max(o_clerk)
+  from ${testName2}_orders, ${testName2}_lineitem
+ where o_orderkey = l_orderkey and o_orderdate >= date '1998-07-01';
+rows: (91, 2276.00, 'Clerk#000000980')
+
+// /hash_join_walk
+/hash_join_walk
+select count(*), sum(l_quantity), max(o_orderpriority), sum(o_custkey)
+  from ${testName2}_orders, ${testName2}_lineitem
+ where o_orderkey = l_orderkey and o_orderdate < date '1995-01-01';
+rows: (2740, 69302.00, '5-LOW', 206420)
+
+/hash_join_walk
+select count(*), sum(l_quantity), max(o_clerk)
+  from ${testName2}_orders, ${testName2}_lineitem
+ where o_orderkey = l_orderkey and o_orderdate >= date '1998-07-01';
+rows: (91, 2276.00, 'Clerk#000000980')
+
+// /hash_join_replay
+/hash_join_replay
+select count(*), sum(l_quantity), max(o_orderpriority), sum(o_custkey)
+  from ${testName2}_orders, ${testName2}_lineitem
+ where o_orderkey = l_orderkey and o_orderdate < date '1995-01-01';
+rows: (2740, 69302.00, '5-LOW', 206420)
+
+/hash_join_replay
+select count(*), sum(l_quantity), max(o_clerk)
+  from ${testName2}_orders, ${testName2}_lineitem
+ where o_orderkey = l_orderkey and o_orderdate >= date '1998-07-01';
+rows: (91, 2276.00, 'Clerk#000000980')
+
+// /optimiser_off_hash_join_bloom
+/optimiser_off_hash_join_bloom
+select count(*), sum(l_quantity), max(o_orderpriority), sum(o_custkey)
+  from ${testName2}_orders, ${testName2}_lineitem
+ where o_orderkey = l_orderkey and o_orderdate < date '1995-01-01';
+rows: (2740, 69302.00, '5-LOW', 206420)
+
+/optimiser_off_hash_join_bloom
+select count(*), sum(l_quantity), max(o_clerk)
+  from ${testName2}_orders, ${testName2}_lineitem
+ where o_orderkey = l_orderkey and o_orderdate >= date '1998-07-01';
+rows: (91, 2276.00, 'Clerk#000000980')
+
+// /optimiser_off_hash_join
+/optimiser_off_hash_join
+select count(*), sum(l_quantity), max(o_orderpriority), sum(o_custkey)
+  from ${testName2}_orders, ${testName2}_lineitem
+ where o_orderkey = l_orderkey and o_orderdate < date '1995-01-01';
+rows: (2740, 69302.00, '5-LOW', 206420)
+
+/optimiser_off_hash_join
+select count(*), sum(l_quantity), max(o_clerk)
+  from ${testName2}_orders, ${testName2}_lineitem
+ where o_orderkey = l_orderkey and o_orderdate >= date '1998-07-01';
+rows: (91, 2276.00, 'Clerk#000000980')
+

@@ -229,9 +229,14 @@ void CombinedSrc::vSynthesizeCode(Stencil* pStencil, bool bFirstStage, bool bLas
         // a hash join probes now, through the row handler of the stage
         for (const std::string& sStage : vsHashJoinStages)
           if (sStage == pStencil->szStageNm()->azChar()) {
+            i8 iHjFlags = (AM::JOB::bHasTag("<hash_join_walk>"_Stz) ? 1 : 0) |
+                          (AM::JOB::bHasTag("<hash_join_replay>"_Stz) ? 2 : 0) |
+                          (AM::JOB::bHasTag("<optimiser_off_hash_join_bloom>"_Stz) ? 4 : 0) |
+                          (AM::JOB::bHasTag("<hash_join_trace>"_Stz) ? 8 : 0);
             std::string sProbe =
-                "  if (aDynamicT->m_xIndexInfoJ[0].m_aHashJoin) {\n"
-                "    aDynamicT->m_bHashProbe = 1;\n"
+                "  if (aDynamicT->m_xIndexInfoJ[0].m_aHashJoin &&\n"
+                "      (aDynamicT->m_bHashProbe = iExtern_HashJoinMode(&aDynamicT->m_xIndexInfoJ[0], " +
+                std::to_string((long long)iHjFlags) + ")) != 0) {\n"
                 "    iPdsRowHandler_" + sStage + "(aDynamicT);\n"
                 "    aDynamicT->m_bHashProbe = 0;\n"
                 "    if (aDynamicT->m_iErrorCode != (i8)EC_NONE)\n"
@@ -1113,6 +1118,15 @@ bool CombinedSrc::bHashJoinEligible(Stencil* pStencil, i8 iOpSketch, eHK eHandle
     return false;
   if (iOpSketch == 0 || pStencil->pGet(iOpSketch - 1)->eSketchKind() != SK_INFLATE_ROW)
     return false;
+  // the joined rows come out in another order (stored rows at the end, in
+  // key order): not behind an operator that needs the arriving order, nor a
+  // second join of the same handler
+  for (i8 j = iOpSketch + 1; j < pStencil->nItems(); j++) {
+    eSK eKind = pStencil->pGet(j)->eSketchKind();
+    if (eKind == SK_ORDAGG || eKind == SK_TOP || eKind == SK_LIMIT || eKind == SK_SORT ||
+        eKind == SK_INDEXJOIN || eKind == SK_SEMIJOIN || eKind == SK_ANTIJOIN)
+      return false;
+  }
   return true;
 }
 
@@ -1178,7 +1192,8 @@ void CombinedSrc::vAppendCodeHashJoin(OpSketch* pOpSketch, File* pOperatorFile)
   std::string sLoop = std::string(pOpSketch->m_sLabelOuterLoop.azChar()) + ":\n";
   char* azLoop = strstr(azHandler, sLoop.c_str());
   RASSERT(azLoop);
-  std::string sNext = "  if (aDynamicT->m_bHashProbe)\n    goto L_HJNext" + sNo + ";\n";
+  std::string sNext = "  if (aDynamicT->m_bHashProbe == 1)\n    goto L_HJNext" + sNo + ";\n"
+                      "  if (aDynamicT->m_bHashProbe == 2)\n    goto L_HJReplayNext" + sNo + ";\n";
   vInsertText(azLoop + sLoop.size(), sNext.c_str());
 }
 
