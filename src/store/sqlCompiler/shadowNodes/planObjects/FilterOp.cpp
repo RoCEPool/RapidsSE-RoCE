@@ -211,7 +211,7 @@ QueryNode* FilterOp::pOrdinalFilterExpr(QueryNode* pNode, PlanNode* pRootNode)
   // This is the list of expression symbols that represent each column of
   // each row that this sql operator will receive.
   ASSERT(pNode->nChildren() == 1);
-  QueryNodeList* pColExprList = PlanObject::pColumnExprs(_pQueryNode(pNode->pFirstChild()), pRootNode);
+  QueryNodeList* pColExprList = PlanObject::pColumnExprsShared(_pQueryNode(pNode->pFirstChild()), pRootNode);
   ASSERT(pColExprList);
   ASSERT(pColExprList->nItems() > 0);
 
@@ -225,8 +225,7 @@ QueryNode* FilterOp::pOrdinalFilterExpr(QueryNode* pNode, PlanNode* pRootNode)
   QueryNode* pOrdinalExpr = Expr::pSymbolicToOrdinal(pSymbolicExpr, pColExprList, pCorrelatedExprs, pRootNode);
   ASSERT(pOrdinalExpr);
 
-  pColExprList->vDeleteAll();
-  delete pColExprList;
+  PlanObject::vReleaseShared(pColExprList);
 
   return pOrdinalExpr;
 }

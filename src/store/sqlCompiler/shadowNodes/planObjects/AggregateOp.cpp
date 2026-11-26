@@ -310,7 +310,7 @@ QueryNode* AggregateOp::pOrdinalGroupByList(QueryNode* pNode, PlanNode* pRootNod
   // This is the list of expression symbols that represent each column of
   // each row that this sql operator will receive.
   ASSERT(pNode->nChildren() == 1);
-  QueryNodeList* pColExprList = PlanObject::pColumnExprs(_pQueryNode(pNode->pFirstChild()), pRootNode);
+  QueryNodeList* pColExprList = PlanObject::pColumnExprsShared(_pQueryNode(pNode->pFirstChild()), pRootNode);
   ASSERT(pColExprList);
   ASSERT(pColExprList->nItems() > 0);
 
@@ -335,8 +335,7 @@ QueryNode* AggregateOp::pOrdinalGroupByList(QueryNode* pNode, PlanNode* pRootNod
 
   delete pIter;
 
-  pColExprList->vDeleteAll();
-  delete pColExprList;
+  PlanObject::vReleaseShared(pColExprList);
 
   return pOrdinalExprs;
 }
