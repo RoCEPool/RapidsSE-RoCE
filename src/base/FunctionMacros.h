@@ -1082,25 +1082,32 @@
 
 // _MATCH_STRSTR: find the first place in str where the len characters of
 // substr start, and move str past them (bMatch 1), or leave str (bMatch 0).
-// memchr finds each candidate first character and memcmp checks the rest, as
-// DuckDB searches for a fixed string; a byte-by-byte loop was most of the
-// time of the LIKE '%...%...%' filter of TPC-H Q13.
-// An empty part (as in '%%') matches at once; the loop looked for the next
-// '%' in str instead.
+// The part of the pattern (substr, len) is searched for with strstr, glibc's
+// search for a fixed string (as DuckDB searches): it reads the string once
+// and stops at its NUL. An end found first with strlen and a memchr/memcmp
+// search read it twice, and strlen alone was about a third of the time of
+// TPC-H Q13 (LIKE '%special%requests%' on o_comment). The part is not
+// NUL-terminated, so it is copied into a buffer first; a part longer than the
+// buffer is searched with strchr/strncmp, which also stop at the NUL.
+// An empty part (as in '%%') matches at once.
 #define _MATCH_STRSTR(str,substr,len,bMatch)                                \
   {                                                                         \
     char* a = str;                                                          \
-    char* e = a + strlen(a);                                                \
     i8 l = len;                                                             \
                                                                             \
     if (l == 0)                                                             \
       bMatch = 1;                                                           \
+    else if (l < 128) {                                                     \
+      char azPart[128];                                                     \
+      memcpy(azPart, substr, (size_t)l);                                    \
+      azPart[l] = 0;                                                        \
+      a = strstr(a, azPart);                                                \
+      if (a)                                                                \
+        bMatch = 1;                                                         \
+    }                                                                       \
     else                                                                    \
-    while (a < e &&                                                         \
-           (a = (char*)memchr(a, substr[0], (size_t)(e - a))) != NULL) {     \
-      if (e - a < l)                                                        \
-        break;                                                              \
-      if (memcmp(a, substr, (size_t)l) == 0) {                              \
+    while ((a = strchr(a, substr[0])) != NULL) {                            \
+      if (strncmp(a, substr, (size_t)l) == 0) {                             \
         bMatch = 1;                                                         \
         break;                                                              \
       }                                                                     \

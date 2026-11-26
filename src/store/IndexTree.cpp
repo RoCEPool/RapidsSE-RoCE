@@ -1730,8 +1730,11 @@ namespace
     std::vector<char*> xChunks;       // blocks, allotted in chunks
     char*              pFree = nullptr;
     i8                 nFree = 0;
-    std::vector<i8>    aiKey;         // open addressing: key per slot
-    std::vector<char*> apBlock;       // block per slot (null: empty)
+    // integer keys: open addressing, the key next to its block in one slot,
+    // so that a probe reads one cache line (block null: empty)
+    struct Slot { i8 iKey; char* pBlock; };
+    std::vector<Slot>  axSlot;
+    std::vector<char*> apBlock;       // general keys: block per slot (null: empty)
     u8                 uMask = 0;
     i8                 nUsed = 0;
     std::vector<char*> xSorted;       // the blocks in key order (traversal)
@@ -1753,22 +1756,18 @@ namespace
 
     void vGrow(void)
     {
-      std::vector<i8> aiOldKey;
-      std::vector<char*> apOld;
-      aiOldKey.swap(aiKey);
-      apOld.swap(apBlock);
-      u8 nSlots = apOld.empty() ? 1024 : apOld.size() * 2;
-      aiKey.assign(nSlots, 0);
-      apBlock.assign(nSlots, nullptr);
+      std::vector<Slot> axOld;
+      axOld.swap(axSlot);
+      u8 nSlots = axOld.empty() ? 1024 : axOld.size() * 2;
+      axSlot.assign(nSlots, Slot{0, nullptr});
       uMask = nSlots - 1;
-      for (size_t i = 0; i < apOld.size(); i++) {
-        if (! apOld[i])
+      for (const Slot& x : axOld) {
+        if (! x.pBlock)
           continue;
-        u8 u = uHash(aiOldKey[i]) & uMask;
-        while (apBlock[u])
+        u8 u = uHash(x.iKey) & uMask;
+        while (axSlot[u].pBlock)
           u = (u + 1) & uMask;
-        aiKey[u] = aiOldKey[i];
-        apBlock[u] = apOld[i];
+        axSlot[u] = x;
       }
     }
 
@@ -1856,20 +1855,19 @@ namespace
 
     char* pFindInsert(i8 iKey, bool* pbNew)
     {
-      if ((u8)(nUsed + 1) * 2 > apBlock.size())
+      if ((u8)(nUsed + 1) * 2 > axSlot.size())
         vGrow();
       u8 u = uHash(iKey) & uMask;
-      while (apBlock[u]) {
-        if (aiKey[u] == iKey) {
+      while (axSlot[u].pBlock) {
+        if (axSlot[u].iKey == iKey) {
           *pbNew = false;
-          return apBlock[u];
+          return axSlot[u].pBlock;
         }
         u = (u + 1) & uMask;
       }
       char* p = pNewBlock();
       ((Ent_int*) p)->m_iIntElm0 = iKey;
-      aiKey[u] = iKey;
-      apBlock[u] = p;
+      axSlot[u] = Slot{iKey, p};
       nUsed++;
       bSorted = false;
       *pbNew = true;
@@ -2116,6 +2114,42 @@ extern "C" void* aExtern_GbyHashFindInt(void* aIndexInfo, i8 iKey, i8 nPayloadBy
   return pHash->pFindInsert(iKey, pbNew);
 }
 
+// The groups of an integer key in key order: an LSD radix sort of the
+// (key, block) pairs on key - min, 16 bits a pass, as many passes as the
+// range of the keys needs (2 for keys below 2^32 apart). A comparison sort of
+// 1.5M groups (TPC-H Q18, group by l_orderkey) was a fifth of the query's
+// active stacks on the CI runner. The keys of the groups are distinct.
+static void vSortSlotsByKey(std::vector<GbyHash::Slot>& rxSlots)
+{
+  size_t n = rxSlots.size();
+  if (n < 256) {
+    std::sort(rxSlots.begin(), rxSlots.end(), [](const GbyHash::Slot& a, const GbyHash::Slot& b) {
+      return a.iKey < b.iKey; });
+    return;
+  }
+  i8 iMin = rxSlots[0].iKey, iMax = rxSlots[0].iKey;
+  for (const GbyHash::Slot& x : rxSlots) {
+    if (x.iKey < iMin) iMin = x.iKey;
+    if (x.iKey > iMax) iMax = x.iKey;
+  }
+  u8 uRange = (u8)iMax - (u8)iMin;
+  std::vector<GbyHash::Slot> axTmp(n);
+  std::vector<GbyHash::Slot>* pFrom = &rxSlots;
+  std::vector<GbyHash::Slot>* pTo = &axTmp;
+  for (int iShift = 0; iShift < 64 && (uRange >> iShift) != 0; iShift += 16) {
+    std::vector<size_t> anCount(65537, 0);
+    for (const GbyHash::Slot& x : *pFrom)
+      anCount[(((u8)x.iKey - (u8)iMin) >> iShift & 0xFFFF) + 1]++;
+    for (size_t i = 1; i < anCount.size(); i++)
+      anCount[i] += anCount[i - 1];
+    for (const GbyHash::Slot& x : *pFrom)
+      (*pTo)[anCount[((u8)x.iKey - (u8)iMin) >> iShift & 0xFFFF]++] = x;
+    std::swap(pFrom, pTo);
+  }
+  if (pFrom != &rxSlots)
+    rxSlots.swap(*pFrom);
+}
+
 // first entry of the payload: the first group in key order, or the tree's
 extern "C" void* aExtern_PLBegin(void* aIndexInfo)
 {
@@ -2126,15 +2160,24 @@ extern "C" void* aExtern_PLBegin(void* aIndexInfo)
   if (! pHash->bSorted) {
     pHash->xSorted.clear();
     pHash->xSorted.reserve(pHash->nUsed);
-    for (char* p : pHash->apBlock)
-      if (p)
-        pHash->xSorted.push_back(p);
-    if (pHash->bGen)
+    if (pHash->bGen) {
+      for (char* p : pHash->apBlock)
+        if (p)
+          pHash->xSorted.push_back(p);
       std::sort(pHash->xSorted.begin(), pHash->xSorted.end(), [](char* a, char* b) {
         return KC_BEFORE == Key::eCompareAsc(((Ent*) a)->aKey(), ((Ent*) b)->aKey()); });
-    else
-      std::sort(pHash->xSorted.begin(), pHash->xSorted.end(), [](char* a, char* b) {
-        return ((Ent_int*) a)->m_iIntElm0 < ((Ent_int*) b)->m_iIntElm0; });
+    } else {
+      // sorted as (key, block) pairs, so that the comparisons read the keys
+      // from one array instead of from each block (a cache miss each)
+      std::vector<GbyHash::Slot> axUsed;
+      axUsed.reserve(pHash->nUsed);
+      for (const GbyHash::Slot& x : pHash->axSlot)
+        if (x.pBlock)
+          axUsed.push_back(x);
+      vSortSlotsByKey(axUsed);
+      for (const GbyHash::Slot& x : axUsed)
+        pHash->xSorted.push_back(x.pBlock);
+    }
     pHash->bSorted = true;
   }
   pHash->iNext = 0;
