@@ -1262,11 +1262,7 @@ void vPotTubVchCol(Dynamic_T* aDynamicT) {
 		char *d = szDstStz;
 		const char *s = (char*)szSrcStz;
 
-		i8 iBytesToCopy = nSrcSize - 1;
-    while (iBytesToCopy--)
-			*d++ = *s++;
-
-    *d = '\0';
+		memmove(d, s, (size_t)nSrcSize);   // the string and its NUL, in one copy
 
     // save the string offset
     amCellAddress = (m8*) &p__STRUCT_TO___CURRENT_OP->__COLUMN_TO__.m_iAsI8;
@@ -1337,11 +1333,7 @@ void vCopyVchCol(Dynamic_T* aDynamicT) {
 		char *d = szDstStz;
 		const char *s = (char*)szSrcStz;
 
-		i8 iBytesToCopy = nSrcSize - 1;
-		while (iBytesToCopy--)
-			*d++ = *s++;
-
-		*d = '\0';
+		memmove(d, s, (size_t)nSrcSize);   // the string and its NUL, in one copy
 
     // copy the source to the destination
     p__STRUCT_TO___CURRENT_OP->__COLUMN_TO__.m_iAsI8 = (i8)szDstStz;
@@ -1470,11 +1462,7 @@ void vPayLoadToTubVchCol(Dynamic_T* aDynamicT) {
 		 char *d = szDstStz;
 		 const char *s = (char*)szSrcStz;
 
-		 i8 iBytesToCopy = nSrcSize - 1;
-		 while (iBytesToCopy--)
-			 *d++ = *s++;
-
-		 *d = '\0';
+		 memmove(d, s, (size_t)nSrcSize);   // the string and its NUL, in one copy
 
      // save the string offset
      amCellAddress = (m8*) &p__STRUCT_TO___CURRENT_OP->__COLUMN_TO__.m_iAsI8;
@@ -1570,11 +1558,7 @@ void vPopulateVchPL(Dynamic_T* aDynamicT) {
 		char *d = szDstStz;
 		const char *s = (char*)szSrcStz;
 
-		i8 iBytesToCopy = nSrcSize - 1;
-		while (iBytesToCopy--)
-			*d++ = *s++;
-
-		*d = '\0';
+		memmove(d, s, (size_t)nSrcSize);   // the string and its NUL, in one copy
   }
   // marker-end
 }

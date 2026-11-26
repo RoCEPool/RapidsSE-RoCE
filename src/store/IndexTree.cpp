@@ -238,11 +238,7 @@ extern "C" void vExtern_IndexTreeTop(void* aDynamic, i8 iTopCol, i8 iTopCount) {
                 char *d = szDstStz;
                 const char *s = (char*)szSrcStz;
 
-                i8 iBytesToCopy = nSrcSize - 1;
-                while (iBytesToCopy--)
-                  *d++ = *s++;
-
-                *d = '\0';
+                memmove(d, s, (size_t)nSrcSize);   // the string and its NUL, in one copy
               }
             }
               break;
