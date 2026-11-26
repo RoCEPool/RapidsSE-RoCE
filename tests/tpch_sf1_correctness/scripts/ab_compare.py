@@ -32,16 +32,17 @@ def time_tree(repo, data_dir, log):
     if bad:
         se.stop()
         raise SystemExit('%s: wrong row counts after the load: %s' % (repo, bad))
-    times = {}
+    times, phases = {}, {}
     for q in c.QIDS:
         stmt = open(os.path.join(c.QUERIES, 'q%s.sql' % q)).read().strip().rstrip(';')
         se.shell(stmt + ';', 1200)                     # compiles and caches the code
-        times[q] = se.engine_time(stmt, 1200)
+        phases[q] = {}
+        times[q] = se.engine_time(stmt, 1200, phases[q])
         if not se.alive():
             se.stop()
             raise SystemExit('%s: the node died on Q%s' % (repo, q))
     se.stop()
-    return times
+    return times, phases
 
 
 def main():
@@ -54,16 +55,21 @@ def main():
     a = ap.parse_args()
     trees = {'base': os.path.abspath(a.base), 'head': os.path.abspath(a.head)}
     best = {'base': {}, 'head': {}}
+    best_ph = {'base': {}, 'head': {}}       # query -> phase -> best ms
     os.makedirs(os.path.dirname(a.out), exist_ok=True)
     ok, _ = prepare_sf1.check(a.data_dir)          # generates the data with this tree's DBGEN
     if not ok:
         raise SystemExit('the SF1 data set is not right')
     for i, name in enumerate(a.order.split(',')):
         t0 = time.time()
-        times = time_tree(trees[name], a.data_dir, os.path.join(os.path.dirname(a.out), 'ab_node_%d_%s.log' % (i, name)))
+        times, phases = time_tree(trees[name], a.data_dir, os.path.join(os.path.dirname(a.out), 'ab_node_%d_%s.log' % (i, name)))
         for q, ms in times.items():
             if ms is not None:
                 best[name][q] = min(best[name].get(q, ms), ms)
+        for q, ph in phases.items():
+            d = best_ph[name].setdefault(q, {})
+            for k, v in ph.items():
+                d[k] = v if k not in d else min(d[k], v)
         print('run %d (%s) done in %.0f s' % (i + 1, name, time.time() - t0), flush=True)
 
     md = ['## RapidsSE: base against head on the same machine', '',
@@ -82,6 +88,16 @@ def main():
         md.append('| Q%s | %d | %d | %+.1f%% |' % (q, b, h, 100.0 * (h - b) / max(b, 1)))
     if tb:
         md.append('| **Total** | **%d** | **%d** | **%+.1f%%** |' % (tb, th, 100.0 * (th - tb) / tb))
+    # where the change went: the phases of the engine time, summed over the queries (each the
+    # best of its runs, so the sum of a column is not the total above)
+    md += ['', 'Phases (best of each, summed over the queries):', '',
+           '| Phase | base ms | head ms | change |', '|---|---:|---:|---:|']
+    for k, label in (('sql', 'SQL compile'), ('optimise', 'Optimise'), ('weave', 'Weave'),
+                     ('execute', 'Execute'), ('other', 'Other')):
+        b = sum(d.get(k, 0) for d in best_ph['base'].values())
+        h = sum(d.get(k, 0) for d in best_ph['head'].values())
+        if b or h:
+            md.append('| %s | %d | %d | %+.1f%% |' % (label, b, h, 100.0 * (h - b) / max(b, 1)))
     md.append('')
     open(a.out, 'w').write('\n'.join(md) + '\n')
     print('\n'.join(md))

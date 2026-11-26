@@ -165,12 +165,13 @@ def run_query(q, sql, out_dir, timeout, data_dir, node_log):
 TIMED_RUNS = int(os.environ.get('TPCH_TIMED_RUNS', '3'))
 
 
-def engine_time(stmt, timeout):
+def engine_time(stmt, timeout, phases_out=None):
     """Best of TIMED_RUNS runs of the time the engine spends on the statement, in ms: from the start
     of the SQL compiler to the end of the pipeline job, read from the /phaseTimes marks in the engine
     log (see phase_times.py). It leaves out the JDBC client (a new JVM per run, about half a second
     whose spread is larger than many queries) and the printing of the rows, so that it compares with
-    DuckDB timed in process. None when no run left its marks."""
+    DuckDB timed in process. None when no run left its marks. A dict passed as phases_out gets
+    the best time of each phase of phase_times.phases (sql, optimise, execute, ...)."""
     import phase_times            # imports this module, so it is imported here and not at the top
     best = None
     for _ in range(TIMED_RUNS):
@@ -184,6 +185,9 @@ def engine_time(stmt, timeout):
         if p:
             span = p['wall'] - p['client']
             best = span if best is None else min(best, span)
+            if phases_out is not None:
+                for k, v in p.items():
+                    phases_out[k] = v if k not in phases_out else min(phases_out[k], v)
     return None if best is None else int(round(best))
 
 

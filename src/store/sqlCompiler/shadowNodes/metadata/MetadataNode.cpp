@@ -498,8 +498,27 @@ b1 MetadataNode::bGetCteDefPath(QueryNode* pMetadataNode, QueryNode* pCteDef, s2
   ASSERT(pCteDef);
   ASSERT(CteDef::bIsOfType(pCteDef));
 
+  // The CteDefs are all under the "ctes" property of the metadata node, so
+  // only that subtree is searched; a walk from the metadata node went through
+  // the column and index definitions of every table first, for each subquery.
+  // A path is the names of the nodes from the starting node, joined by
+  // C_PROPERTY_SEPARATOR before a property and C_CHILD_SEPARATOR before a
+  // child: the path from the metadata node is its name, the separator and
+  // the path from the ctes node.
   s2K sPathBuf;
-  b1 bFound = GraphNav::bGetPath(pCteDef, pMetadataNode, sPathBuf);
+  b1 bFound = false;
+  QueryNode* pCtesNode = _pQueryNode(GraphNav::pFindProperty(C_CTES_PROP, pMetadataNode));
+  if (pCtesNode) {
+    s2K sSubPath;
+    if (GraphNav::bGetPath(pCteDef, pCtesNode, sSubPath)) {
+      sPathBuf.vCopy(pMetadataNode->szName());
+      sPathBuf.vConcat(StrLib::szCharToStr(C_PROPERTY_SEPARATOR));
+      sPathBuf.vConcat(sSubPath.szStz());
+      bFound = true;
+    }
+  }
+  if (! bFound)
+    bFound = GraphNav::bGetPath(pCteDef, pMetadataNode, sPathBuf);
 
   if (bFound) {
     // Relative to absolute path

@@ -45,6 +45,22 @@ namespace Parser
     // This method handles that. The list and all contents returned must be freed.
     static QueryNodeList* pInputColumnExprs(QueryNode* pNode, PlanNode* pRootNode);
 
+    // The same lists, for a caller that only reads them: hand the list back
+    // with vReleaseShared, never free it. Inside a ColumnExprsScope (a step
+    // that does not change the plan) a node's list is built once and shared;
+    // outside one, a fresh list is built and vReleaseShared frees it.
+    static QueryNodeList* pColumnExprsShared(QueryNode* pNode, PlanNode* pRootNode);
+    static QueryNodeList* pInputColumnExprsShared(QueryNode* pNode, PlanNode* pRootNode);
+    static void vReleaseShared(QueryNodeList* pList);
+
+    // Shares the column lists of the plan's nodes on this thread while it
+    // lives. Only for steps that read the plan and do not change it.
+    class ColumnExprsScope {
+    public:
+      ColumnExprsScope(void);
+      ~ColumnExprsScope(void);
+    };
+
     // Returns the internal node that represents the list of correlated expressions
     // of the parent subquery of pNode. The returned object is of type ExprList.
     // Do not delete or modify the returned node or its children.

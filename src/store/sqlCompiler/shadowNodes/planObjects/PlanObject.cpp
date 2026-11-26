@@ -15,6 +15,13 @@
 #include "store/sqlCompiler/shadowNodes/planObjects/dataSources/DataSource.hpp"
 #include "ShadowRoot.hpp"
 #include "SqlOperator.hpp"
+
+#include <unordered_map>
+#include <vector>
+#include "FilterOp.hpp"
+#include "LimitOp.hpp"
+#include "OrderOp.hpp"
+#include "joins/JoinOp.hpp"
 #include "ExplainOp.hpp"
 #include "JoinOp.hpp"
 #include "ProjectOp.hpp"
@@ -563,6 +570,143 @@ void PlanObject::vAppendIndent(s48K &sBuf, i8 iIndentLevel, eIndentFormat eForma
   if (eFormat == IF_PLAIN) {
     sBuf.vConcat("» "_Stz);
   }
+}
+
+/*----------------------------------------------------------------------------*/
+/* Shared column lists (ColumnExprsScope)                                     */
+/*                                                                            */
+/* Converting an operator's expressions to column ordinals needs the column  */
+/* list of its input, and pColumnExprs builds that list anew each time: a    */
+/* ColumnRef and a ProjectedColumn per column of every table under the node, */
+/* freed again by the caller. Every filter, join, projection, aggregate and  */
+/* sort above a join of eight tables rebuilds the same 60 or so columns.     */
+/* Inside a scope the list of a node is built once per thread and shared by  */
+/* the callers that only read it.                                             */
+/*----------------------------------------------------------------------------*/
+namespace {
+  // oColumn and oInput map a node to its shared list. A list is one of:
+  // built by pColumnExprs and owned here (vOwned: its nodes are freed with
+  // it); a view of the children's shared lists (vViews: the list is freed,
+  // the nodes belong to the children's lists); or another node's list (a
+  // node that passes its child's columns through, freed with that one).
+  struct SharedColumnExprs {
+    i8 iDepth = 0;
+    std::unordered_map<const void*, QueryNodeList*> oColumn;   // pColumnExprs
+    std::unordered_map<const void*, QueryNodeList*> oInput;    // pInputColumnExprs
+    std::vector<QueryNodeList*> vOwned;
+    std::vector<QueryNodeList*> vViews;
+  };
+  thread_local SharedColumnExprs gtShared;
+
+  void vFreeList(QueryNodeList* pList)
+  {
+    if (pList) {
+      pList->vDeleteAll();
+      delete pList;
+    }
+  }
+}
+
+PlanObject::ColumnExprsScope::ColumnExprsScope(void)
+{
+  gtShared.iDepth++;
+}
+
+PlanObject::ColumnExprsScope::~ColumnExprsScope(void)
+{
+  if (--gtShared.iDepth > 0)
+    return;
+  for (QueryNodeList* pList : gtShared.vViews)
+    delete pList;
+  for (QueryNodeList* pList : gtShared.vOwned)
+    vFreeList(pList);
+  gtShared.vViews.clear();
+  gtShared.vOwned.clear();
+  gtShared.oColumn.clear();
+  gtShared.oInput.clear();
+}
+
+QueryNodeList* PlanObject::pColumnExprsShared(QueryNode* pNode, PlanNode* pRootNode)
+{
+  _static_
+  if (gtShared.iDepth <= 0)
+    return pColumnExprs(pNode, pRootNode);
+
+  auto it = gtShared.oColumn.find(pNode);
+  if (it != gtShared.oColumn.end())
+    return it->second;
+
+  // the same columns as in pColumnExprs: the operators that pass their
+  // child's columns through, and the joins that put their children's
+  // columns side by side, share their children's lists
+  QueryNodeList* pList = nullptr;
+  if (PlanMarker::bIsOfType(pNode) || FilterOp::bIsOfType(pNode) ||
+      LimitOp::bIsOfType(pNode) || OrderOp::bIsOfType(pNode)) {
+    ASSERT(pNode->nChildren() == 1);
+    pList = pColumnExprsShared(_pQueryNode(pNode->pFirstChild()), pRootNode);
+  }
+  else if (JoinOp::bIsOfType(pNode)) {
+    switch (JoinOp::eJoinType(pNode)) {
+      case JT_INNER:
+      case JT_CROSS:
+      case JT_LEFT_OUTER:
+      case JT_RIGHT_OUTER:
+      case JT_FULL_OUTER:
+        pList = pInputColumnExprsShared(pNode, pRootNode);
+        break;
+      case JT_SEMI:
+      case JT_ANTI:
+        pList = pColumnExprsShared(_pQueryNode(pNode->pFirstChild()), pRootNode);
+        break;
+      default:
+        break;
+    }
+  }
+  if (! pList) {
+    pList = pColumnExprs(pNode, pRootNode);
+    gtShared.vOwned.push_back(pList);
+  }
+  gtShared.oColumn[pNode] = pList;
+  return pList;
+}
+
+QueryNodeList* PlanObject::pInputColumnExprsShared(QueryNode* pNode, PlanNode* pRootNode)
+{
+  _static_
+  if (gtShared.iDepth <= 0)
+    return pInputColumnExprs(pNode, pRootNode);
+
+  auto it = gtShared.oInput.find(pNode);
+  if (it != gtShared.oInput.end())
+    return it->second;
+
+  QueryNodeList* pList = nullptr;
+  i8 nChildren = pNode->nChildren();
+  if (nChildren == 1)
+    pList = pColumnExprsShared(_pQueryNode(pNode->pFirstChild()), pRootNode);
+  else if (nChildren > 1) {
+    // the children's columns in order, as pInputColumnExprs puts them
+    pList = new QueryNodeList();
+    PlanNodeIter* pIter = pNode->pNewChildrenIter();
+    while (pIter->bHasNext()) {
+      QueryNodeList* pChildList = pColumnExprsShared(_pQueryNode(pIter->pNext()), pRootNode);
+      QueryNodeIter* pItems = pChildList->pNewIter();
+      while (pItems->bHasNext())
+        pList->vAppend(pItems->pNext());
+      delete pItems;
+    }
+    delete pIter;
+    gtShared.vViews.push_back(pList);
+  }
+  gtShared.oInput[pNode] = pList;
+  return pList;
+}
+
+void PlanObject::vReleaseShared(QueryNodeList* pList)
+{
+  _static_
+  if (gtShared.iDepth <= 0)
+    vFreeList(pList);
 }
 
 /*============================================================================*/

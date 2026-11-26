@@ -290,7 +290,7 @@ QueryNode* JoinOp::pOrdinalJoinPredicate(PlanNode* pNode, PlanNode* pRootNode)
   //     child1 plus 2 columns from child2.
 
   ASSERT(pNode->nChildren() == 2);
-  QueryNodeList* pColExprList = PlanObject::pInputColumnExprs(_pQueryNode(pNode), pRootNode);
+  QueryNodeList* pColExprList = PlanObject::pInputColumnExprsShared(_pQueryNode(pNode), pRootNode);
   ASSERT(pColExprList);
   ASSERT(pColExprList->nItems() > 0);
 
@@ -304,8 +304,7 @@ QueryNode* JoinOp::pOrdinalJoinPredicate(PlanNode* pNode, PlanNode* pRootNode)
   QueryNode* pOrdinalPredicate = Expr::pSymbolicToOrdinal(pSymbolicPredicate, pColExprList, pCorrelatedExprs, pRootNode);
   ASSERT(pOrdinalPredicate);
 
-  pColExprList->vDeleteAll();
-  delete pColExprList;
+  PlanObject::vReleaseShared(pColExprList);
 
   return pOrdinalPredicate;
 }

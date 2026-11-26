@@ -24,6 +24,7 @@
 #include "VertexSpec.hpp"
 #include "Pipeline.hpp"
 #include "Backend.hpp"
+#include "store/sqlCompiler/shadowNodes/planObjects/PlanObject.hpp"
 #include "Job.hpp"
 #include "Node_I.hpp"
 #include "LogicUnit.hpp"
@@ -1196,6 +1197,9 @@ void Step::vSqlCompilerPostProject(void)
 void Step::vSqlCompilerProjValidation(void)
 {
   SqlStepTimer oSqlStepTimer(__func__);
+  // the step reads the plan and does not change it: its column lists are
+  // built once per node and shared (PlanObject::ColumnExprsScope)
+  Parser::PlanObject::ColumnExprsScope oColumnExprsScope;
   ENTRY();
 
   /**
@@ -1558,6 +1562,9 @@ namespace {
 void Step::vSqlCompilerTransliterate(void)
 {
   SqlStepTimer oSqlStepTimer(__func__);
+  // the step reads the plan and does not change it: its column lists are
+  // built once per node and shared (PlanObject::ColumnExprsScope)
+  Parser::PlanObject::ColumnExprsScope oColumnExprsScope;
   ENTRY();
 
   s256 sPipelineName;
