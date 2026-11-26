@@ -94,11 +94,8 @@
     char *d = szDstArea;                        \
     const char *s = szArg1;                     \
                                                 \
-	 i8 iBytesToCopy = nSrcSize;                  \
-   while (iBytesToCopy--)                       \
-     *d++ = *s++;                               \
-                                                \
-    *d = '\0';                                  \
+    memmove(d, s, (size_t)nSrcSize);  \
+    d[nSrcSize] = '\0';              \
                                                 \
     *paW++ = (i8)szDstArea;                     \
     szDstArea += nSrcSize + 1;                  \
@@ -116,11 +113,7 @@
     char *d = azStringDyn;                      \
     const char *s = szArg1;                     \
                                                 \
-	 i8 iBytesToCopy = nSrcSize - 1;              \
-   while (iBytesToCopy--)                       \
-     *d++ = *s++;                               \
-                                                \
-    *d = '\0';                                  \
+    memmove(d, s, (size_t)nSrcSize);  /* with its NUL */ \
 		                                            \
    *paW++ = (i8)azStringDyn;                    \
 	 aDynamicT->m_fp_vExtern_TubRowStrSize(aDynamicT,nSrcSize); \
@@ -139,11 +132,7 @@
     char *d = azStringDyn;                      \
     const char *s = szArg1;                     \
                                                 \
-	 i8 iBytesToCopy = nSrcSize - 1;              \
-   while (iBytesToCopy--)                       \
-     *d++ = *s++;                               \
-                                                \
-    *d = '\0';                                  \
+    memmove(d, s, (size_t)nSrcSize);  /* with its NUL */ \
 		                                            \
    *paW++ = (i8)azStringDyn;                    \
 	 aDynamicT->m_fp_vExtern_PotRowStrSize(aDynamicT,nSrcSize); \
@@ -194,11 +183,8 @@
 			char *d = szAreaTo;                                                   \
 			const char *s = (char*)iArg2;                                         \
                                                                             \
-			i8 iBytesToCopy = nSrcSize;                                           \
-      while (iBytesToCopy--)                                                \
-			  *d++ = *s++;                                                        \
-                                                                            \
-      *d = '\0';                                                            \
+    memmove(d, s, (size_t)nSrcSize);  \
+    d[nSrcSize] = '\0';              \
       iArgTo =  (i8)szAreaTo;                                               \
       szAreaTo += nSrcSize + 1;                                             \
     }                                                                       \
