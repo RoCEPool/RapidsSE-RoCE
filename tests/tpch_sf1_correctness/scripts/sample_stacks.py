@@ -119,6 +119,7 @@ def frames(thread_text, resolver):
 
 def summarise(text, resolver, top):
     kinds, selfc, inc = collections.Counter(), collections.Counter(), collections.Counter()
+    callers = collections.defaultdict(collections.Counter)    # innermost frame -> its two callers
     n = 0
     for thr in re.split(r'\n(?=#0 )', text):
         fr = frames(thr, resolver)
@@ -126,6 +127,7 @@ def summarise(text, resolver, top):
             continue
         n += 1
         selfc[fr[0]] += 1
+        callers[fr[0]][' < '.join(fr[1:3])] += 1
         for f in set(fr):
             inc[f] += 1
         for name, pat in KINDS:
@@ -134,8 +136,10 @@ def summarise(text, resolver, top):
                 break
         else:
             kinds['other'] += 1
-    return n, kinds, selfc.most_common(top), [x for x in inc.most_common(top * 3)
-                                              if not re.search(r'start_thread|clone|aEntryPoint|vTaskLoop|vLoop_general', x[0])][:top]
+    top_self = selfc.most_common(top)
+    return n, kinds, top_self, [x for x in inc.most_common(top * 3)
+                                if not re.search(r'start_thread|clone|aEntryPoint|vTaskLoop|vLoop_general', x[0])][:top], \
+        [(f, callers[f].most_common(3)) for f, _ in top_self[:6]]
 
 
 def sample_query(q, samples, out_dir, resolver):
@@ -183,7 +187,7 @@ def main():
     rows = []
     for q in a.queries.split(','):
         text = sample_query(q, a.samples, a.out, resolver)
-        n, kinds, selfc, inc = summarise(text, resolver, a.top)
+        n, kinds, selfc, inc, calls = summarise(text, resolver, a.top)
         rows.append((q, n, kinds))
         md += ['### Q%s (%d active stacks)' % (q, n), '',
                ', '.join('%s %d%%' % (k, 100 * v // max(n, 1)) for k, v in kinds.most_common()), '',
@@ -192,6 +196,9 @@ def main():
             s = selfc[i] if i < len(selfc) else ('', '')
             f = inc[i] if i < len(inc) else ('', '')
             md.append('| `%s` | %s | | `%s` | %s |' % (s[0][:70], s[1], f[0][:70], f[1]))
+        md += ['', 'Callers of the most frequent innermost frames (caller < its caller):', '']
+        for f, cs in calls:
+            md.append('- `%s`: ' % f[:70] + '; '.join('`%s` %d' % (k[:110], v) for k, v in cs))
         md.append('')
         print('Q%s: %d active stacks; %s' % (q, n, ', '.join('%s %d%%' % (k, 100 * v // max(n, 1))
                                                               for k, v in kinds.most_common())), flush=True)
