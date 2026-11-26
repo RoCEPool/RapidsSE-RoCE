@@ -306,6 +306,7 @@ Dynamic::Dynamic(LogicUnit* pLogicUnit)
 	m_xDynamicT.m_fp_iExtern_ColCache = nullptr;
 	m_xDynamicT.m_fp_aExtern_ColCacheJoin = nullptr;
 	vColCacheJoinReaderEnter();   // join snapshots stay alive while it lives
+	m_bStageTimes = AM::JOB::bHasTag("<stageTimes>"_Stz);
 	m_xDynamicT.m_pCrwBuffer = nullptr;
 	m_xDynamicT.m_bColCache = false;
 	m_xDynamicT.m_fp_vExtern_EntPayloadCreate = nullptr;
@@ -358,6 +359,10 @@ Dynamic::~Dynamic(void) noexcept(false)
   delete pStreamDef;
 
   vColCacheJoinReaderLeave();
+
+  if (m_bStageTimes && m_nStageCalls > 0)
+    vTrace("stageTime %s %lld us calls %lld rows %lld\n"_Stz, m_sStageName.szStz(),
+           (long long) (m_nStageNs / 1000), (long long) m_nStageCalls, (long long) m_nStageRows);
 
   if (m_xDynamicT.m_xIndexInfoPL[0].m_aIndexTree) {
     IndexTree* pIndexTree = _pIndexTree(m_xDynamicT.m_xIndexInfoPL[0].m_aIndexTree);
