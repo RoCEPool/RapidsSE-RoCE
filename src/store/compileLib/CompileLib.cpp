@@ -8,6 +8,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <dirent.h>
+#include <ftw.h>
 #include <string>
 #include "BASE.h"
 #include "CompileLib.hpp"
@@ -97,6 +98,32 @@ static Stz* C_CLANG = "clang"_Stz;
 /*----------------------------------------------------------------------------*/
 /* Initialise the CompileLib and look for all supported compilers.            */
 /*----------------------------------------------------------------------------*/
+
+// A hash of the path, size and modification time of every .h file under
+// ../src, the include directory of the generated code (-I../src).
+static unsigned long long guHeadersHash;
+static int iFoldHeader(const char* azPath, const struct stat* pStat, int iFlag, struct FTW*)
+{
+  size_t n = strlen(azPath);
+  if (iFlag != FTW_F || n < 2 || strcmp(azPath + n - 2, ".h") != 0)
+    return 0;
+  auto fFold = [](unsigned long long u) {
+    guHeadersHash = (guHeadersHash ^ u) * 1099511628211ULL;
+  };
+  for (size_t i = 0; i < n; i++)
+    fFold((unsigned char) azPath[i]);
+  fFold((unsigned long long) pStat->st_size);
+  fFold((unsigned long long) pStat->st_mtime);
+  return 0;
+}
+
+static unsigned long long uHeadersHash(void)
+{
+  guHeadersHash = 14695981039346656037ULL;
+  nftw("../src", iFoldHeader, 16, FTW_PHYS);
+  return guHeadersHash;
+}
+
 bool CompileLib::bInit()
 {
   // Create the queryLibs directory and subdirectories
@@ -129,13 +156,19 @@ bool CompileLib::bInit()
   //       over the built-in gcc version.
 #endif
 
-  // The cache directory of this build: the identity of the executable
+  // The cache directory of this build: the identity of the executable and of
+  // the headers the generated code includes. The key of a cached library is
+  // the hash of its source and compile command, and the source names the
+  // headers without their text: a change to them alone (FunctionMacros.h, say)
+  // does not change the executable, and would leave libraries built with the
+  // old headers in use.
   {
     struct stat xExe;
-    char azBuild[96];
+    char azBuild[128];
     if (stat("/proc/self/exe", &xExe) == 0)
-      snprintf(azBuild, sizeof(azBuild), "%llx-%llx-%llx", (unsigned long long) xExe.st_ino,
-               (unsigned long long) xExe.st_size, (unsigned long long) xExe.st_mtime);
+      snprintf(azBuild, sizeof(azBuild), "%llx-%llx-%llx-%llx", (unsigned long long) xExe.st_ino,
+               (unsigned long long) xExe.st_size, (unsigned long long) xExe.st_mtime,
+               (unsigned long long) uHeadersHash());
     else
       snprintf(azBuild, sizeof(azBuild), "%s", __DATE__ "-" __TIME__);
     for (char* p = azBuild; *p; p++) if (*p == ' ' || *p == ':') *p = '_';
