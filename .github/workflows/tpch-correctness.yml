@@ -13,6 +13,9 @@ on:
       rounds:
         description: "Rounds (3 for the stability run)"
         default: "1"
+      baseline:
+        description: "Also time this ref against the dispatched one on the same runner (empty: no A/B)"
+        default: ""
   schedule:
     - cron: "17 18 * * *"        # daily, 03:17 JST
   push:
@@ -117,6 +120,81 @@ jobs:
             tests/tpch_sf1_correctness/reports/PHASE_TIMES.md
             !tests/tpch_sf1_correctness/reports/2*/round*/node.log
             ${{ runner.temp }}/build.log
+          retention-days: 30
+
+  # Base against head on the same runner: a pull request against its base branch, or a dispatched
+  # ref against the input `baseline`. Two CI runs land on runners whose speed differs by tens of
+  # percent, so their times do not compare; both builds are timed here, alternately
+  # (scripts/ab_compare.py). The table is the job summary.
+  ab:
+    if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && github.event.inputs.baseline != '')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      GIT_LFS_SKIP_SMUDGE: "1"
+      TPCH_SF1_DATA: /tmp/tpch_sf1
+      TPCH_SE_PARTITIONS: "2"
+      TPCH_SE_THREADS: "4"
+      BUILD_FLAGS: "-O2"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: head
+          fetch-depth: 0
+      - uses: actions/checkout@v4
+        with:
+          path: base
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.base.sha || github.event.inputs.baseline }}
+      - name: Files kept in LFS that the build and the client need
+        run: |
+          (cd head && git lfs pull --include="shell/**,thirdparty/**")
+          (cd base && git lfs pull --include="shell/**,thirdparty/**")
+      - name: Third-party libraries of head (cached)
+        uses: actions/cache@v4
+        with:
+          path: |
+            head/thirdparty/antlr/lib
+            head/thirdparty/antlr/include
+            head/thirdparty/thrift/lib
+            head/thirdparty/thrift/include
+            head/thirdparty/thrift/bin
+            head/thirdparty/thrift/boost_1_80_0
+          key: ab-head-thirdparty-${{ runner.os }}-gcc13-${{ hashFiles('head/thirdparty/antlr/Makefile', 'head/thirdparty/thrift/Makefile', 'head/thirdparty/thrift/configureThrift.sh', 'head/thirdparty/antlr/.gitattributes') }}-v1
+      - name: Third-party libraries of base (cached)
+        uses: actions/cache@v4
+        with:
+          path: |
+            base/thirdparty/antlr/lib
+            base/thirdparty/antlr/include
+            base/thirdparty/thrift/lib
+            base/thirdparty/thrift/include
+            base/thirdparty/thrift/bin
+            base/thirdparty/thrift/boost_1_80_0
+          key: ab-base-thirdparty-${{ runner.os }}-gcc13-${{ hashFiles('base/thirdparty/antlr/Makefile', 'base/thirdparty/thrift/Makefile', 'base/thirdparty/thrift/configureThrift.sh', 'base/thirdparty/antlr/.gitattributes') }}-v1
+      - name: Build both
+        run: |
+          for t in head base; do
+            (cd $t/src && make -j "$(nproc)" \
+              CMAKE_ARGS="-DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DANTLR_BUILD_CPP_TESTS=OFF" \
+              CPPFLAGS="-std=c++17 -w $BUILD_FLAGS -D__LINUX__" CFLAGS="-w $BUILD_FLAGS" > "$RUNNER_TEMP/build_$t.log" 2>&1) \
+              || { grep -n -B3 -A3 -E '\*\*\*|error:|Error [0-9]|fatal error' "$RUNNER_TEMP/build_$t.log" | grep -v -- '-Werror' | head -150; exit 1; }
+            ls -la $t/bin/rapidsse
+          done
+      - name: Base against head
+        run: python3 head/tests/tpch_sf1_correctness/scripts/ab_compare.py --base base --head head --out "$RUNNER_TEMP/AB_TIMES.md"
+      - name: Summary
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/AB_TIMES.md" ]; then cat "$RUNNER_TEMP/AB_TIMES.md" >> "$GITHUB_STEP_SUMMARY"; fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tpch-sf1-ab
+          path: |
+            ${{ runner.temp }}/AB_TIMES.md
+            ${{ runner.temp }}/ab_node_*.log
+            ${{ runner.temp }}/build_*.log
           retention-days: 30
 
   # The same 22 queries with other partition counts of the node. Once a day and on request.
