@@ -2114,6 +2114,42 @@ extern "C" void* aExtern_GbyHashFindInt(void* aIndexInfo, i8 iKey, i8 nPayloadBy
   return pHash->pFindInsert(iKey, pbNew);
 }
 
+// The groups of an integer key in key order: an LSD radix sort of the
+// (key, block) pairs on key - min, 16 bits a pass, as many passes as the
+// range of the keys needs (2 for keys below 2^32 apart). A comparison sort of
+// 1.5M groups (TPC-H Q18, group by l_orderkey) was a fifth of the query's
+// active stacks on the CI runner. The keys of the groups are distinct.
+static void vSortSlotsByKey(std::vector<GbyHash::Slot>& rxSlots)
+{
+  size_t n = rxSlots.size();
+  if (n < 256) {
+    std::sort(rxSlots.begin(), rxSlots.end(), [](const GbyHash::Slot& a, const GbyHash::Slot& b) {
+      return a.iKey < b.iKey; });
+    return;
+  }
+  i8 iMin = rxSlots[0].iKey, iMax = rxSlots[0].iKey;
+  for (const GbyHash::Slot& x : rxSlots) {
+    if (x.iKey < iMin) iMin = x.iKey;
+    if (x.iKey > iMax) iMax = x.iKey;
+  }
+  u8 uRange = (u8)iMax - (u8)iMin;
+  std::vector<GbyHash::Slot> axTmp(n);
+  std::vector<GbyHash::Slot>* pFrom = &rxSlots;
+  std::vector<GbyHash::Slot>* pTo = &axTmp;
+  for (int iShift = 0; iShift < 64 && (uRange >> iShift) != 0; iShift += 16) {
+    std::vector<size_t> anCount(65537, 0);
+    for (const GbyHash::Slot& x : *pFrom)
+      anCount[(((u8)x.iKey - (u8)iMin) >> iShift & 0xFFFF) + 1]++;
+    for (size_t i = 1; i < anCount.size(); i++)
+      anCount[i] += anCount[i - 1];
+    for (const GbyHash::Slot& x : *pFrom)
+      (*pTo)[anCount[((u8)x.iKey - (u8)iMin) >> iShift & 0xFFFF]++] = x;
+    std::swap(pFrom, pTo);
+  }
+  if (pFrom != &rxSlots)
+    rxSlots.swap(*pFrom);
+}
+
 // first entry of the payload: the first group in key order, or the tree's
 extern "C" void* aExtern_PLBegin(void* aIndexInfo)
 {
@@ -2138,8 +2174,7 @@ extern "C" void* aExtern_PLBegin(void* aIndexInfo)
       for (const GbyHash::Slot& x : pHash->axSlot)
         if (x.pBlock)
           axUsed.push_back(x);
-      std::sort(axUsed.begin(), axUsed.end(), [](const GbyHash::Slot& a, const GbyHash::Slot& b) {
-        return a.iKey < b.iKey; });
+      vSortSlotsByKey(axUsed);
       for (const GbyHash::Slot& x : axUsed)
         pHash->xSorted.push_back(x.pBlock);
     }
