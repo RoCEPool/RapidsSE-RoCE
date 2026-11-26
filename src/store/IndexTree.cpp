@@ -1899,6 +1899,7 @@ namespace {
     char* aAllLast = nullptr;
     i8 nRows = 0;
     std::vector<u8> auBloom;             // Bloom filter of the keys (walk)
+    bool bBuilt = true;                  // axSlot holds every stored row
 
     static u8 uHash(i8 iKey) { u8 u = (u8) iKey * 0x9E3779B97F4A7C15ull; return u ^ (u >> 29); }
 
@@ -1917,26 +1918,13 @@ namespace {
       return a;
     }
 
-    void vGrow(void)
-    {
-      std::vector<Slot> axOld;
-      axOld.swap(axSlot);
-      u8 n = axOld.empty() ? 1024 : axOld.size() * 2;
-      axSlot.assign(n, Slot{0, nullptr, nullptr});
-      uMask = n - 1;
-      for (const Slot& x : axOld)
-        if (x.aFirst) {
-          u8 u = uHash(x.iKey) & uMask;
-          while (axSlot[u].aFirst)
-            u = (u + 1) & uMask;
-          axSlot[u] = x;
-        }
-    }
-
+    // A row is stored at the end of the arrival list and nothing else: the
+    // slots are only needed to look keys up, which happens once all rows are
+    // stored, and only when the index is walked (vBuild). Inserting into the
+    // slots as rows arrived read a random slot per row and rehashed the table
+    // at each doubling; a replay never used them at all.
     char* aInsert(i8 iKey, i8 nRowBytes)
     {
-      if ((nUsed + 1) * 2 > axSlot.size())
-        vGrow();
       char* aRow = aAlloc(24 + nRowBytes);
       *(char**) aRow = nullptr;
       *(char**) (aRow + 8) = nullptr;
@@ -1947,22 +1935,42 @@ namespace {
         aAllFirst = aRow;
       aAllLast = aRow;
       nRows++;
-      u8 u = uHash(iKey) & uMask;
-      while (axSlot[u].aFirst) {
-        if (axSlot[u].iKey == iKey) {
+      bBuilt = false;
+      return aRow + 24;
+    }
+
+    // the slots of every stored row, sized once for their number; the rows of
+    // a key are chained (nextSameKey) in arrival order, as before
+    void vBuild(void)
+    {
+      u8 n = 1024;
+      while (n < (u8) nRows * 2)
+        n <<= 1;
+      axSlot.assign(n, Slot{0, nullptr, nullptr});
+      uMask = n - 1;
+      nUsed = 0;
+      for (char* aRow = aAllFirst; aRow; aRow = *(char**) (aRow + 8)) {
+        *(char**) aRow = nullptr;
+        i8 iKey = *(i8*) (aRow + 16);
+        u8 u = uHash(iKey) & uMask;
+        while (axSlot[u].aFirst && axSlot[u].iKey != iKey)
+          u = (u + 1) & uMask;
+        if (axSlot[u].aFirst) {
           *(char**) axSlot[u].aLast = aRow;
           axSlot[u].aLast = aRow;
-          return aRow + 24;
         }
-        u = (u + 1) & uMask;
+        else {
+          axSlot[u] = Slot{iKey, aRow, aRow};
+          nUsed++;
+        }
       }
-      axSlot[u] = Slot{iKey, aRow, aRow};
-      nUsed++;
-      return aRow + 24;
+      bBuilt = true;
     }
 
     char* aFirst(i8 iKey)
     {
+      if (! bBuilt)
+        vBuild();
       if (axSlot.empty())
         return nullptr;
       u8 u = uHash(iKey) & uMask;
@@ -2010,6 +2018,8 @@ extern "C" i8 iExtern_HashJoinMode(void* aIndexInfo, i8 iFlags)
            (long long) pHash->nRows, (long long) nEntries, bWalk ? "walk" : "replay");
   if (! bWalk)
     return 2;
+  if (! pHash->bBuilt)
+    pHash->vBuild();
   // the Bloom filter: 16 bits per key, two bits per key (job tag
   // /optimiser_off_hash_join_bloom: none, every entry looks in the hash)
   if (iFlags & 4)
