@@ -1,0 +1,136 @@
+/*----------------------------------------------------------------------------*/
+/* likeMiddle.test -- LIKE patterns with a part between two %, searched for   */
+/* in the string (_MATCH_STRSTR in base/FunctionMacros.h)                     */
+/*----------------------------------------------------------------------------*/
+
+// Each part of '%a%b%' is searched for after the end of the part before it.
+// The strings cover a part at the very end, a part cut off by the end of the
+// string, a first character repeated before the match (aaab), parts in the
+// wrong order, a part matched twice, and the empty part of '%%'. The expected
+// rows were computed in Python from the same strings with LIKE translated to
+// a regular expression.
+
+create table ${testName2}_t (
+  id INTEGER     NOT NULL,
+  s  VARCHAR(40) NOT NULL
+);
+success
+load ${testName2}_t "../DATA/Like/likeMiddle.tbl" <field_delimiter> = "|";
+success
+
+select id from ${testName2}_t where s like '%special%requests%' order by id;
+ordered rows:
+  (1)
+  (2)
+  (12)
+  (13)
+  (15)
+  (16)
+
+
+select id from ${testName2}_t where s not like '%special%requests%' order by id;
+ordered rows:
+  (3)
+  (4)
+  (5)
+  (6)
+  (7)
+  (8)
+  (9)
+  (10)
+  (11)
+  (14)
+
+
+select id from ${testName2}_t where s like '%aab%' order by id;
+ordered rows:
+  (6)
+  (7)
+  (14)
+
+
+select id from ${testName2}_t where s like '%b%a%' order by id;
+ordered rows:
+  (8)
+
+
+select id from ${testName2}_t where s like '%ab%' order by id;
+ordered rows:
+  (6)
+  (7)
+  (8)
+  (9)
+  (14)
+
+
+select id from ${testName2}_t where s like '%%' order by id;
+ordered rows:
+  (1)
+  (2)
+  (3)
+  (4)
+  (5)
+  (6)
+  (7)
+  (8)
+  (9)
+  (10)
+  (11)
+  (12)
+  (13)
+  (14)
+  (15)
+  (16)
+
+
+select id from ${testName2}_t where s like '%requests%' order by id;
+ordered rows:
+  (1)
+  (2)
+  (3)
+  (4)
+  (12)
+  (13)
+  (15)
+  (16)
+
+
+select id from ${testName2}_t where s like '%special%' order by id;
+ordered rows:
+  (1)
+  (2)
+  (3)
+  (5)
+  (11)
+  (12)
+  (13)
+  (15)
+  (16)
+
+
+select id from ${testName2}_t where s like '%s%s%s%' order by id;
+ordered rows:
+  (1)
+  (2)
+  (3)
+  (4)
+  (12)
+  (13)
+  (15)
+  (16)
+
+
+select id from ${testName2}_t where s not like '%ab%' order by id;
+ordered rows:
+  (1)
+  (2)
+  (3)
+  (4)
+  (5)
+  (10)
+  (11)
+  (12)
+  (13)
+  (15)
+  (16)
+
