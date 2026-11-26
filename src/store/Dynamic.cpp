@@ -5,6 +5,11 @@
 #include "BASE.h"
 
 #include "Dynamic.hpp"
+
+namespace STORE {
+  void vColCacheJoinReaderEnter(void);
+  void vColCacheJoinReaderLeave(void);
+}
 extern "C" void vExtern_GbyHashFree(void* aIndexInfo);
 extern "C" void vExtern_HashJoinFree(void* aIndexInfo);
 #include "LogicUnit.hpp"
@@ -299,6 +304,8 @@ Dynamic::Dynamic(LogicUnit* pLogicUnit)
 
 	m_xDynamicT.m_fp_aExtern_EntBufferNextEntry = nullptr;
 	m_xDynamicT.m_fp_iExtern_ColCache = nullptr;
+	m_xDynamicT.m_fp_aExtern_ColCacheJoin = nullptr;
+	vColCacheJoinReaderEnter();   // join snapshots stay alive while it lives
 	m_xDynamicT.m_pCrwBuffer = nullptr;
 	m_xDynamicT.m_bColCache = false;
 	m_xDynamicT.m_fp_vExtern_EntPayloadCreate = nullptr;
@@ -349,6 +356,8 @@ Dynamic::~Dynamic(void) noexcept(false)
 
   StreamDef* pStreamDef = _pStreamDef(m_xDynamicT.m_aStreamDefOut);
   delete pStreamDef;
+
+  vColCacheJoinReaderLeave();
 
   if (m_xDynamicT.m_xIndexInfoPL[0].m_aIndexTree) {
     IndexTree* pIndexTree = _pIndexTree(m_xDynamicT.m_xIndexInfoPL[0].m_aIndexTree);

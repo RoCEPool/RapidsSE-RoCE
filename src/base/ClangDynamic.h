@@ -181,6 +181,7 @@ struct Dynamic_T
 	bool  m_bColCache;
 	i8*   m_aaColCache[64];
 	i8    (*m_fp_iExtern_ColCache)(void*,u8);
+	void* (*m_fp_aExtern_ColCacheJoin)(i8,i8,u8);   // index join: cached cells of a row (ColCache.cpp)
 };
 
 /*============================================================================*/

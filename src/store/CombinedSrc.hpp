@@ -69,6 +69,7 @@ namespace STORE {
 		void vAppendCodeHashCols2(OpSketch* pOpSketch);
     void vPruneInflate(char* azStart, char* azEnd);
     void vColCacheInflate(char* azStart, char* azEnd);
+    void vColCacheJoin(char* azStart, char* azEnd);
     void vAppendCodeHavingGroups(void);
     void vInsertText(char* azAt, const char* szText);
     bool bHashJoinEligible(Stencil* pStencil, i8 iOpSketch, eHK eHandler);

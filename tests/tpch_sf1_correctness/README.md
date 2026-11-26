@@ -131,7 +131,9 @@ the lower end instead of a second descent of the tree) and having_groups (a HAVI
 of the same groups, as in Q11 and Q15, is done in two passes over the groups in memory
 instead of a second pass over the tables) and col_cache (a table scan reads its
 fixed-width columns from the column cache of each CRW buffer instead of decoding
-every row; see doc/design/columnar-scan.md), hash_join (an inner index join on one
+every row; see doc/design/columnar-scan.md), col_cache_join (an index join reads the
+cells of the joined row from the column cache of its buffer instead of decoding it;
+same document), hash_join (an inner index join on one
 integer key stores the arriving rows by key and, at the end of its input, walks the
 joined index once or looks the stored rows up in it; see doc/design/hash-join.md) and
 hash_join_bloom (the walk skips index entries whose key has no stored row with a Bloom
