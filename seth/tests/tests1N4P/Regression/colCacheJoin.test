@@ -1,0 +1,323 @@
+/*----------------------------------------------------------------------------*/
+/* colCacheJoin.test -- an index join reads the joined rows from the column   */
+/* cache of their buffers, and never reads it stale                           */
+/*----------------------------------------------------------------------------*/
+
+// An index join reaches the rows of the joined table by buffer and row
+// number; once a buffer's rows have been asked for often enough, the join
+// reads the cells from the column cache of that buffer (store/ColCache.cpp
+// aExtern_ColCacheJoin, CombinedSrc vColCacheJoin) instead of decoding the
+// row. Each join runs twice (the second run reads the cache built by the
+// first), with the cache switched off, after rows are loaded into the joined
+// table, after a truncate and after a reload. The outer join is the shape of
+// TPC-H Q13: its null row assigns every joined cell, which must not keep the
+// unread columns decoded. The orders are partitioned by customer, as in the
+// TPC-H schema, so that the outer join runs in each partition. The expected rows were computed from
+// TPCH/SF_0001/customer.tbl and orders.tbl in Python.
+
+create table ${testName2}_customer (
+  C_CUSTKEY     INTEGER       NOT NULL,
+  C_NAME        VARCHAR(25)   NOT NULL,
+  C_ADDRESS     VARCHAR(40)   NOT NULL,
+  C_NATIONKEY   INTEGER       NOT NULL,
+  C_PHONE       CHAR(15)      NOT NULL,
+  C_ACCTBAL     DECIMAL(15,2) NOT NULL,
+  C_MKTSEGMENT  CHAR(10)      NOT NULL,
+  C_COMMENT     VARCHAR(117)  NOT NULL
+);
+success
+create index ${testName2}_IxC_CUSTKEY on ${testName2}_customer (C_CUSTKEY);
+affected: 0
+load ${testName2}_customer "../TPCH/SF_0001/customer.tbl" <field_delimiter> = "|";
+success
+
+create table ${testName2}_orders (
+  O_ORDERKEY      INTEGER       NOT NULL,
+  O_CUSTKEY       INTEGER       NOT NULL,
+  O_ORDERSTATUS   CHAR(1)       NOT NULL,
+  O_TOTALPRICE    DECIMAL(15,2) NOT NULL,
+  O_ORDERDATE     DATE          NOT NULL,
+  O_ORDERPRIORITY CHAR(15)      NOT NULL,
+  O_CLERK         CHAR(15)      NOT NULL,
+  O_SHIPPRIORITY  INTEGER       NOT NULL,
+  O_COMMENT       VARCHAR(79)   NOT NULL
+) partition by (O_CUSTKEY);
+success
+create index ${testName2}_IxO_ORDERKEY on ${testName2}_orders (O_ORDERKEY);
+affected: 0
+create index ${testName2}_IxO_CUSTKEY on ${testName2}_orders (O_CUSTKEY);
+affected: 0
+load ${testName2}_orders "../TPCH/SF_0001/orders.tbl" <field_delimiter> = "|";
+success
+
+// inner join: numeric columns of the joined rows
+select count(*), sum(o_totalprice), sum(o_orderkey)
+  from ${testName2}_customer, ${testName2}_orders
+ where c_custkey = o_custkey and c_mktsegment = 'BUILDING';
+rows: (250, 24799140.47, 711128)
+
+select count(*), sum(o_totalprice), sum(o_orderkey)
+  from ${testName2}_customer, ${testName2}_orders
+ where c_custkey = o_custkey and c_mktsegment = 'BUILDING';
+rows: (250, 24799140.47, 711128)
+
+// inner join: a string column of the joined rows
+select o_orderpriority, count(*)
+  from ${testName2}_customer, ${testName2}_orders
+ where c_custkey = o_custkey and c_mktsegment = 'BUILDING'
+ group by o_orderpriority order by o_orderpriority;
+ordered rows:
+  ('1-URGENT', 48)
+  ('2-HIGH', 54)
+  ('3-MEDIUM', 43)
+  ('4-NOT SPECIFIED', 52)
+  ('5-LOW', 53)
+
+select o_orderpriority, count(*)
+  from ${testName2}_customer, ${testName2}_orders
+ where c_custkey = o_custkey and c_mktsegment = 'BUILDING'
+ group by o_orderpriority order by o_orderpriority;
+ordered rows:
+  ('1-URGENT', 48)
+  ('2-HIGH', 54)
+  ('3-MEDIUM', 43)
+  ('4-NOT SPECIFIED', 52)
+  ('5-LOW', 53)
+
+// left outer join with a constraint on a string column (TPC-H Q13 shape)
+select c_count, count(*) as custdist
+  from (select c_custkey, count(o_orderkey)
+          from ${testName2}_customer left outer join ${testName2}_orders
+            on c_custkey = o_custkey and o_comment not like '%special%requests%'
+         group by c_custkey) as c_orders (c_custkey, c_count)
+ group by c_count
+ order by custdist desc, c_count desc;
+ordered rows:
+  (0, 50)
+  (16, 8)
+  (17, 7)
+  (20, 6)
+  (13, 6)
+  (12, 6)
+  (9, 6)
+  (23, 5)
+  (14, 5)
+  (10, 5)
+  (21, 4)
+  (18, 4)
+  (11, 4)
+  (8, 4)
+  (7, 4)
+  (26, 3)
+  (22, 3)
+  (6, 3)
+  (5, 3)
+  (4, 3)
+  (29, 2)
+  (24, 2)
+  (19, 2)
+  (15, 2)
+  (28, 1)
+  (25, 1)
+  (3, 1)
+
+select c_count, count(*) as custdist
+  from (select c_custkey, count(o_orderkey)
+          from ${testName2}_customer left outer join ${testName2}_orders
+            on c_custkey = o_custkey and o_comment not like '%special%requests%'
+         group by c_custkey) as c_orders (c_custkey, c_count)
+ group by c_count
+ order by custdist desc, c_count desc;
+ordered rows:
+  (0, 50)
+  (16, 8)
+  (17, 7)
+  (20, 6)
+  (13, 6)
+  (12, 6)
+  (9, 6)
+  (23, 5)
+  (14, 5)
+  (10, 5)
+  (21, 4)
+  (18, 4)
+  (11, 4)
+  (8, 4)
+  (7, 4)
+  (26, 3)
+  (22, 3)
+  (6, 3)
+  (5, 3)
+  (4, 3)
+  (29, 2)
+  (24, 2)
+  (19, 2)
+  (15, 2)
+  (28, 1)
+  (25, 1)
+  (3, 1)
+
+// the same joins decoding every joined row
+/optimiser_off_col_cache_join
+select count(*), sum(o_totalprice), sum(o_orderkey)
+  from ${testName2}_customer, ${testName2}_orders
+ where c_custkey = o_custkey and c_mktsegment = 'BUILDING';
+rows: (250, 24799140.47, 711128)
+
+/optimiser_off_col_cache_join
+select c_count, count(*) as custdist
+  from (select c_custkey, count(o_orderkey)
+          from ${testName2}_customer left outer join ${testName2}_orders
+            on c_custkey = o_custkey and o_comment not like '%special%requests%'
+         group by c_custkey) as c_orders (c_custkey, c_count)
+ group by c_count
+ order by custdist desc, c_count desc;
+ordered rows:
+  (0, 50)
+  (16, 8)
+  (17, 7)
+  (20, 6)
+  (13, 6)
+  (12, 6)
+  (9, 6)
+  (23, 5)
+  (14, 5)
+  (10, 5)
+  (21, 4)
+  (18, 4)
+  (11, 4)
+  (8, 4)
+  (7, 4)
+  (26, 3)
+  (22, 3)
+  (6, 3)
+  (5, 3)
+  (4, 3)
+  (29, 2)
+  (24, 2)
+  (19, 2)
+  (15, 2)
+  (28, 1)
+  (25, 1)
+  (3, 1)
+
+// rows loaded into the joined table (one for a BUILDING customer) are seen
+load ${testName2}_orders "../DATA/ColCache/orders_extra.tbl" <field_delimiter> = "|";
+success
+
+select count(*), sum(o_totalprice), sum(o_orderkey)
+  from ${testName2}_customer, ${testName2}_orders
+ where c_custkey = o_custkey and c_mktsegment = 'BUILDING';
+rows: (251, 24800140.72, 801129)
+
+select o_orderpriority, count(*)
+  from ${testName2}_customer, ${testName2}_orders
+ where c_custkey = o_custkey and c_mktsegment = 'BUILDING'
+ group by o_orderpriority order by o_orderpriority;
+ordered rows:
+  ('1-URGENT', 49)
+  ('2-HIGH', 54)
+  ('3-MEDIUM', 43)
+  ('4-NOT SPECIFIED', 52)
+  ('5-LOW', 53)
+
+select c_count, count(*) as custdist
+  from (select c_custkey, count(o_orderkey)
+          from ${testName2}_customer left outer join ${testName2}_orders
+            on c_custkey = o_custkey and o_comment not like '%special%requests%'
+         group by c_custkey) as c_orders (c_custkey, c_count)
+ group by c_count
+ order by custdist desc, c_count desc;
+ordered rows:
+  (0, 49)
+  (16, 8)
+  (17, 7)
+  (20, 6)
+  (13, 6)
+  (12, 6)
+  (10, 6)
+  (23, 5)
+  (14, 5)
+  (9, 5)
+  (21, 4)
+  (18, 4)
+  (11, 4)
+  (8, 4)
+  (7, 4)
+  (6, 4)
+  (26, 3)
+  (22, 3)
+  (4, 3)
+  (29, 2)
+  (24, 2)
+  (19, 2)
+  (15, 2)
+  (5, 2)
+  (28, 1)
+  (25, 1)
+  (3, 1)
+  (1, 1)
+
+// after a truncate of the joined table no row joins
+truncate ${testName2}_orders;
+success
+
+select count(*)
+  from ${testName2}_customer, ${testName2}_orders
+ where c_custkey = o_custkey and c_mktsegment = 'BUILDING';
+rows: (0)
+
+select c_count, count(*) as custdist
+  from (select c_custkey, count(o_orderkey)
+          from ${testName2}_customer left outer join ${testName2}_orders
+            on c_custkey = o_custkey and o_comment not like '%special%requests%'
+         group by c_custkey) as c_orders (c_custkey, c_count)
+ group by c_count
+ order by custdist desc, c_count desc;
+ordered rows:
+  (0, 150)
+
+// after a reload the answers are the first ones again
+load ${testName2}_orders "../TPCH/SF_0001/orders.tbl" <field_delimiter> = "|";
+success
+
+select count(*), sum(o_totalprice), sum(o_orderkey)
+  from ${testName2}_customer, ${testName2}_orders
+ where c_custkey = o_custkey and c_mktsegment = 'BUILDING';
+rows: (250, 24799140.47, 711128)
+
+select c_count, count(*) as custdist
+  from (select c_custkey, count(o_orderkey)
+          from ${testName2}_customer left outer join ${testName2}_orders
+            on c_custkey = o_custkey and o_comment not like '%special%requests%'
+         group by c_custkey) as c_orders (c_custkey, c_count)
+ group by c_count
+ order by custdist desc, c_count desc;
+ordered rows:
+  (0, 50)
+  (16, 8)
+  (17, 7)
+  (20, 6)
+  (13, 6)
+  (12, 6)
+  (9, 6)
+  (23, 5)
+  (14, 5)
+  (10, 5)
+  (21, 4)
+  (18, 4)
+  (11, 4)
+  (8, 4)
+  (7, 4)
+  (26, 3)
+  (22, 3)
+  (6, 3)
+  (5, 3)
+  (4, 3)
+  (29, 2)
+  (24, 2)
+  (19, 2)
+  (15, 2)
+  (28, 1)
+  (25, 1)
+  (3, 1)

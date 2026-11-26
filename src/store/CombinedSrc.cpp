@@ -109,9 +109,19 @@ void CombinedSrc::vSynthesizeCode(Stencil* pStencil, bool bFirstStage, bool bLas
   // row; every later reader in the handler names the cells it reads, so a
   // column no code of the handler names is skipped (see vPruneInflate). This
   // runs when the handler is complete, just before its footer.
-  auto vJoinPruneFlush = [this, &vJoinPrune]() {
+  // Then (columnar index join) the columns still decoded are read from the
+  // column cache of the joined buffer when it has them (vColCacheJoin); last
+  // join first, as each insertion moves the code after it. Job tag
+  // /optimiser_off_col_cache_join decodes every joined row.
+  const bool bColCacheJoin = bJoinPrune &&
+                             ! AM::JOB::bHasTag("<optimiser_off_col_cache>"_Stz) &&
+                             ! AM::JOB::bHasTag("<optimiser_off_col_cache_join>"_Stz);
+  auto vJoinPruneFlush = [this, &vJoinPrune, bColCacheJoin]() {
     for (char* azStart : vJoinPrune)
       vPruneInflate(azStart, m_azCodeCrs);
+    if (bColCacheJoin)
+      for (auto it = vJoinPrune.rbegin(); it != vJoinPrune.rend(); ++it)
+        vColCacheJoin(*it, m_azCodeCrs);
     vJoinPrune.clear();
   };
 	s32 sLabel_ordAgg;
@@ -1323,6 +1333,126 @@ void CombinedSrc::vColCacheInflate(char* azStart, char* azEnd)
   sFast += "  }\n";
 
   // insert at the start of the line of the first column
+  char* azAt = azStart + pFirst;
+  while (azAt > azStart && azAt[-1] != '\n')
+    azAt--;
+  vInsertText(azAt, sFast.c_str());
+}
+
+/*----------------------------------------------------------------------------*/
+/* columnar index join: read the cells of the joined row from the column      */
+/* cache of its buffer (store/ColCache.cpp aExtern_ColCacheJoin) instead of   */
+/* decoding the row. Runs after vPruneInflate on the code of one index join   */
+/* (from azStart): the columns of the join's first inflate sequence that      */
+/* still jump to L_InflateAColumn are the ones the handler reads. Before the  */
+/* first column it inserts a request for those columns of the row's buffer;  */
+/* if the cache answers, one load per column (and the copies of repeated     */
+/* columns) and a jump past the decoding, to a label after its last column.  */
+/*----------------------------------------------------------------------------*/
+void CombinedSrc::vColCacheJoin(char* azStart, char* azEnd)
+{
+  _precondition_(_ADDRESS_,_MAGIC_,CN_COMBINEDSRC,_FOOTER_);
+
+  if (! azStart || azEnd <= azStart)
+    return;
+
+  std::string sCode(azStart, azEnd - azStart);
+  static const std::string sDeref = "aIndexCrw    = (";
+  static const std::string sColNo = "i_Col = ";
+  static const std::string sDst   = "ayDstByte = (byte*)&";
+  static const std::string sCell  = ".m_iAsI8;";
+  static const std::string sRet   = "aSubReturnLabel = && L_RetT_ColIJ_";
+  static const std::string sJump  = "goto L_InflateAColumn;";
+
+  // only a row reached by iIndexBuffer and iIndexItem (the request names them)
+  static const std::string sDerefLine =
+    "aIndexCrw    = ( (char*)C_ADR_REGION + iIndexBuffer * C_1MB + C_CRW_FIRSTHEAD + iIndexItem * C_CRW_HEADBYTES );";
+  size_t pDeref = sCode.find(sDeref);
+  if (pDeref == std::string::npos || sCode.compare(pDeref, sDerefLine.size(), sDerefLine) != 0)
+    return;
+  size_t pFirst = sCode.find(sColNo, pDeref);
+  if (pFirst == std::string::npos ||
+      sCode.substr(pDeref, pFirst - pDeref).find("m_fp_aExtern_ColCacheJoin") != std::string::npos)
+    return;                                   // none, or done by a later join
+  // the join's return labels: L_RetT_ColIJ_<op>_<column>
+  size_t r = sCode.find(sRet, pFirst);
+  if (r == std::string::npos)
+    return;
+  size_t r2 = sCode.find('_', r + sRet.size());
+  if (r2 == std::string::npos)
+    return;
+  std::string sLabel = "L_RetT_ColIJ_" + sCode.substr(r + sRet.size(), r2 - r - sRet.size()) + "_";
+
+  std::vector<std::pair<i8, std::string>> vCols;
+  u8 uMask = 0;
+  size_t pLast = std::string::npos;          // end of the line of the last label
+  size_t p = pFirst;
+  while (p != std::string::npos) {
+    i8 i_Col = atoll(sCode.c_str() + p + sColNo.size());
+    std::string sThis = sLabel + std::to_string((long long)i_Col) + ":";
+    size_t pLab = sCode.find(sThis, p);
+    size_t pNext = sCode.find(sColNo, p + 1);
+    if (pLab == std::string::npos || (pNext != std::string::npos && pLab > pNext))
+      break;                                  // not a column of this join
+    size_t d = sCode.find(sDst, p);
+    size_t g = sCode.find("goto L_", p);
+    if (d == std::string::npos || g == std::string::npos || d > pLab || g > pLab)
+      return;
+    if (sCode.compare(g, sJump.size(), sJump) == 0) {
+      size_t q = sCode.find(sCell, d);
+      if (q == std::string::npos || q > pLab || i_Col < 0 || i_Col >= 64)
+        return;
+      vCols.push_back({i_Col, sCode.substr(d + sDst.size(), q - d - sDst.size())});
+      uMask |= (u8)1 << i_Col;
+    }
+    pLast = sCode.find('\n', pLab);
+    if (pLast == std::string::npos)
+      return;
+    if (pNext == std::string::npos)
+      break;
+    p = pNext;
+  }
+  if (vCols.empty() || pLast == std::string::npos)
+    return;
+
+  // copies of repeated columns (vPriorCrwCol) within the sequence
+  std::vector<std::string> vCopies;
+  {
+    size_t a = pFirst;
+    while (a < pLast) {
+      size_t e = sCode.find('\n', a);
+      if (e == std::string::npos || e > pLast)
+        break;
+      std::string sLine = sCode.substr(a, e - a);
+      size_t s0 = sLine.find_first_not_of(" \t");
+      if (s0 != std::string::npos && sLine.compare(s0, 3, "pSR") == 0 &&
+          sLine.find(".m_iAsI8 = pSR") != std::string::npos)
+        vCopies.push_back(sLine.substr(s0));
+      a = e + 1;
+    }
+  }
+
+  // named after the join's operator (the code must be the same each time it
+  // is generated: the cache of compiled code is keyed by its text)
+  std::string sDone = "L_CcJoinRet_" + sLabel.substr(13);   // "<op>_"
+
+  std::string sFast;
+  sFast += "  // column cache of the joined row (store/ColCache.cpp)\n";
+  sFast += "  {\n";
+  sFast += "    i8** aaCcJ = (i8**)aDynamicT->m_fp_aExtern_ColCacheJoin(iIndexBuffer, iIndexItem, (u8)" +
+           std::to_string((unsigned long long)uMask) + "ULL);\n";
+  sFast += "    if (aaCcJ) {\n";
+  for (auto& rCol : vCols)
+    sFast += "      " + rCol.second + ".m_iAsI8 = aaCcJ[" +
+             std::to_string((long long)rCol.first) + "][iIndexItem];\n";
+  for (auto& rCopy : vCopies)
+    sFast += "      " + rCopy + "\n";
+  sFast += "      goto " + sDone + ";\n";
+  sFast += "    }\n";
+  sFast += "  }\n";
+
+  // the label after the last column first (it is later in the code)
+  vInsertText(azStart + pLast + 1, ("  " + sDone + ":\n").c_str());
   char* azAt = azStart + pFirst;
   while (azAt > azStart && azAt[-1] != '\n')
     azAt--;

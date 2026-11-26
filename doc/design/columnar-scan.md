@@ -143,3 +143,75 @@ GROUP BY right behind the scan):
 | Q18 | 667 ms | 619 ms |
 
 The join-heavy queries need 1c and 3.
+
+## 6. Index joins (phase 1c)
+
+An index join reaches the rows of the joined table one at a time, by buffer
+number and row number (`iIndexBuffer`, `iIndexItem` in the generated code),
+and decoded each row column by column through the CRW meta-code: two
+dispatches per column, and to reach column k it parses the k-1 before it. In
+SF1 samples of Q7, Q8 and Q13 this decoding was most of the generated code's
+time (45-59% of the active stacks).
+
+**What it does.** The joined row's cells come from the same column arrays
+as the scan's (section 2), through a table indexed by buffer number that the
+generated code reads without a lock.
+
+- `aExtern_ColCacheJoin(buffer, item, mask)` (store/ColCache.cpp) returns
+  the column arrays of the buffer when its snapshot holds the columns in
+  `mask` and the row, else null, and the row is decoded as before.
+- The table is two levels (`buffer >> 16`, `buffer & 0xFFFF`) of pointers to
+  immutable snapshots (`JoinSnap`: epoch, heads, first head, mask, one array
+  pointer per column). A new snapshot replaces the old one; the old one is
+  retired and freed only when no handler runs (`g_nJoinReaders`, counted by
+  each `Dynamic`), so a running handler never reads freed arrays.
+- A buffer is built only once its rows have been asked for often enough
+  (`nTouchToBuild`: a sixteenth of its rows, at least 16). A selective join
+  that reads a few rows of many buffers would otherwise decode whole buffers
+  for them.
+- A buffer that cannot be cached (deleted heads, a column type that is not
+  8 bytes wide, the byte budget) gets a snapshot marked `bNever`, so its rows
+  are decoded without taking the lock again.
+- Validity is that of section 2.1: the drop hooks of a buffer
+  (`vColCacheDrop`) also drop its snapshot, and a truncate
+  (`vColCacheBumpEpoch`) retires every snapshot.
+
+**Code generation.** `CombinedSrc::vColCacheJoin` runs after `vPruneInflate`
+on the code of each index join, last join first (each insertion moves the
+code after it). The columns that still jump to `L_InflateAColumn` are the
+ones the handler reads. Before the first column it inserts the request
+for them. If the cache answers, the block has one load per column, the copies of
+repeated columns (`vPriorCrwCol`), and a jump to `L_CcJoinRet_<op>_` after
+the last column. The label is named after the join's operator: the cache of
+compiled code is keyed by the text of the code, which must be the same each
+time it is generated. Job tag `/optimiser_off_col_cache_join` (or
+`/optimiser_off_col_cache`) decodes every joined row.
+
+**Outer joins.** The null row of a left outer join assigns NULL to every
+joined cell; such an assignment no longer keeps a column decoded
+(`vPruneInflate`). Join ordering now keeps the inner table of an outer join
+(a `<from>` with a `<constraint>`) from heading the join order
+(`P_NotFirst`). Ordering by estimated rows put an empty inner table first,
+and the query failed validation.
+
+**Measured (local SF1, 2 CPUs, engine time, best of 3, same node, cache on
+against `/optimiser_off_col_cache_join`):**
+
+| Query | decoded | from the cache | change |
+|---|---:|---:|---:|
+| Q3  | 257 | 190 | -26% |
+| Q13 | 431 | 355 | -18% |
+| Q9  | 479 | 418 | -13% |
+| Q8  | 378 | 341 | -10% |
+| Q21 | 330 | 298 | -10% |
+| Q5  | 260 | 234 | -10% |
+| Q2  | 211 | 190 | -10% |
+| Q7  | 431 | 401 | -7%  |
+| Q18 | 506 | 487 | -4%  |
+| Q10 | 376 | 365 | -3%  |
+| Total | 3659 | 3279 | -10.4% |
+
+**Verification.** SF1 22/22. `Regression/colCacheJoin.test`: an inner join
+(numbers and a string column) and the outer join of Q13, each run twice,
+with the cache switched off, after an appending load, after a truncate
+and after a reload. The regression batch shows no new failures.
