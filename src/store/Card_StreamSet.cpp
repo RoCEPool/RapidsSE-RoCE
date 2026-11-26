@@ -313,7 +313,8 @@ Card_StreamSet* Card_StreamSet::pComputeConnectedPermutations(Card_TableList*   
     Card_Table* p_table = _pCard_Table(p_tableList->pGetChild(i));
     char cSyn = p_table->pSymbol()->cTblSyn();
     G.acSyn[i]    = cSyn;
-    G.abHeadOk[i] = ! p_table->pSub_keyExists() && ! p_table->pSub_keyNotExists();
+    G.abHeadOk[i] = ! p_table->pSub_keyExists() && ! p_table->pSub_keyNotExists() &&
+                    ! p_table->pSymbol()->Y_bHas(P_NotFirst);
     G.aiFixed[i]  = p_table->pSymbol()->Y_bHas(P_FixedPos) ? p_table->pSymbol()->Y_iGet(P_FixedPos) : -1;
     Card_RowCount* p_rowCount = p_tableList->pGetRowCount(cSyn);
     G.adRows[i]   = p_rowCount ? (d8)p_rowCount->pSymbol()->iTo_integer(SF_INT_LIT) : 1.0;

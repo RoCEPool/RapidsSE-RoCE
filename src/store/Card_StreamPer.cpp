@@ -499,7 +499,8 @@ i8 Card_StreamPer::iCreatePerSeq(Card_TableList*    p_tableList,
 
       p_streamHead->vAppendChild((new Card_TableNm) ->SYM(SF_TBL_NM, p_table_ith->pSub_tableNm()->szFacet(SF_TBL_NM)));
 
-      if (p_table_ith->pSub_keyExists() || p_table_ith->pSub_keyNotExists()) {
+      if (p_table_ith->pSub_keyExists() || p_table_ith->pSub_keyNotExists() ||
+          p_table_ith->pSymbol()->Y_bHas(P_NotFirst)) {
         p_streamHead->vAppendChild((new Card_Note) ->SYM(SF_NOTE,"**CAN'T BE FIRST**"_Stz));
         pSymbol()->Y_vSet(P_Invalid);
         i_InvalidAtJoin = i_Elm;

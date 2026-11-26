@@ -99,6 +99,13 @@ Card_TableList* Card_TableList::pExtractList(Card_Deck* p_deck)
       p_table_dup->vAppendChild(p_rowCount);
     }
 
+    // A <from> with a <constraint> is the inner table of an outer join (the
+    // constraint is its ON condition, evaluated by the index join that reads
+    // it). It cannot head the join order; without this, an order that puts it
+    // first (an empty table has the fewest estimated rows) fails validation.
+    if (xDeck.pChild() && xDeck.pChild()->pSub_constraint())
+      p_table_dup->pSymbol()->Y_vSet(P_NotFirst);
+
     // XF_FLATTEN::vInto_KEYnotEXISTS puts the <keyExists>/<keyNotExists> on
     // the <from>, not on its <table>. Look there, or join ordering does not
     // know that this table is only probed and may put it first.
