@@ -271,15 +271,23 @@ Task::~Task(void) noexcept(false)
 /*----------------------------------------------------------------------------*/
 /* this executing / tls task                                                  */
 /*----------------------------------------------------------------------------*/
+// The task running on this thread, kept in a C++ thread_local as well as in
+// the pthread key: it is read on every allocation and free (MY::pJob,
+// MY::pThread, ...), and pthread_getspecific was a call each time.
+namespace {
+  thread_local Task* gtpThisTask = nullptr;
+}
+
 Task* Task::pThisTLSTask(void)
 {
-  i8 iTLSVal = (i8) giTLS_TaskKey;
-  if (C_UNKNOWN == iTLSVal)
-    return nullptr;
-  
-  Task* pTask = static_cast<Task*>(PsxThd::pTlsGet(giTLS_TaskKey));
-  
-  return pTask;
+  return gtpThisTask;
+}
+
+void Task::vSetThisTLSTask(Task* pTask)
+{
+  if (C_UNKNOWN != (i8) giTLS_TaskKey)
+    PsxThd::vTlsSet(giTLS_TaskKey, pTask);
+  gtpThisTask = pTask;
 }
 
 
@@ -296,8 +304,8 @@ void Task::vTaskLoop(void)
 
 //  static bool bAddToHashMap = true;
 
-  PsxThd::vTlsSet(giTLS_TaskKey,this);
-  ASSERT(PsxThd::pTlsGet(giTLS_TaskKey) == this);
+  vSetThisTLSTask(this);
+  ASSERT(pThisTLSTask() == this);
 
 //  if( bAddToHashMap) {
 //    AM::pHashMap()->vInsertKeyValue(m_pPdsOfHme->oGetBufferId().m_pvAsAddress,
@@ -390,7 +398,7 @@ void Task::vTaskLoop(void)
   
   // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
     
-  PsxThd::vTlsSet(giTLS_TaskKey,nullptr);
+  vSetThisTLSTask(nullptr);
 }
 
 /*----------------------------------------------------------------------------*/

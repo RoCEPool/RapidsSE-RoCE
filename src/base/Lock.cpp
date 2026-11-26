@@ -557,9 +557,10 @@ void Lock::vGrabWrite(void)
   _precondition_(_MAGIC_,CN_LOCK,_FOOTER_);
   
   // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-  // attempt to grab the lock for write
+  // attempt to grab the lock for write. The grab is counted once the lock is
+  // held with a plain add: no other writer holds it then,
+  // and an atomic add here was a second locked instruction on every grab.
   
-  ++m_ixWriteGrabs;
 #ifdef WITH_LOCK_TRACKING
   if (AM::SYSARGS::bLockTracking())
     ++AM::pLocks()->m_ixWriteGrabs[m_eLockKind];
@@ -567,6 +568,7 @@ void Lock::vGrabWrite(void)
   
   i8 iResult = Lock::iLockGrabWrite(&m_uLockWord);
   if (iResult) {
+    m_ixWriteGrabs = *m_ixWriteGrabs + 1;
     vAssertWrite();
     if (m_bLockSet)
       AM::LOCK::vJustWriteLocked(this);
@@ -599,6 +601,7 @@ void Lock::vGrabWrite(void)
   // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
   // write lock has been acquired
 
+  m_ixWriteGrabs = *m_ixWriteGrabs + 1;
   vAssertWrite();
   if (m_bLockSet)
     AM::LOCK::vJustWriteLocked(this);

@@ -114,6 +114,7 @@ namespace ENGINE
    ~Task(void) noexcept(false);
     
     static Task* pThisTLSTask(void);
+    static void  vSetThisTLSTask(Task* pTask);   // sets the pthread key too
   
     static void vDump(eCN eClass, Object* pObject, Stz* aTab);
   

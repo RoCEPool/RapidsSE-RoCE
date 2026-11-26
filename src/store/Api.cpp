@@ -1072,13 +1072,13 @@ void Api::vCallEngineJob(Stz* szJobNm, Stz* szEntryPt, bool bAddAxioms)
   // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
   //vCallTaskImmediate(pImmediateTask);
-  Task* pSaveTask = _pTask(PsxThd::pTlsGet(giTLS_TaskKey));
+  Task* pSaveTask = Task::pThisTLSTask();
   
   pEngineTask->vState(TS_EXECUTING);
   
   pEngineTask->vTaskLoop();
   
-  PsxThd::vTlsSet(giTLS_TaskKey,pSaveTask);
+  Task::vSetThisTLSTask(pSaveTask);
 
   // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
   Api::vDeleteRootJob(pRootJob);
