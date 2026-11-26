@@ -16,6 +16,12 @@ on:
       baseline:
         description: "Also time this ref against the dispatched one on the same runner (empty: no A/B)"
         default: ""
+      profile:
+        description: "Sample the thread stacks while these queries run, e.g. 18,09,07 (empty: no sampling)"
+        default: ""
+      profile_samples:
+        description: "Stack snapshots per query"
+        default: "60"
   schedule:
     - cron: "17 18 * * *"        # daily, 03:17 JST
   push:
@@ -195,6 +201,69 @@ jobs:
             ${{ runner.temp }}/AB_TIMES.md
             ${{ runner.temp }}/ab_node_*.log
             ${{ runner.temp }}/build_*.log
+          retention-days: 30
+
+  # Stack samples on the CI runner: the kinds of work each query spends its time on, measured on
+  # the machine whose times the A/B job compares (a machine with fewer CPUs than threads gives a
+  # different picture). scripts/sample_stacks.py; the summary is the job summary.
+  profile:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.profile != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      GIT_LFS_SKIP_SMUDGE: "1"
+      TPCH_SF1_DATA: /tmp/tpch_sf1
+      TPCH_SE_PARTITIONS: "2"
+      TPCH_SE_THREADS: "4"
+      BUILD_FLAGS: "-O2"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Files kept in LFS that the build and the client need
+        run: git lfs pull --include="shell/**,thirdparty/**"
+      - name: Third-party libraries (cached)
+        uses: actions/cache@v4
+        with:
+          path: |
+            thirdparty/antlr/lib
+            thirdparty/antlr/include
+            thirdparty/thrift/lib
+            thirdparty/thrift/include
+            thirdparty/thrift/bin
+            thirdparty/thrift/boost_1_80_0
+          key: profile-thirdparty-${{ runner.os }}-gcc13-${{ hashFiles('thirdparty/antlr/Makefile', 'thirdparty/thrift/Makefile', 'thirdparty/thrift/configureThrift.sh', 'thirdparty/antlr/.gitattributes') }}-v1
+      - name: gdb
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq gdb
+      - name: Build
+        run: |
+          (cd src && make -j "$(nproc)" \
+            CMAKE_ARGS="-DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DANTLR_BUILD_CPP_TESTS=OFF" \
+            CPPFLAGS="-std=c++17 -w $BUILD_FLAGS -D__LINUX__" CFLAGS="-w $BUILD_FLAGS" > "$RUNNER_TEMP/build.log" 2>&1) \
+            || { grep -n -B3 -A3 -E '\*\*\*|error:|Error [0-9]|fatal error' "$RUNNER_TEMP/build.log" | grep -v -- '-Werror' | head -150; exit 1; }
+          ls -la bin/rapidsse
+      - name: Data
+        run: python3 -c "import sys; sys.path.insert(0, 'tests/tpch_sf1_correctness/scripts'); import prepare_sf1; ok, _ = prepare_sf1.check('$TPCH_SF1_DATA'); sys.exit(0 if ok else 1)"
+      - name: Sample
+        run: |
+          python3 tests/tpch_sf1_correctness/scripts/sample_stacks.py \
+            --queries "${{ github.event.inputs.profile }}" --samples "${{ github.event.inputs.profile_samples }}" \
+            --out "$RUNNER_TEMP/samples"
+      - name: Summary
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/samples/SAMPLES.md" ]; then
+            cat "$RUNNER_TEMP/samples/SAMPLES.md" >> "$GITHUB_STEP_SUMMARY"
+            cat "$RUNNER_TEMP/samples/SAMPLES.md"     # also in the log, readable through the API
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tpch-sf1-samples
+          path: |
+            ${{ runner.temp }}/samples/SAMPLES.md
+            ${{ runner.temp }}/samples/stacks_*.txt
+            ${{ runner.temp }}/samples/sample_node.log
           retention-days: 30
 
   # The same 22 queries with other partition counts of the node. Once a day and on request.
