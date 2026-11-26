@@ -251,7 +251,11 @@ jobs:
             --out "$RUNNER_TEMP/samples"
       - name: Summary
         if: always()
-        run: if [ -f "$RUNNER_TEMP/samples/SAMPLES.md" ]; then cat "$RUNNER_TEMP/samples/SAMPLES.md" >> "$GITHUB_STEP_SUMMARY"; fi
+        run: |
+          if [ -f "$RUNNER_TEMP/samples/SAMPLES.md" ]; then
+            cat "$RUNNER_TEMP/samples/SAMPLES.md" >> "$GITHUB_STEP_SUMMARY"
+            cat "$RUNNER_TEMP/samples/SAMPLES.md"     # also in the log, readable through the API
+          fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:
