@@ -1,0 +1,256 @@
+/*----------------------------------------------------------------------------*/
+/* vecFilter.test -- the vectorized filter of a columnar scan                 */
+/*----------------------------------------------------------------------------*/
+
+// The filter right after a table scan that reads the column cache is
+// evaluated for a whole buffer into a selection vector (CombinedSrc
+// vVecFilter): date and integer comparisons as a byte mask, other fixed-width
+// conjuncts with their macros for the rows left, the rest by the filter of
+// the handler. Each query runs twice (the first run builds the cache) and
+// once with /optimiser_off_vec_filter. The expected rows were computed from
+// TPCH/SF_0001 and DATA/Regression/vecFilter.csv in Python.
+
+
+
+create table ${testName2}_orders (
+  O_ORDERKEY      INTEGER       NOT NULL,
+  O_CUSTKEY       INTEGER       NOT NULL,
+  O_ORDERSTATUS   CHAR(1)       NOT NULL,
+  O_TOTALPRICE    DECIMAL(15,2) NOT NULL,
+  O_ORDERDATE     DATE          NOT NULL,
+  O_ORDERPRIORITY CHAR(15)      NOT NULL,
+  O_CLERK         CHAR(15)      NOT NULL,
+  O_SHIPPRIORITY  INTEGER       NOT NULL,
+  O_COMMENT       VARCHAR(79)   NOT NULL
+);
+success
+create index ${testName2}_IxO_ORDERKEY on ${testName2}_orders (O_ORDERKEY);
+affected: 0
+load ${testName2}_orders "../TPCH/SF_0001/orders.tbl" <field_delimiter> = "|";
+success
+
+create table ${testName2}_lineitem (
+   L_ORDERKEY      INTEGER       NOT NULL,
+   L_PARTKEY       INTEGER       NOT NULL,
+   L_SUPPKEY       INTEGER       NOT NULL,
+   L_LINENUMBER    INTEGER       NOT NULL,
+   L_QUANTITY      DECIMAL(15,2) NOT NULL,
+   L_EXTENDEDPRICE DECIMAL(15,2) NOT NULL,
+   L_DISCOUNT      DECIMAL(15,2) NOT NULL,
+   L_TAX           DECIMAL(15,2) NOT NULL,
+   L_RETURNFLAG    CHAR(1)       NOT NULL,
+   L_LINESTATUS    CHAR(1)       NOT NULL,
+   L_SHIPDATE      DATE          NOT NULL,
+   L_COMMITDATE    DATE          NOT NULL,
+   L_RECEIPTDATE   DATE          NOT NULL,
+   L_SHIPINSTRUCT  CHAR(25)      NOT NULL,
+   L_SHIPMODE      CHAR(10)      NOT NULL,
+   L_COMMENT       VARCHAR(44)   NOT NULL
+);
+success
+create index ${testName2}_IxL_ORDERKEY on ${testName2}_lineitem (L_ORDERKEY);
+affected: 0
+load ${testName2}_lineitem "../TPCH/SF_0001/lineitem.tbl" <field_delimiter> = "|";
+success
+
+create table ${testName2}_nulls (
+  a INTEGER,
+  d DATE,
+  x INTEGER
+);
+success
+Load ${testName2}_nulls "../DATA/Regression/vecFilter.csv" ;
+success
+
+// date range and integer (all in the mask)
+select count(*), sum(o_totalprice) from ${testName2}_orders
+ where o_orderdate >= date '1995-01-01' and o_orderdate < date '1996-01-01' and o_custkey < 75;
+rows: (108, 10229070.23)
+
+select count(*), sum(o_totalprice) from ${testName2}_orders
+ where o_orderdate >= date '1995-01-01' and o_orderdate < date '1996-01-01' and o_custkey < 75;
+rows: (108, 10229070.23)
+
+/optimiser_off_vec_filter
+select count(*), sum(o_totalprice) from ${testName2}_orders
+ where o_orderdate >= date '1995-01-01' and o_orderdate < date '1996-01-01' and o_custkey < 75;
+rows: (108, 10229070.23)
+
+// date range in the mask, a decimal comparison for the rows left
+select count(*), sum(o_totalprice) from ${testName2}_orders
+ where o_orderdate >= date '1995-01-01' and o_orderdate < date '1996-01-01' and o_totalprice > 100000;
+rows: (102, 15723610.32)
+
+select count(*), sum(o_totalprice) from ${testName2}_orders
+ where o_orderdate >= date '1995-01-01' and o_orderdate < date '1996-01-01' and o_totalprice > 100000;
+rows: (102, 15723610.32)
+
+/optimiser_off_vec_filter
+select count(*), sum(o_totalprice) from ${testName2}_orders
+ where o_orderdate >= date '1995-01-01' and o_orderdate < date '1996-01-01' and o_totalprice > 100000;
+rows: (102, 15723610.32)
+
+// date range in the mask, a string IN left to the filter of the handler
+select count(*), sum(o_orderkey) from ${testName2}_orders
+ where o_orderdate >= date '1995-01-01' and o_orderdate < date '1996-01-01' and o_orderpriority in ('1-URGENT', '2-HIGH');
+rows: (99, 265948)
+
+select count(*), sum(o_orderkey) from ${testName2}_orders
+ where o_orderdate >= date '1995-01-01' and o_orderdate < date '1996-01-01' and o_orderpriority in ('1-URGENT', '2-HIGH');
+rows: (99, 265948)
+
+/optimiser_off_vec_filter
+select count(*), sum(o_orderkey) from ${testName2}_orders
+ where o_orderdate >= date '1995-01-01' and o_orderdate < date '1996-01-01' and o_orderpriority in ('1-URGENT', '2-HIGH');
+rows: (99, 265948)
+
+// an OR is one conjunct, evaluated with its macros
+select count(*), sum(o_orderkey) from ${testName2}_orders
+ where (o_orderdate < date '1993-01-01' or o_orderdate >= date '1998-01-01') and o_custkey < 500;
+rows: (361, 1119130)
+
+select count(*), sum(o_orderkey) from ${testName2}_orders
+ where (o_orderdate < date '1993-01-01' or o_orderdate >= date '1998-01-01') and o_custkey < 500;
+rows: (361, 1119130)
+
+/optimiser_off_vec_filter
+select count(*), sum(o_orderkey) from ${testName2}_orders
+ where (o_orderdate < date '1993-01-01' or o_orderdate >= date '1998-01-01') and o_custkey < 500;
+rows: (361, 1119130)
+
+// <>, <= and >
+select count(*), sum(o_custkey) from ${testName2}_orders
+ where o_custkey <> 370 and o_orderkey <= 3000 and o_orderdate > date '1994-06-30';
+rows: (447, 33286)
+
+select count(*), sum(o_custkey) from ${testName2}_orders
+ where o_custkey <> 370 and o_orderkey <= 3000 and o_orderdate > date '1994-06-30';
+rows: (447, 33286)
+
+/optimiser_off_vec_filter
+select count(*), sum(o_custkey) from ${testName2}_orders
+ where o_custkey <> 370 and o_orderkey <= 3000 and o_orderdate > date '1994-06-30';
+rows: (447, 33286)
+
+// comparisons of two columns, and a string IN
+select count(*), sum(l_extendedprice) from ${testName2}_lineitem
+ where l_shipmode in ('MAIL', 'SHIP') and l_commitdate < l_receiptdate and l_shipdate < l_commitdate
+   and l_receiptdate >= date '1994-01-01' and l_receiptdate < date '1995-01-01';
+rows: (25, 642561.06)
+
+select count(*), sum(l_extendedprice) from ${testName2}_lineitem
+ where l_shipmode in ('MAIL', 'SHIP') and l_commitdate < l_receiptdate and l_shipdate < l_commitdate
+   and l_receiptdate >= date '1994-01-01' and l_receiptdate < date '1995-01-01';
+rows: (25, 642561.06)
+
+/optimiser_off_vec_filter
+select count(*), sum(l_extendedprice) from ${testName2}_lineitem
+ where l_shipmode in ('MAIL', 'SHIP') and l_commitdate < l_receiptdate and l_shipdate < l_commitdate
+   and l_receiptdate >= date '1994-01-01' and l_receiptdate < date '1995-01-01';
+rows: (25, 642561.06)
+
+// group by an integer key whose rows come together (the group of the previous row)
+select count(*), sum(q), max(q) from (select l_orderkey, sum(l_quantity) as q from ${testName2}_lineitem group by l_orderkey) as t;
+rows: (1498, 152256.00, 266.00)
+
+select count(*), sum(q), max(q) from (select l_orderkey, sum(l_quantity) as q from ${testName2}_lineitem group by l_orderkey) as t;
+rows: (1498, 152256.00, 266.00)
+
+/optimiser_off_vec_filter
+select count(*), sum(q), max(q) from (select l_orderkey, sum(l_quantity) as q from ${testName2}_lineitem group by l_orderkey) as t;
+rows: (1498, 152256.00, 266.00)
+
+select count(*) from (select l_orderkey, sum(l_quantity) as q from ${testName2}_lineitem group by l_orderkey) as t where q > 150;
+rows: (328)
+
+select count(*) from (select l_orderkey, sum(l_quantity) as q from ${testName2}_lineitem group by l_orderkey) as t where q > 150;
+rows: (328)
+
+/optimiser_off_vec_filter
+select count(*) from (select l_orderkey, sum(l_quantity) as q from ${testName2}_lineitem group by l_orderkey) as t where q > 150;
+rows: (328)
+
+// a repeated column (its copy is made after the cached cells are loaded)
+select o_orderkey as a, o_totalprice, o_orderkey as b from ${testName2}_orders
+ where o_orderdate >= date '1998-07-25' and o_orderkey < 4000 order by a;
+ordered rows:
+  (1124, 141858.97, 1124)
+  (2400, 92798.66, 2400)
+  (2981, 37776.79, 2981)
+  (3909, 82746.74, 3909)
+
+select o_orderkey as a, o_totalprice, o_orderkey as b from ${testName2}_orders
+ where o_orderdate >= date '1998-07-25' and o_orderkey < 4000 order by a;
+ordered rows:
+  (1124, 141858.97, 1124)
+  (2400, 92798.66, 2400)
+  (2981, 37776.79, 2981)
+  (3909, 82746.74, 3909)
+
+/optimiser_off_vec_filter
+select o_orderkey as a, o_totalprice, o_orderkey as b from ${testName2}_orders
+ where o_orderdate >= date '1998-07-25' and o_orderkey < 4000 order by a;
+ordered rows:
+  (1124, 141858.97, 1124)
+  (2400, 92798.66, 2400)
+  (2981, 37776.79, 2981)
+  (3909, 82746.74, 3909)
+
+// a repeated column of a scan without a filter
+select count(*), sum(a), sum(b), max(c) from (select o_orderkey as a, o_clerk as c, o_orderkey as b from ${testName2}_orders) as t;
+rows: (1500, 4487262, 4487262, 'Clerk#000001000')
+
+select count(*), sum(a), sum(b), max(c) from (select o_orderkey as a, o_clerk as c, o_orderkey as b from ${testName2}_orders) as t;
+rows: (1500, 4487262, 4487262, 'Clerk#000001000')
+
+// NULL cells never pass
+select count(*), sum(x) from ${testName2}_nulls where a > 2;
+rows: (3, 170)
+
+select count(*), sum(x) from ${testName2}_nulls where a > 2;
+rows: (3, 170)
+
+/optimiser_off_vec_filter
+select count(*), sum(x) from ${testName2}_nulls where a > 2;
+rows: (3, 170)
+
+select count(*), sum(x) from ${testName2}_nulls where a <> 3;
+rows: (4, 130)
+
+select count(*), sum(x) from ${testName2}_nulls where a <> 3;
+rows: (4, 130)
+
+/optimiser_off_vec_filter
+select count(*), sum(x) from ${testName2}_nulls where a <> 3;
+rows: (4, 130)
+
+select count(*), sum(x) from ${testName2}_nulls where d >= date '1995-01-01' and d < date '1997-01-01';
+rows: (3, 110)
+
+select count(*), sum(x) from ${testName2}_nulls where d >= date '1995-01-01' and d < date '1997-01-01';
+rows: (3, 110)
+
+/optimiser_off_vec_filter
+select count(*), sum(x) from ${testName2}_nulls where d >= date '1995-01-01' and d < date '1997-01-01';
+rows: (3, 110)
+
+select count(*), sum(x) from ${testName2}_nulls where d < date '1995-06-01' and a < 5;
+rows: (1, 10)
+
+select count(*), sum(x) from ${testName2}_nulls where d < date '1995-06-01' and a < 5;
+rows: (1, 10)
+
+/optimiser_off_vec_filter
+select count(*), sum(x) from ${testName2}_nulls where d < date '1995-06-01' and a < 5;
+rows: (1, 10)
+
+select count(*), sum(x) from ${testName2}_nulls where a > 5 or d < date '1995-01-01';
+rows: (1, 60)
+
+select count(*), sum(x) from ${testName2}_nulls where a > 5 or d < date '1995-01-01';
+rows: (1, 60)
+
+/optimiser_off_vec_filter
+select count(*), sum(x) from ${testName2}_nulls where a > 5 or d < date '1995-01-01';
+rows: (1, 60)
+

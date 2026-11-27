@@ -215,3 +215,58 @@ against `/optimiser_off_col_cache_join`):**
 (numbers and a string column) and the outer join of Q13, each run twice,
 with the cache switched off, after an appending load, after a truncate
 and after a reload. The regression batch shows no new failures.
+
+## Vectorized execution, step 1: filter of a columnar scan
+
+Status: implemented in `CombinedSrc::vVecFilter` (job tag
+`/optimiser_off_vec_filter` turns it off).
+
+The handlers process one row at a time: every expression is a sequence of
+stack macros with a NULL test and an error test each, inside one large
+function full of computed jumps, so the C compiler can neither keep the
+expression in registers nor use vector instructions. DuckDB evaluates a
+filter for a vector of rows at a time and passes on a selection vector.
+
+When a scan reads the column cache and its first operator is a filter, the
+filter is also emitted as a function of its own, called once per buffer:
+
+1. The postfix macro sequence is parsed into a tree (the number of operands
+   is known for pushes, NOT, BETWEEN, IN and `_<OP>_<type><type>`; any other
+   macro leaves the filter as it is) and split into the conjuncts of its
+   top-level ANDs. A row passes when every conjunct is true.
+2. Conjuncts that compare dates or integers (cached cells or literals) become
+   one expression per row, `(col >= K) & (col != NULL) & ...`, written to a
+   byte mask in a loop without branches or calls: the compiler turns it into
+   vector compares (the generated code is now compiled with `-march=native`:
+   it runs on the machine that compiled it, and the compile command is part
+   of the cache key).
+3. The mask is compacted into a selection vector of row numbers (16 bits; a
+   buffer holds at most 65536 rows).
+4. The other conjuncts, when their macros read only their operands
+   (comparisons, BETWEEN, arithmetic and logic on fixed-width cells), are
+   evaluated with those macros for the selected rows only.
+5. The handler visits only the selected rows. If every conjunct was evaluated
+   it skips its own filter; otherwise (strings, functions) its filter still
+   runs for the rows it visits.
+
+Two related fixes in the same change:
+
+- A scan whose stencil already steps over columns (a GROUP BY right after the
+  scan: TPC-H Q18) was not served from the column cache, because a stepped-over
+  column has no destination cell and the generator gave up. It is now.
+- The hash GROUP BY on one integer key tries the group of the previous row
+  before the hash table (the lines of an order are stored together).
+
+Local SF1, 2 threads on 2 CPUs, execute time / handler time of the scan stage
+summed over partitions:
+
+| Query | before | after |
+|---|---|---|
+| Q18 | 558 / 985 ms | 337 / 578 ms |
+| Q6  | 83 / 130 ms | 45 / 69 ms |
+| Q12 | 82 / 106 ms | 55 / 53 ms |
+
+Next steps of the vectorization (measured on the same profile, handler time
+summed: 5.5 s for the 22 queries): the join stages (about half: the matched
+rows are still handled one at a time), the aggregation of Q1 and Q18 (a
+fifth), and the rows passed between stages (a skip-list row buffer per row).

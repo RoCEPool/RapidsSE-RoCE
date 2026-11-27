@@ -1298,11 +1298,14 @@ void CombinedSrc::vColCacheInflate(char* azStart, char* azEnd)
     size_t pNext = sCode.find(sColNo, p + 1);
     size_t d = sCode.find(sDst, p);
     size_t g = sCode.find("goto L_", p);
-    if (d == std::string::npos || g == std::string::npos ||
-        (pNext != std::string::npos && (d > pNext || g > pNext)))
+    if (g == std::string::npos || (pNext != std::string::npos && g > pNext))
       return;
+    // a column the scan steps over (it may have no destination: the stencil
+    // of a scan that feeds a GROUP BY directly names only the columns read)
     if (sCode.compare(g, sJump.size(), sJump) != 0)
-      continue;                                   // stepped over, not read
+      continue;
+    if (d == std::string::npos || d > g)
+      return;
     size_t q = sCode.find(sCell, d);
     if (q == std::string::npos || i_Col < 0 || i_Col >= 64)
       return;
@@ -1333,6 +1336,19 @@ void CombinedSrc::vColCacheInflate(char* azStart, char* azEnd)
   for (auto& rCol : vCols)
     sFast += "    " + rCol.second + ".m_iAsI8 = aDynamicT->m_aaColCache[" +
              std::to_string((long long)rCol.first) + "][i_Row];\n";
+  // the copies of repeated columns (vPriorCrwCol: select a, a ...), after
+  // the loads
+  for (size_t a = pFirst; a < sCode.size(); ) {
+    size_t e = sCode.find('\n', a);
+    if (e == std::string::npos)
+      break;
+    std::string sLine = sCode.substr(a, e - a);
+    size_t s0 = sLine.find_first_not_of(" \t");
+    if (s0 != std::string::npos && sLine.compare(s0, 3, "pSR") == 0 &&
+        sLine.find(".m_iAsI8 = pSR") != std::string::npos)
+      sFast += "    " + sLine.substr(s0) + "\n";
+    a = e + 1;
+  }
   sFast += "    goto L_InflateCrwRet;\n";
   sFast += "  }\n";
 
@@ -1341,6 +1357,414 @@ void CombinedSrc::vColCacheInflate(char* azStart, char* azEnd)
   while (azAt > azStart && azAt[-1] != '\n')
     azAt--;
   vInsertText(azAt, sFast.c_str());
+}
+
+/*----------------------------------------------------------------------------*/
+/* Vectorized filter of a columnar scan. Runs on a complete CRW handler,      */
+/* before its footer. When the scan reads its columns from the column cache   */
+/* (vColCacheInflate) and its first operator is a filter made only of pure    */
+/* expression macros over cached cells and constants, the filter is also      */
+/* emitted as a function of its own, before the handler: one tight loop over  */
+/* the cached column arrays of the buffer that writes the numbers of the rows */
+/* that pass to a selection vector (as DuckDB's filter does): the conjuncts   */
+/* that compare dates or integers as a byte mask over all rows (vector        */
+/* compares, the generated code is compiled with -march=native), the others   */
+/* with their macros for the rows left. The handler then visits only the      */
+/* selected rows and skips its own filter; when a conjunct cannot be          */
+/* evaluated here (strings, functions) the handler still filters the rows it  */
+/* visits.                                                                     */
+/* Without the cache for a buffer the handler runs as before. Job tag         */
+/* /optimiser_off_vec_filter: as before.                                      */
+/*----------------------------------------------------------------------------*/
+void CombinedSrc::vVecFilter(void)
+{
+  _precondition_(_ADDRESS_,_MAGIC_,CN_COMBINEDSRC,_FOOTER_);
+
+  if (AM::JOB::bHasTag("<optimiser_off_vec_filter>"_Stz) || AM::JOB::bHasTag("<optimiser_off_all>"_Stz))
+    return;
+
+  // the handler
+  char* azHandler = nullptr;
+  for (char* a = m_azCodeCrs - 16; a > m_caCode; a--)
+    if (strncmp(a, "int iCrwHandler_", 16) == 0) {
+      azHandler = a;
+      break;
+    }
+  if (! azHandler || (azHandler > m_caCode && azHandler[-1] != '\n'))
+    return;
+  if (m_iHgBefore >= azHandler - m_caCode || m_iHgInside >= azHandler - m_caCode)
+    return;
+  std::string sCode(azHandler, m_azCodeCrs - azHandler);
+  size_t e = sCode.find('(');
+  std::string sStage = sCode.substr(16, e - 16);
+  if (sStage.empty() || sStage.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_") != std::string::npos)
+    return;
+
+  // the column cache block of the scan: its request and its loads
+  static const std::string sBlock = "  // column cache (store/ColCache.cpp)\n  if (i_Row == 0)\n";
+  static const std::string sIf    = "  if (aDynamicT->m_bColCache) {\n";
+  size_t pBlock = sCode.find(sBlock);
+  if (pBlock == std::string::npos || sCode.find(sBlock, pBlock + 1) != std::string::npos)
+    return;
+  size_t pReq = pBlock + sBlock.size();
+  size_t pIf = sCode.find(sIf, pReq);
+  size_t pReqEnd = sCode.find('\n', pReq);
+  if (pIf == std::string::npos || pReqEnd + 1 != pIf)
+    return;
+  std::vector<std::pair<std::string, std::string>> vCols;     // cell, column number
+  size_t p = pIf + sIf.size();
+  for (;;) {
+    size_t q = sCode.find('\n', p);
+    if (q == std::string::npos)
+      return;
+    std::string sLine = sCode.substr(p, q - p);
+    if (sLine == "    goto L_InflateCrwRet;")
+      break;
+    static const std::string sMid = ".m_iAsI8 = aDynamicT->m_aaColCache[";
+    static const std::string sEnd = "][i_Row];";
+    // the copy of a repeated column: the same cached column
+    {
+      static const std::string sCopy = ".m_iAsI8 = pSR";
+      size_t c = sLine.find(sCopy);
+      if (sLine.compare(0, 7, "    pSR") == 0 && c != std::string::npos && sLine.back() == ';') {
+        std::string sFrom = sLine.substr(c + sCopy.size() - 3, sLine.size() - 1 - (c + sCopy.size() - 3));
+        std::string sColNo;
+        for (auto& rCol : vCols)
+          if (rCol.first == sFrom)
+            sColNo = rCol.second;
+        if (sColNo.empty())
+          return;
+        vCols.push_back({sLine.substr(4, c - 4) + ".m_iAsI8", sColNo});
+        p = q + 1;
+        continue;
+      }
+    }
+    size_t m = sLine.find(sMid);
+    if (sLine.compare(0, 4, "    ") != 0 || m == std::string::npos ||
+        sLine.size() < sEnd.size() || sLine.compare(sLine.size() - sEnd.size(), sEnd.size(), sEnd) != 0)
+      return;
+    vCols.push_back({sLine.substr(4, m - 4) + ".m_iAsI8",
+                     sLine.substr(m + sMid.size(), sLine.size() - sEnd.size() - m - sMid.size())});
+    p = q + 1;
+  }
+  if (vCols.empty())
+    return;
+
+  // the first operator after the scan is a filter
+  size_t pRet = sCode.find("  L_InflateCrwRet:\n", p);
+  if (pRet == std::string::npos)
+    return;
+  size_t pName = std::string::npos;
+  for (size_t a = sCode.find('\n', pRet); a != std::string::npos; a = sCode.find('\n', a + 1)) {
+    if (sCode.compare(a + 1, 5, "  // ") != 0)
+      continue;
+    size_t b = sCode.find('\n', a + 1);
+    if (b == std::string::npos)
+      return;
+    std::string sName = sCode.substr(a + 6, b - a - 6);
+    if (sName.find_first_of("ABCDEFGHIJKLMNOPQRSTUVWXYZ") == std::string::npos ||
+        sName.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZ_ -") != std::string::npos)
+      continue;
+    if (sName != "FILTER")
+      return;
+    pName = a + 6;
+    break;
+  }
+  if (pName == std::string::npos)
+    return;
+  static const std::string sPre = "  if ( ! aDynamicT->m_bProcessRow ) {\n    aDynamicT->m_bProcessRow = true;\n    goto L_AdvanceNextCrwT;\n  }\n";
+  size_t pPre = sCode.find(sPre, pName);
+  if (pPre == std::string::npos)
+    return;
+  size_t pExpr = pPre + sPre.size();
+  static const std::string sAssign = "  _ASSIGN(bFilterResult)\n";
+  size_t pAssign = sCode.find(sAssign, pExpr);
+  if (pAssign == std::string::npos)
+    return;
+  static const std::string sPost =
+    "  if (bFilterResult && bFilterResult != C_DATUM_NULL) {\n    aDynamicT->m_bProcessRow = true;\n  } else {\n    aDynamicT->m_bProcessRow = false;\n  }\n";
+  size_t pPost = sCode.find(sPost, pAssign);
+  if (pPost == std::string::npos)
+    return;
+  // between the expression and the result: only the error check
+  {
+    std::string sBetween = sCode.substr(pAssign + sAssign.size(), pPost - pAssign - sAssign.size());
+    if (sBetween.find("goto") != std::string::npos || sBetween.find(':') != std::string::npos ||
+        sBetween.find("_PSH") != std::string::npos)
+      return;
+  }
+
+  // The expression is in postfix, one macro a line. The cells of the scan
+  // become elements of the column arrays.
+  std::string sExpr = sCode.substr(pExpr, pAssign - pExpr);
+  std::vector<bool> vbUsed(vCols.size(), false);
+  for (size_t i = 0; i < vCols.size(); i++) {
+    const std::string& sCell = vCols[i].first;
+    std::string sElem = "aVecCol" + vCols[i].second + "[i_VecRow]";
+    for (size_t a = sExpr.find(sCell); a != std::string::npos; a = sExpr.find(sCell, a + sElem.size()))
+      sExpr.replace(a, sCell.size(), sElem);
+  }
+  static const std::string sErr = "aDynamicT->m_iErrorCode";
+  for (size_t a = sExpr.find(sErr); a != std::string::npos; a = sExpr.find(sErr, a + 1))
+    sExpr.replace(a, sErr.size(), "iVecError");
+
+  // Its tree: the operands of a node are the lines before it. The number of
+  // operands is known for a push (none), NOT (1), BETWEEN (3), IN (the list,
+  // its length and the value) and the macros named _<OP>_<type><type> (2);
+  // with any other macro the filter stays as it is.
+  auto bTypeCode = [](const std::string& sType) {
+    static const char* aszType[] = {"BCD", "DTE", "INT", "BOL", "FLT", "TSP", "TME", "VCH", "IVD", "IVL", "IVY"};
+    for (const char* sz : aszType)
+      if (sType == sz)
+        return true;
+    return false;
+  };
+  struct Node { std::string sMacro, sArg; size_t iFirst; std::vector<int> viKid; };
+  std::vector<Node> vNode;
+  std::vector<std::string> vsLine;
+  {
+    std::vector<int> viStack;
+    size_t a = 0;
+    while (a < sExpr.size()) {
+      size_t b = sExpr.find('\n', a);
+      if (b == std::string::npos)
+        b = sExpr.size();
+      std::string sLine = sExpr.substr(a, b - a);
+      a = b + 1;
+      size_t f = sLine.find_first_not_of(" \t");
+      if (f == std::string::npos)
+        continue;
+      size_t g = sLine.find('(', f);
+      size_t h = sLine.rfind(')');
+      if (sLine[f] != '_' || g == std::string::npos || h == std::string::npos || h < g ||
+          sLine.find_first_not_of(" \t", h + 1) != std::string::npos)
+        return;
+      Node x;
+      x.sMacro = sLine.substr(f, g - f);
+      x.sArg = sLine.substr(g + 1, h - g - 1);
+      x.iFirst = vsLine.size();
+      size_t u = x.sMacro.find('_', 1);
+      size_t nKids;
+      if (x.sMacro.compare(0, 5, "_PSH_") == 0)
+        nKids = 0;
+      else if (x.sMacro == "_NOT_BOLBOL")
+        nKids = 1;
+      else if (x.sMacro.compare(0, 5, "_BET_") == 0 && x.sMacro.size() == 11)
+        nKids = 3;
+      else if (x.sMacro.compare(0, 5, "_INX_") == 0 && x.sMacro.size() == 11) {
+        // <item> ... <number of items> <value>
+        if (viStack.size() < 2)
+          return;
+        const Node& rCount = vNode[viStack[viStack.size() - 2]];
+        if (rCount.sMacro != "_PSH_INT" || rCount.sArg.empty() || rCount.sArg.size() > 6 ||
+            rCount.sArg.find_first_not_of("0123456789") != std::string::npos)
+          return;
+        nKids = (size_t) atoll(rCount.sArg.c_str()) + 2;
+      }
+      else if (u != std::string::npos && x.sMacro.size() == u + 7 &&
+               x.sMacro.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZ", 1) == u &&
+               bTypeCode(x.sMacro.substr(u + 1, 3)) && bTypeCode(x.sMacro.substr(u + 4, 3)))
+        nKids = 2;
+      else
+        return;
+      if (viStack.size() < nKids)
+        return;
+      for (size_t k = 0; k < nKids; k++) {
+        x.viKid.insert(x.viKid.begin(), viStack.back());
+        viStack.pop_back();
+      }
+      if (nKids)
+        x.iFirst = vNode[x.viKid[0]].iFirst;
+      vsLine.push_back(sLine);
+      viStack.push_back((int) vNode.size());
+      vNode.push_back(x);
+    }
+    if (viStack.size() != 1)
+      return;
+  }
+  // the conjuncts: the operands of the top-level ANDs; a row passes when
+  // each of them is true
+  std::vector<int> viConj;
+  {
+    std::vector<int> viTodo{(int) vNode.size() - 1};
+    while (! viTodo.empty()) {
+      int i = viTodo.back();
+      viTodo.pop_back();
+      if (vNode[i].sMacro == "_AND_BOLBOL") {
+        viTodo.push_back(vNode[i].viKid[1]);
+        viTodo.push_back(vNode[i].viKid[0]);
+      }
+      else
+        viConj.push_back(i);
+    }
+  }
+  // A comparison of two dates or two integers, each a cached cell or a
+  // literal, is a plain comparison of the cells (false when one is NULL):
+  // these conjuncts are evaluated for every row of the buffer into a byte
+  // mask, in a loop the compiler turns into vector compares.
+  auto sFast = [&vNode](int i) -> std::string {
+    const Node& x = vNode[i];
+    static const char* aszCmp[][2] = {{"_EQ_", "=="}, {"_NE_", "!="}, {"_LT_", "<"}, {"_LE_", "<="},
+                                      {"_GT_", ">"}, {"_GE_", ">="}};
+    const char* szOp = nullptr;
+    for (auto& r : aszCmp)
+      if (x.sMacro.compare(0, strlen(r[0]), r[0]) == 0 &&
+          (x.sMacro.compare(strlen(r[0]), std::string::npos, "DTEDTE") == 0 ||
+           x.sMacro.compare(strlen(r[0]), std::string::npos, "INTINT") == 0))
+        szOp = r[1];
+    if (! szOp || x.viKid.size() != 2)
+      return "";
+    std::string sOut;
+    std::string asArg[2];
+    for (int k = 0; k < 2; k++) {
+      const Node& y = vNode[x.viKid[k]];
+      bool bLiteral = ! y.sArg.empty() && y.sArg.size() < 19 &&
+                      y.sArg.find_first_not_of("0123456789", y.sArg[0] == '-' ? 1 : 0) == std::string::npos;
+      bool bCell = y.sMacro == "_PSH_COL" && y.sArg.compare(0, 7, "aVecCol") == 0 &&
+                   y.sArg.find_first_not_of("0123456789", 7) == y.sArg.find("[i_VecRow]") &&
+                   y.sArg.size() == y.sArg.find("[i_VecRow]") + 10;
+      if (! (bCell || (bLiteral && (y.sMacro == "_PSH_DTE" || y.sMacro == "_PSH_INT"))))
+        return "";
+      asArg[k] = bLiteral ? "((i8)" + y.sArg + "LL)" : y.sArg;
+      if (bCell)
+        sOut += " & (" + y.sArg + " != C_DATUM_NULL)";
+    }
+    return "(" + asArg[0] + " " + szOp + " " + asArg[1] + ")" + sOut;
+  };
+  // Another conjunct is evaluated with its macros, for the rows that pass the
+  // mask, when its macros read only their operands (comparisons, BETWEEN,
+  // arithmetic and logic on fixed-width cells and literals) and it names
+  // nothing of the row or of the handler but cached cells.
+  auto bPure = [&vNode, &vsLine](int i) -> bool {
+    for (size_t l = vNode[i].iFirst; l <= (size_t) i; l++) {
+      const std::string& sMacro = vNode[l].sMacro;
+      static const char* aszPush[] = {"_PSH_COL", "_PSH_BCD", "_PSH_DTE", "_PSH_INT", "_PSH_BOL", "_PSH_FLT",
+                                      "_PSH_TSP", "_PSH_TME"};
+      bool bOk = false;
+      for (const char* sz : aszPush)
+        bOk = bOk || sMacro == sz;
+      static const char* aszOp[] = {"_EQ_", "_NE_", "_LT_", "_LE_", "_GT_", "_GE_", "_BET_", "_ADD_", "_SUB_",
+                                    "_MUL_", "_AND_", "_OR_", "_NOT_"};
+      static const char* aszType[] = {"BCD", "DTE", "INT", "BOL", "FLT", "TSP", "TME"};
+      for (const char* sz : aszOp)
+        if (sMacro.compare(0, strlen(sz), sz) == 0 && sMacro.size() == strlen(sz) + 6) {
+          bool bTypes = true;
+          for (size_t t = strlen(sz); t < sMacro.size(); t += 3) {
+            bool bOne = false;
+            for (const char* szT : aszType)
+              bOne = bOne || sMacro.compare(t, 3, szT) == 0;
+            bTypes = bTypes && bOne;
+          }
+          bOk = bOk || bTypes;
+        }
+      const std::string& sLine = vsLine[l];
+      if (! bOk || sLine.find("->") != std::string::npos || sLine.find("szStrArea") != std::string::npos ||
+          sLine.find("i_Row") != std::string::npos || sLine.find("goto") != std::string::npos ||
+          sLine.find('&') != std::string::npos)
+        return false;
+    }
+    return true;
+  };
+  std::string sMask, sRest;
+  bool bAll = true;                     // every conjunct is evaluated here
+  for (int i : viConj)
+    if (sFast(i).empty() && ! bPure(i))
+      bAll = false;
+  for (int i : viConj) {
+    std::string sOne = sFast(i);
+    if (! sOne.empty()) {
+      sMask += (sMask.empty() ? "" : " & ") + sOne;
+      continue;
+    }
+    if (! bAll)
+      continue;                         // left to the filter of the handler
+    bool bFirst = sRest.empty();
+    for (size_t l = vNode[i].iFirst; l <= (size_t) i; l++)
+      sRest += "    " + vsLine[l] + "\n";
+    if (! bFirst)
+      sRest += "      _AND_BOLBOL(iVecError)\n";
+  }
+  if (sMask.empty() && ! bAll)
+    return;
+  for (size_t i = 0; i < vCols.size(); i++)
+    vbUsed[i] = (sMask + sRest).find("aVecCol" + vCols[i].second + "[") != std::string::npos;
+
+  // the function
+  std::string sFun;
+  sFun += "/* vectorized filter of the scan of " + sStage + " (CombinedSrc::vVecFilter): the rows of the\n";
+  sFun += "   buffer that pass, from the cached columns, to a selection vector */\n";
+  sFun += "static __thread unsigned short aiVecSel_" + sStage + "[65536];\n";
+  if (! sMask.empty())
+    sFun += "static __thread unsigned char abVecMask_" + sStage + "[65536];\n";
+  sFun += "static i8 nVecFilter_" + sStage + "(struct Dynamic_T* aDynamicT, i8 nVecRows, unsigned short* aiVecSel) __attribute__((noinline));\n";
+  sFun += "static i8 nVecFilter_" + sStage + "(struct Dynamic_T* aDynamicT, i8 nVecRows, unsigned short* aiVecSel)\n{\n";
+  sFun += "  #include \"../src/store/Fragments/vFLAT_FunctionLocals.h\"\n";
+  sFun += "  i8 aVecW[64];\n  i8 nVecSel = 0;\n  i8 iVecError = (i8)EC_NONE;\n  i8 i_VecRow;\n";
+  for (size_t i = 0; i < vCols.size(); i++) {
+    bool bSeen = false;                 // a repeated column: one array
+    for (size_t j = 0; j < i; j++)
+      bSeen = bSeen || vCols[j].second == vCols[i].second;
+    if (vbUsed[i] && ! bSeen)
+      sFun += "  const i8* __restrict aVecCol" + vCols[i].second + " = aDynamicT->m_aaColCache[" + vCols[i].second + "];\n";
+  }
+  if (! sMask.empty()) {
+    sFun += "  unsigned char* __restrict abVecMask = abVecMask_" + sStage + ";\n";
+    sFun += "  for (i_VecRow = 0; i_VecRow < nVecRows; i_VecRow++)\n";
+    sFun += "    abVecMask[i_VecRow] = (unsigned char)(" + sMask + ");\n";
+    sFun += "  for (i_VecRow = 0; i_VecRow < nVecRows; i_VecRow++) {\n";
+    sFun += "    aiVecSel[nVecSel] = (unsigned short)i_VecRow;\n";
+    sFun += "    nVecSel += abVecMask[i_VecRow];\n  }\n";
+  }
+  if (! sRest.empty()) {
+    if (! sMask.empty()) {
+      sFun += "  i8 nVecIn = nVecSel;\n  i8 i_VecSel;\n  nVecSel = 0;\n";
+      sFun += "  for (i_VecSel = 0; i_VecSel < nVecIn; i_VecSel++) {\n";
+      sFun += "    i_VecRow = aiVecSel[i_VecSel];\n    paW = aVecW;\n";
+    }
+    else
+      sFun += "  for (i_VecRow = 0; i_VecRow < nVecRows; i_VecRow++) {\n    paW = aVecW;\n";
+    sFun += sRest;
+    sFun += "    bFilterResult = *(--paW);\n";
+    sFun += "    aiVecSel[nVecSel] = (unsigned short)i_VecRow;\n";
+    sFun += "    nVecSel += (bFilterResult && bFilterResult != C_DATUM_NULL) ? 1 : 0;\n  }\n";
+  }
+  sFun += "  if (iVecError != (i8)EC_NONE)\n    aDynamicT->m_iErrorCode = iVecError;\n";
+  sFun += "  return nVecSel;\n}\n\n";
+
+  // the handler: (back to front, the places stay valid)
+  //  - skip the filter of a selected row
+  if (bAll) {
+    sCode.insert(pPost + sPost.size(), "  L_VecFilterDone_" + sStage + ":;\n");
+    sCode.insert(pExpr, "  if (bVecSel)\n    goto L_VecFilterDone_" + sStage + ";\n");
+  }
+  //  - at the first row filter the buffer; then each time take the next
+  //    selected row
+  std::string sReq = sCode.substr(pReq, pReqEnd - pReq);        // "    aDynamicT->m_bColCache = ...;"
+  std::string sSel;
+  sSel += "  if (i_Row == 0) {\n  " + sReq + "\n";
+  sSel += "    bVecSel = 0;\n";
+  sSel += "    if (aDynamicT->m_bColCache && aDynamicT->m_nRows <= 65536) {\n";
+  sSel += "      nVecSel = nVecFilter_" + sStage + "(aDynamicT, aDynamicT->m_nRows, aiVecSel_" + sStage + ");\n";
+  sSel += "      if (aDynamicT->m_iErrorCode != (i8)EC_NONE)\n        return 0;\n";
+  sSel += "      iVecSel = 0;\n      bVecSel = 1;\n    }\n  }\n";
+  sSel += "  if (bVecSel) {\n";
+  sSel += "    if (iVecSel >= nVecSel)\n      goto L_Return;\n";
+  sSel += "    i8 iVecRow = aiVecSel_" + sStage + "[iVecSel++];\n";
+  sSel += "    aHeadLine = ADDR_ADD(struct HeadLine_T*,aHeadLine,(iVecRow - i_Row) * iHeadSize);\n";
+  sSel += "    i_Row = iVecRow;\n  }\n";
+  size_t pIfLine = pBlock + sBlock.size() - strlen("  if (i_Row == 0)\n");
+  sCode.replace(pIfLine, pIf - pIfLine, sSel);
+  //  - its locals
+  size_t pBrace = sCode.find("{\n");
+  if (pBrace == std::string::npos)
+    return;
+  sCode.insert(pBrace + 2, "  i8 bVecSel = 0, iVecSel = 0, nVecSel = 0;\n");
+
+  std::string sNew = sFun + sCode;
+  RASSERT(azHandler + sNew.size() < m_caCode + sizeof(m_caCode));
+  memcpy(azHandler, sNew.data(), sNew.size());
+  m_azCodeCrs = azHandler + sNew.size();
+  *m_azCodeCrs = '\0';
 }
 
 /*----------------------------------------------------------------------------*/
@@ -1870,6 +2294,10 @@ void CombinedSrc::vAppendFunctionFooter(OpSketch* pOpSketch, eHK eHandlerKind, b
     default:
       NEVER_REACH;
   }
+  // vectorized filter of a columnar scan (see vVecFilter)
+  if (eHandlerKind == HK_CRWBUFFER && ! bHasOrdAgg)
+    vVecFilter();
+
   s16KB sCode;
   bool bExtracted;
 
