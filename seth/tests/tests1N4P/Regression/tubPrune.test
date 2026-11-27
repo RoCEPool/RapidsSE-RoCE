@@ -1,0 +1,87 @@
+/*----------------------------------------------------------------------------*/
+/* tubPrune.test -- columns of a tub that the next stage never reads          */
+/*----------------------------------------------------------------------------*/
+
+// A join stage whose projection cannot stay in the stage (two aliases of one
+// table name the same column twice) hands every column of its rows to the
+// next stage. The columns the next stage never reads are stored as NULL and
+// no longer fetched (CombinedSrc bPruneTub). Each query runs twice and once
+// with /optimiser_off_tub_prune. The expected rows were computed from
+// TPCH/SF_0001 in Python.
+
+create table ${testName2}_orders (
+  O_ORDERKEY      INTEGER       NOT NULL,
+  O_CUSTKEY       INTEGER       NOT NULL,
+  O_ORDERSTATUS   CHAR(1)       NOT NULL,
+  O_TOTALPRICE    DECIMAL(15,2) NOT NULL,
+  O_ORDERDATE     DATE          NOT NULL,
+  O_ORDERPRIORITY CHAR(15)      NOT NULL,
+  O_CLERK         CHAR(15)      NOT NULL,
+  O_SHIPPRIORITY  INTEGER       NOT NULL,
+  O_COMMENT       VARCHAR(79)   NOT NULL
+);
+success
+create index ${testName2}_IxO_ORDERKEY on ${testName2}_orders (O_ORDERKEY);
+affected: 0
+load ${testName2}_orders "../TPCH/SF_0001/orders.tbl" <field_delimiter> = "|";
+success
+
+create table ${testName2}_lineitem (
+   L_ORDERKEY      INTEGER       NOT NULL,
+   L_PARTKEY       INTEGER       NOT NULL,
+   L_SUPPKEY       INTEGER       NOT NULL,
+   L_LINENUMBER    INTEGER       NOT NULL,
+   L_QUANTITY      DECIMAL(15,2) NOT NULL,
+   L_EXTENDEDPRICE DECIMAL(15,2) NOT NULL,
+   L_DISCOUNT      DECIMAL(15,2) NOT NULL,
+   L_TAX           DECIMAL(15,2) NOT NULL,
+   L_RETURNFLAG    CHAR(1)       NOT NULL,
+   L_LINESTATUS    CHAR(1)       NOT NULL,
+   L_SHIPDATE      DATE          NOT NULL,
+   L_COMMITDATE    DATE          NOT NULL,
+   L_RECEIPTDATE   DATE          NOT NULL,
+   L_SHIPINSTRUCT  CHAR(25)      NOT NULL,
+   L_SHIPMODE      CHAR(10)      NOT NULL,
+   L_COMMENT       VARCHAR(44)   NOT NULL
+);
+success
+create index ${testName2}_IxL_ORDERKEY on ${testName2}_lineitem (L_ORDERKEY);
+affected: 0
+load ${testName2}_lineitem "../TPCH/SF_0001/lineitem.tbl" <field_delimiter> = "|";
+success
+
+select count(*), sum(l.l_quantity), max(o1.o_clerk), min(o2.o_clerk)
+  from ${testName2}_orders o1, ${testName2}_orders o2, ${testName2}_lineitem l
+ where o1.o_orderkey = l.l_orderkey and o2.o_orderkey = l.l_orderkey and o1.o_orderdate < date '1995-01-01';
+rows: (2740, 69302, 'Clerk#000001000', 'Clerk#000000002')
+
+select count(*), sum(l.l_quantity), max(o1.o_clerk), min(o2.o_clerk)
+  from ${testName2}_orders o1, ${testName2}_orders o2, ${testName2}_lineitem l
+ where o1.o_orderkey = l.l_orderkey and o2.o_orderkey = l.l_orderkey and o1.o_orderdate < date '1995-01-01';
+rows: (2740, 69302, 'Clerk#000001000', 'Clerk#000000002')
+
+/optimiser_off_tub_prune
+select count(*), sum(l.l_quantity), max(o1.o_clerk), min(o2.o_clerk)
+  from ${testName2}_orders o1, ${testName2}_orders o2, ${testName2}_lineitem l
+ where o1.o_orderkey = l.l_orderkey and o2.o_orderkey = l.l_orderkey and o1.o_orderdate < date '1995-01-01';
+rows: (2740, 69302, 'Clerk#000001000', 'Clerk#000000002')
+
+select count(*), sum(l.l_extendedprice), max(o2.o_orderpriority), sum(o1.o_custkey)
+  from ${testName2}_orders o1, ${testName2}_orders o2, ${testName2}_lineitem l
+ where o1.o_orderkey = l.l_orderkey and o2.o_orderkey = l.l_orderkey and o1.o_orderdate < date '1995-01-01'
+   and l.l_shipdate >= date '1994-06-01';
+rows: (688, 17573461.90, '5-LOW', 52895)
+
+select count(*), sum(l.l_extendedprice), max(o2.o_orderpriority), sum(o1.o_custkey)
+  from ${testName2}_orders o1, ${testName2}_orders o2, ${testName2}_lineitem l
+ where o1.o_orderkey = l.l_orderkey and o2.o_orderkey = l.l_orderkey and o1.o_orderdate < date '1995-01-01'
+   and l.l_shipdate >= date '1994-06-01';
+rows: (688, 17573461.90, '5-LOW', 52895)
+
+/optimiser_off_tub_prune
+select count(*), sum(l.l_extendedprice), max(o2.o_orderpriority), sum(o1.o_custkey)
+  from ${testName2}_orders o1, ${testName2}_orders o2, ${testName2}_lineitem l
+ where o1.o_orderkey = l.l_orderkey and o2.o_orderkey = l.l_orderkey and o1.o_orderdate < date '1995-01-01'
+   and l.l_shipdate >= date '1994-06-01';
+rows: (688, 17573461.90, '5-LOW', 52895)
+

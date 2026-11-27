@@ -3,6 +3,8 @@
 /*============================================================================*/
 
 #include "BASE.h"
+#include <vector>
+#include <string>
 
 #include "Stencil.hpp"
 #include "Stream.hpp"
@@ -104,6 +106,7 @@ eEC Stencil::eSynthesise(PipelineDef *pPipelineDef) {
 
   // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
   // synthesise the code for each stage
+  std::vector<std::string> vsCode;
   for (i8 i_Stage = 0; i_Stage < nStages; i_Stage++) {
     Stencil* pStencil = new Stencil;
     StageDef *pStageDef = pPipelineDef->pGet(i_Stage);
@@ -117,11 +120,21 @@ eEC Stencil::eSynthesise(PipelineDef *pPipelineDef) {
     pStencil->vSynthesise(i_Stage == 0           ? true : false /* firstStage */,
                           i_Stage == nStages - 1 ? true : false /* lastStage */ );
 
-    // add the synthesised code to the stageDef
-    pStageDef->vCode(pStencil->szOpSource());
+    // keep the synthesised code of the stage
+    vsCode.push_back(std::string((const char*) pStencil->szOpSource()->azChar()));
 
     delete pStencil;
   }
+
+  // Between two consecutive stages: the columns that a stage writes to its
+  // tub and the next one never reads (CombinedSrc::bPruneTub). Then the code
+  // of each stage goes to its stageDef.
+  // (last pair first: a column that a stage no longer hands on may be one it
+  // no longer reads)
+  for (i8 i_Stage = nStages - 2; i_Stage >= 0; i_Stage--)
+    CombinedSrc::bPruneTub(vsCode[i_Stage], vsCode[i_Stage + 1]);
+  for (i8 i_Stage = 0; i_Stage < nStages; i_Stage++)
+    pPipelineDef->pGet(i_Stage)->vCode((Stz*) vsCode[i_Stage].c_str());
 
   return EC_NONE;
 }

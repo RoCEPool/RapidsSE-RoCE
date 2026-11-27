@@ -2,6 +2,7 @@
 /* CombinedSrc.hpp -- Combined Source                                         */
 /*============================================================================*/
 #pragma once
+#include <string>
 
 #include "Tub.hpp"
 #include "ePE.h"
@@ -39,6 +40,8 @@ namespace STORE {
     Footer m_xFooter;
 
   public:
+    // between two consecutive stages (Stencil::eSynthesise)
+    static bool bPruneTub(std::string& rsStageA, const std::string& rsStageB);
     void vHavingGroupsHere(bool b) { m_bHavingGroupsHere = b; }
     void *operator new(size_t);
 

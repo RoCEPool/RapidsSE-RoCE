@@ -1373,6 +1373,264 @@ void CombinedSrc::vColCacheInflate(char* azStart, char* azEnd)
 }
 
 /*----------------------------------------------------------------------------*/
+/* Columns of a tub that the next stage never reads. Runs when the code of    */
+/* every stage is made (Stencil::eSynthesise), on the code of two consecutive */
+/* stages: it edits the row handler of stage A, whose tub stage B reads.      */
+/*                                                                            */
+/* A stage that joins hands every column of both tables to the next stage     */
+/* when its projection could not be kept in the stage (two aliases of a       */
+/* table, as nation in TPC-H Q7 and Q8: Card_Stage::vReinstate_stages). Q7's  */
+/* join with lineitem fetched all 16 columns of every joined row and copied   */
+/* 19 columns, comments included, into the tub, of which the next stage read  */
+/* 5. DuckDB carries only the columns a later operator reads.                 */
+/*                                                                            */
+/* B's row struct SR_IT_0 is A's tub struct SR_TO_<n> (the same members: B    */
+/* reads the rows A wrote). A member that B's handler names through no        */
+/* pointer to its row struct is dead: A stores NULL in it instead of copying  */
+/* the value (the row keeps its layout), and a column of A's join that        */
+/* nothing else in A reads is no longer fetched from the column cache or      */
+/* decoded. Job tag /optimiser_off_tub_prune: as before.                      */
+/*----------------------------------------------------------------------------*/
+bool CombinedSrc::bPruneTub(std::string& rsStageA, const std::string& rsStageB)
+{
+  _static_
+
+  if (AM::JOB::bHasTag("<optimiser_off_tub_prune>"_Stz) || AM::JOB::bHasTag("<optimiser_off_all>"_Stz))
+    return false;
+
+  // the row handler of each stage: from its name to the next function
+  static const std::string sPds = "\nint iPdsRowHandler_";
+  static const std::string sCrw = "\nint iCrwHandler_";
+  size_t pA = rsStageA.find(sPds);
+  if (pA == std::string::npos)
+    pA = rsStageA.find(sCrw);
+  size_t pB = rsStageB.find(sPds);
+  if (pA == std::string::npos || pB == std::string::npos)
+    return false;
+  pA++;
+  pB++;
+  size_t pAEnd = rsStageA.find("\nint ", pA);
+  size_t pBEnd = rsStageB.find("\nint ", pB);
+  if (pAEnd == std::string::npos)
+    return false;
+  pAEnd++;
+  std::string sA = rsStageA.substr(pA, pAEnd - pA);
+  std::string sB = rsStageB.substr(pB, pBEnd == std::string::npos ? std::string::npos : pBEnd + 1 - pB);
+  // one row handler a stage
+  if (rsStageA.find(sPds, pAEnd - 1) != std::string::npos || rsStageA.find(sCrw, pAEnd - 1) != std::string::npos)
+    return false;
+
+  // consecutive stages: S<n> and S<n+1>
+  auto iStageNo = [](const std::string& sFun) -> i8 {
+    size_t u = sFun.find("_S");
+    size_t e = sFun.find('(');
+    if (u == std::string::npos || e == std::string::npos || u > e || e - u - 2 < 1 || e - u - 2 > 6)
+      return -1;
+    std::string sNo = sFun.substr(u + 2, e - u - 2);
+    if (sNo.find_first_not_of("0123456789") != std::string::npos)
+      return -1;
+    return atoll(sNo.c_str());
+  };
+  i8 iA = iStageNo(sA), iB = iStageNo(sB);
+  if (iA < 0 || iB != iA + 1)
+    return false;
+
+  // the members of a struct, one a line: "<type> <name>"
+  auto bMembers = [](const std::string& sCode, size_t pStruct, std::vector<std::string>& rvType,
+                     std::vector<std::string>& rvName) -> bool {
+    size_t a = sCode.find("{\n", pStruct);
+    if (a == std::string::npos)
+      return false;
+    a += 2;
+    for (;;) {
+      size_t b = sCode.find('\n', a);
+      if (b == std::string::npos)
+        return false;
+      std::string sLine = sCode.substr(a, b - a);
+      a = b + 1;
+      size_t f = sLine.find_first_not_of(" \t");
+      if (f == std::string::npos)
+        continue;
+      if (sLine.compare(f, 2, "};") == 0)
+        return ! rvName.empty();
+      size_t l = sLine.rfind(' ');
+      if (sLine.back() != ';' || l == std::string::npos || l <= f)
+        return false;
+      rvType.push_back(sLine.substr(f, l - f));
+      rvName.push_back(sLine.substr(l + 1, sLine.size() - l - 2));
+    }
+  };
+
+  // B's row struct
+  static const std::string sIt = "  struct SR_IT_0 {\n";
+  size_t pIt = sB.find(sIt);
+  if (pIt == std::string::npos || sB.find(sIt, pIt + 1) != std::string::npos)
+    return false;
+  std::vector<std::string> vTypeB, vNameB;
+  if (! bMembers(sB, pIt, vTypeB, vNameB))
+    return false;
+
+  // A's tub: one, written by the row handler through the tub extern
+  // (a tub, or a pot: the rows hashed to the partitions of the next stage)
+  size_t pTub = sA.find("  L_AddRowToTubPot:\n");
+  if (pTub == std::string::npos)
+    return false;
+  bool bPot = sA.find("m_fp_vExtern_PotAllotRowPds", pTub) != std::string::npos;
+  if (bPot == (sA.find("m_fp_vExtern_TubAllotRowPds", pTub) != std::string::npos))
+    return false;
+  const std::string sToDef = bPot ? "  struct SR_PO_" : "  struct SR_TO_";
+  size_t pTo = sA.rfind(sToDef, pTub);
+  if (pTo == std::string::npos || sA.find(sToDef) != pTo)
+    return false;
+  size_t pToEnd = sA.find(" {\n", pTo);
+  if (pToEnd == std::string::npos)
+    return false;
+  std::string sToStruct = sA.substr(pTo + 9, pToEnd - pTo - 9);       // "SR_TO_<n>"
+  std::string sToPtr = "p" + sToStruct;
+  std::vector<std::string> vTypeA, vNameA;
+  if (! bMembers(sA, pTo, vTypeA, vNameA) || vTypeA != vTypeB || vNameA != vNameB)
+    return false;
+  if (sA.find("struct " + sToStruct + "* " + sToPtr + ";") == std::string::npos)
+    return false;
+
+  // the pointers through which B reads its row struct
+  std::vector<std::string> vsPtr;
+  for (size_t a = sB.find("struct SR_IT_0"); a != std::string::npos; a = sB.find("struct SR_IT_0", a + 1)) {
+    size_t b = a + strlen("struct SR_IT_0");
+    while (b < sB.size() && (sB[b] == ' ' || sB[b] == '\t'))
+      b++;
+    if (b >= sB.size() || sB[b] != '*')
+      continue;                               // the definition
+    b++;
+    while (b < sB.size() && (sB[b] == ' ' || sB[b] == '\t'))
+      b++;
+    if (sB[b] == ')')
+      continue;                               // a cast
+    size_t c = b;
+    while (c < sB.size() && (isalnum((unsigned char) sB[c]) || sB[c] == '_'))
+      c++;
+    if (c == b || sB[c] != ';')
+      return false;                                 // a use that is not understood
+    vsPtr.push_back(sB.substr(b, c - b));
+  }
+  if (vsPtr.empty())
+    return false;
+  // the row must be read member by member only
+  if (sB.find("sizeof(struct SR_IT_0)") != std::string::npos)
+    return false;
+
+  // dead members
+  std::vector<bool> vbDead(vNameB.size(), false);
+  i8 nDead = 0;
+  for (size_t k = 0; k < vNameB.size(); k++) {
+    bool bRead = false;
+    for (const std::string& sPtr : vsPtr)
+      bRead = bRead || sB.find(sPtr + "->" + vNameB[k] + ".") != std::string::npos;
+    vbDead[k] = ! bRead;
+    nDead += ! bRead;
+  }
+  if (! nDead)
+    return false;
+
+  // A's tub: the dead columns become NULL (last first, the places stay valid)
+  static const std::string sSep = "  // - - - - - - - - - - - - - - - - - - - - - - - - - - - - -\n";
+  for (size_t k = vNameB.size(); k-- > 0; ) {
+    if (! vbDead[k])
+      continue;
+    std::string sHead = "  // column " + std::to_string((long long) k) + "\n";
+    size_t pCol = sA.find(sHead, pTub);
+    if (pCol == std::string::npos || sA.find(sHead, pCol + 1) != std::string::npos)
+      return false;
+    size_t pBody = pCol + sHead.size();
+    // the block ends at the separator of the next column, or at the jump
+    // that ends the tub
+    size_t pEnd = sA.find(sSep + "  // column ", pBody);
+    size_t pGoto = sA.find("goto ", pBody);
+    if (pGoto != std::string::npos)
+      pGoto = sA.rfind('\n', pGoto) + 1;     // the start of its line
+    if (pEnd == std::string::npos || (pGoto != std::string::npos && pGoto < pEnd))
+      pEnd = pGoto;
+    if (pEnd == std::string::npos)
+      return false;
+    std::string sBody = sA.substr(pBody, pEnd - pBody);
+    std::string sCell = sToPtr + "->" + vNameB[k] + ".";
+    if (sBody.find(sCell) == std::string::npos || sBody.find(':') != std::string::npos ||
+        sBody.find("goto") != std::string::npos || sBody.find("return") != std::string::npos)
+      return false;                                 // not a plain copy of the column
+    sA.replace(pBody, pEnd - pBody, "\n  " + sCell + "m_iAsI8 = C_DATUM_NULL;   // not read by the next stage\n\n");
+  }
+
+  // A's join: a cached column that nothing reads any more is not fetched, and
+  // not decoded on the row path
+  {
+    static const std::string sLoad = " = aaCcJ[";
+    static const std::string sJump = "goto L_InflateAColumn;";
+    static const std::string sSkip = "goto L_SkipAColumn;   ";
+    size_t a = sA.find(sLoad);
+    while (a != std::string::npos) {
+      size_t l = sA.rfind('\n', a) + 1;
+      size_t e = sA.find('\n', a);
+      std::string sLine = sA.substr(l, e - l);
+      size_t f = sLine.find_first_not_of(" \t");
+      size_t m = sLine.find(".m_iAsI8 = aaCcJ[");
+      bool bGone = false;
+      if (f != std::string::npos && m != std::string::npos && sLine.compare(f, 3, "pSR") == 0) {
+        std::string sRef = sLine.substr(f, m - f) + ".";
+        i8 n = 0;
+        for (size_t q = sA.find(sRef); q != std::string::npos; q = sA.find(sRef, q + 1))
+          n++;
+        std::string sDst = "ayDstByte = (byte*)&" + sRef + "m_iAsI8;";
+        size_t d = sA.find(sDst);
+        if (n == 2 && d != std::string::npos && sA.find(sDst, d + 1) == std::string::npos) {
+          size_t g = sA.find("goto L_", d);
+          if (g != std::string::npos && sA.compare(g, sJump.size(), sJump) == 0) {
+            sA.replace(g, sJump.size(), sSkip);
+            sA.erase(l, e + 1 - l);
+            bGone = true;
+          }
+        }
+      }
+      a = sA.find(sLoad, bGone ? l : a + 1);
+    }
+  }
+
+  // A's join: a cell of its row that is only copied from the row it read and
+  // never read is not copied; the member of the row it read may then be dead
+  // for the stage before A
+  {
+    static const std::string sMid = ".m_iAsI8 = pSR_";
+    size_t a = sA.find(sMid);
+    while (a != std::string::npos) {
+      size_t l = sA.rfind('\n', a) + 1;
+      size_t e = sA.find('\n', a);
+      std::string sLine = sA.substr(l, e - l);
+      size_t f = sLine.find_first_not_of(" \t");
+      size_t m = sLine.find(sMid);
+      bool bGone = false;
+      // "<cell of the join's row> = <cell>;"
+      if (f != std::string::npos && m != std::string::npos && sLine.compare(f, 7, "pSR_TJ_") == 0 &&
+          sLine.size() > m + 21 && sLine.compare(sLine.size() - 9, 9, ".m_iAsI8;") == 0) {
+        std::string sRef = sLine.substr(f, m - f) + ".";
+        std::string sFrom = sLine.substr(m + 12, sLine.size() - 9 - m - 12);
+        bool bPlain = sRef.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_->.") == std::string::npos &&
+                      sFrom.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_->") == std::string::npos;
+        i8 n = 0;
+        for (size_t q = sA.find(sRef); q != std::string::npos; q = sA.find(sRef, q + 1))
+          n++;
+        if (bPlain && n == 1) {
+          sA.erase(l, e + 1 - l);
+          bGone = true;
+        }
+      }
+      a = sA.find(sMid, bGone ? l : a + 1);
+    }
+  }
+
+  rsStageA.replace(pA, pAEnd - pA, sA);
+  return true;
+}
+
+/*----------------------------------------------------------------------------*/
 /* GROUP BY on strings: a cache of the groups of short keys. Runs on a        */
 /* complete row handler, before its footer. For every row the general-key     */
 /* GROUP BY copies each key string into a work entry (an extern call each),   */
