@@ -469,7 +469,18 @@ SkipListBlock* Pds::pAppend(void* pKey)
   // insert the key based on a random number
 //  u8 uSkipLevels = (RndLib::uInteger() % C_MAX_LVL_LEVELS) + 1;
 
-	i8 iRMod = (i8) (RndLib::uInteger() % (C_MAX_LVL_LEVELS));
+  // The number of levels of the new block, less one: geometric (each further
+  // level one time in four), from a generator of the thread. It was uniform
+  // over the 7 levels (4 tails to update for the average row appended) and
+  // drew from the process-wide Mersenne twister, whose state the threads
+  // shared. An append is done for every row passed between stages.
+  static thread_local u8 uAppendRnd = 0x9E3779B97F4A7C15ull ^ (u8) (size_t) &uAppendRnd;
+  uAppendRnd ^= uAppendRnd << 13;
+  uAppendRnd ^= uAppendRnd >> 7;
+  uAppendRnd ^= uAppendRnd << 17;
+  i8 iRMod = 0;
+  for (u8 u = uAppendRnd >> 11; iRMod < C_MAX_LVL_LEVELS - 1 && (u & 3) == 0; u >>= 2)
+    iRMod++;
 
   for (i8 i_Level = 0; i_Level < C_MAX_LVL_LEVELS; i_Level++) {
 
@@ -486,6 +497,7 @@ SkipListBlock* Pds::pAppend(void* pKey)
     u2 uTailOffset = m_auTailOffsets[i_Level];
     SkipListBlock* pCurrTail = (SkipListBlock*) pGetAddrFromOffset(uTailOffset);
 
+#ifdef WITH_ASSERT_MACRO
     if( uTailOffset != m_uInUseRootOffset) {
       i8 iCompareRes = m_fpCompare(pCurrTail->aItem(), pKey);
       UNUSED(iCompareRes);
@@ -499,6 +511,9 @@ SkipListBlock* Pds::pAppend(void* pKey)
     SkipListBlock* pNext = pNextSLBlock(pCurrTail, i_Level);
     UNUSED(pNext);
     ASSERT(pNext == nullptr);
+#else
+    UNUSED(pKey);
+#endif
 
     // Insert element, update offset values
     pCurrTail->m_xNode.vNext(i_Level, uNewOffset);
