@@ -34,6 +34,14 @@ order or joins again (ordered aggregate, top, limit, sort, another join;
      stored row of its key;
    - **replay** otherwise: look each stored row up in the index, as an index
      join does.
+   - **scan** in place of the walk when every buffer of the joined table
+     partition is a CRW buffer whose key column the column cache holds (no
+     deleted rows, within the budget) and their rows are as many as the
+     index's entries: read the keys from the cached 8-byte cells, buffer by
+     buffer, with the same Bloom filter and hash lookup; a match goes to the
+     join's dereference as a one-entry range of a made-up index entry
+     (buffer, item, key). A walk spends about 33 ns an entry following the
+     index's skip lists (Q7: 3M lineitem entries a partition for 121K rows).
 
 The thresholds come from SF1 measurements: walking beat probing down to one
 row per 75 index entries (Q9) and lost at one per 423 (Q19).
@@ -47,6 +55,8 @@ le_shortcut tag of the index lookup is now read the same way, once per
 
 - `/optimiser_off_hash_join`: index join as before.
 - `/optimiser_off_hash_join_bloom`: walk without the Bloom filter.
+- `/optimiser_off_hash_join_scan`: walk the index instead of scanning the
+  cached key column.
 - `/hash_join_walk`, `/hash_join_replay`: force the probe (tests).
 - `/hash_join_trace`: trace rows stored, index entries and the choice.
 
@@ -65,10 +75,13 @@ le_shortcut tag of the index lookup is now read the same way, once per
 The Bloom filter alone: Q21 426 -> 380, Q7 516 -> 469, Q3 317 -> 287,
 Q8 442 -> 417 ms; Q9 (most keys hit) unchanged.
 
+Scan against walk (local SF1, 4 threads, handler time of the stage summed
+over partitions, `/stageTimes`): Q7 S06 (lineitem) 190 -> 152 ms, S04
+(orders) 121 -> 84 ms; Q8 S05 (lineitem) 222 -> 188 ms.
+
 ## Limits and next steps
 
 - Outer joins, string or multi-column keys, joins that are not the first
   operator of a row handler: still index joins.
-- The walk reads the whole joined index; pushing the Bloom filter into a
-  columnar scan of the joined table (doc/design/columnar-scan.md) would let
-  it skip rows before decoding them.
+- The scan still reads every key of the joined table; the matched rows are
+  then decoded one by one through the column-cache join path.

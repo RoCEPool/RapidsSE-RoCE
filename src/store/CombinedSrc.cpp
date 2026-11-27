@@ -242,7 +242,8 @@ void CombinedSrc::vSynthesizeCode(Stencil* pStencil, bool bFirstStage, bool bLas
             i8 iHjFlags = (AM::JOB::bHasTag("<hash_join_walk>"_Stz) ? 1 : 0) |
                           (AM::JOB::bHasTag("<hash_join_replay>"_Stz) ? 2 : 0) |
                           (AM::JOB::bHasTag("<optimiser_off_hash_join_bloom>"_Stz) ? 4 : 0) |
-                          (AM::JOB::bHasTag("<hash_join_trace>"_Stz) ? 8 : 0);
+                          (AM::JOB::bHasTag("<hash_join_trace>"_Stz) ? 8 : 0) |
+                          (AM::JOB::bHasTag("<optimiser_off_hash_join_scan>"_Stz) ? 16 : 0);
             std::string sProbe =
                 "  if (aDynamicT->m_xIndexInfoJ[0].m_aHashJoin &&\n"
                 "      (aDynamicT->m_bHashProbe = iExtern_HashJoinMode(&aDynamicT->m_xIndexInfoJ[0], " +
@@ -1207,13 +1208,16 @@ void CombinedSrc::vAppendCodeHashJoin(OpSketch* pOpSketch, File* pOperatorFile)
   char* azPaW = strstr(azHandler, szPaW);
   RASSERT(azPaW && azPaW < azStart);
   std::string sEntry = "  void* hjEnt = 0; void* hjBuf = 0; void* hjNextEnt = 0; void* hjNextBuf = 0; char* hjNode = 0;\n"
+                       "  i8 hjScanI = 0, hjScanN = 0, hjScanItem = 0, hjScanBuf = 0; i8* hjScanKeys = 0;\n"
+                       "  struct Ent_int hjScanEnt[2];\n"
                        "  if (aDynamicT->m_bHashProbe)\n    goto L_HJProbe" + sNo + ";\n";
   vInsertText(azPaW + strlen(szPaW), sEntry.c_str());
   std::string sLoop = std::string(pOpSketch->m_sLabelOuterLoop.azChar()) + ":\n";
   char* azLoop = strstr(azHandler, sLoop.c_str());
   RASSERT(azLoop);
   std::string sNext = "  if (aDynamicT->m_bHashProbe == 1)\n    goto L_HJNext" + sNo + ";\n"
-                      "  if (aDynamicT->m_bHashProbe == 2)\n    goto L_HJReplayNext" + sNo + ";\n";
+                      "  if (aDynamicT->m_bHashProbe == 2)\n    goto L_HJReplayNext" + sNo + ";\n"
+                      "  if (aDynamicT->m_bHashProbe == 3)\n    goto L_HJScanNext" + sNo + ";\n";
   vInsertText(azLoop + sLoop.size(), sNext.c_str());
 }
 

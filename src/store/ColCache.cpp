@@ -441,6 +441,28 @@ namespace STORE {
     vFreeRetiredNL();
   }
 
+  // The cells of column iCol of a CRW buffer, built if missing; nullptr when
+  // it cannot be cached (deleted heads, not 8 bytes wide, the budget). *ppPin
+  // keeps the array alive until vColCacheUnpin, whatever happens to the cache
+  // meanwhile. For a hash join that scans the joined table's key column.
+  const i8* aColCacheColumn(void* pCrwBuffer, i8 iCol, void** ppPin)
+  {
+    if (iCol < 0 || iCol >= 64)
+      return nullptr;
+    std::lock_guard<std::mutex> oGuard(g_oColCacheLock);
+    ColCacheEntry* pEntry = pBuildColsNL((CrwBuffer*) pCrwBuffer, (u8) 1 << iCol);
+    if (! pEntry || iCol >= (i8) pEntry->vCols.size() || ! pEntry->vCols[iCol])
+      return nullptr;
+    auto* pPin = new std::shared_ptr<ColData>(pEntry->vCols[iCol]);
+    *ppPin = pPin;
+    return (*pPin)->vCells.data();
+  }
+
+  void vColCacheUnpin(void* pPin)
+  {
+    delete (std::shared_ptr<ColData>*) pPin;
+  }
+
   // Dynamic counts the handlers that may read join snapshots.
   void vColCacheJoinReaderEnter(void) { g_nJoinReaders.fetch_add(1); }
   void vColCacheJoinReaderLeave(void)

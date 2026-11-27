@@ -7,8 +7,9 @@
 // Bloom filter of the stored keys) or looks each stored row up in it, and
 // the first rows go straight to the index (IndexTree.cpp HashJoin,
 // CombinedSrc vAppendCodeHashJoin). Each query runs in each of the ways:
-// default, /hash_join_walk, /hash_join_replay, /optimiser_off_hash_join_bloom
-// and /optimiser_off_hash_join (index join). Many order rows join several
+// default, /hash_join_walk (a scan of the cached key column),
+// /optimiser_off_hash_join_scan (a walk of the index), /hash_join_replay,
+// /optimiser_off_hash_join_bloom and /optimiser_off_hash_join (index join). Many order rows join several
 // lineitem rows (duplicate keys); the stored rows hold strings. The expected
 // rows were computed from TPCH/SF_0001 in Python.
 
@@ -85,6 +86,22 @@ select count(*), sum(l_quantity), max(o_orderpriority), sum(o_custkey)
 rows: (2740, 69302.00, '5-LOW', 206420)
 
 /hash_join_replay
+select count(*), sum(l_quantity), max(o_clerk)
+  from ${testName2}_orders, ${testName2}_lineitem
+ where o_orderkey = l_orderkey and o_orderdate >= date '1998-07-01';
+rows: (91, 2276.00, 'Clerk#000000980')
+
+// /hash_join_walk /optimiser_off_hash_join_scan: walk the index, not the
+// cached key column
+/hash_join_walk
+/optimiser_off_hash_join_scan
+select count(*), sum(l_quantity), max(o_orderpriority), sum(o_custkey)
+  from ${testName2}_orders, ${testName2}_lineitem
+ where o_orderkey = l_orderkey and o_orderdate < date '1995-01-01';
+rows: (2740, 69302.00, '5-LOW', 206420)
+
+/hash_join_walk
+/optimiser_off_hash_join_scan
 select count(*), sum(l_quantity), max(o_clerk)
   from ${testName2}_orders, ${testName2}_lineitem
  where o_orderkey = l_orderkey and o_orderdate >= date '1998-07-01';

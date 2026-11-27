@@ -71,6 +71,35 @@ CrwTablePtn::~CrwTablePtn(void) noexcept(false)
 /*----------------------------------------------------------------------------*/
 /* analyze this buffer chain                                                  */
 /*----------------------------------------------------------------------------*/
+bool CrwTablePtn::bForEachCrwBuffer(const std::function<bool(CrwBuffer*)>& fVisit)
+{
+  _precondition_(_ADDRESS_,_MAGIC_,CN_CRWTABLEPTN,_FOOTER_);
+
+  SkipListBlock* pCursor = m_pPdsOfBufferIds->pFirstBlock();
+  HashMap* pHashMap = AM::pHashMap();
+  UNUSED(pHashMap);
+
+  while (pCursor) {
+    PdsBufferIdItem* pBufferIdStruct = (PdsBufferIdItem*) pCursor->aItem();
+#ifdef WITHOUT_BUFFERIDHASHMAP
+    CrwBuffer* pCrwBuffer = _pCrwBuffer(pBufferIdStruct->oBufferId.m_pvAsAddress);
+#else
+    // pEntryAt locks the entry (vAnalyze drops it after use)
+    HashMapEntry* pEntry = pHashMap->pEntryAt(pBufferIdStruct->oBufferId.m_pvAsAddress);
+    DataBuffer* pDataBuffer = _pDataBuffer(pEntry->m_pValObject);
+    bool bCrw = pDataBuffer->eGetClassNo() == CN_CRWBUFFER;
+    CrwBuffer* pCrwBuffer = bCrw ? _pCrwBuffer(pEntry->m_pValObject) : nullptr;
+    pEntry->vDropLock();
+    if (! bCrw)
+      return false;
+#endif
+    if (! fVisit(pCrwBuffer))
+      return false;
+    pCursor = m_pPdsOfBufferIds->pNextSLBlock(pCursor, 0);
+  }
+  return true;
+}
+
 void CrwTablePtn::vAnalyze(i8& nBuffers, i8& nRows, i8& jSumRowBytes)
 {
   _precondition_(_ADDRESS_,_MAGIC_,CN_CRWTABLEPTN,_FOOTER_);
