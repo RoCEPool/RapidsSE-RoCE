@@ -70,6 +70,7 @@ namespace STORE {
     void vPruneInflate(char* azStart, char* azEnd);
     void vColCacheInflate(char* azStart, char* azEnd);
     void vColCacheJoin(char* azStart, char* azEnd);
+    void vVecFilter(void);
     void vAppendCodeHavingGroups(void);
     void vInsertText(char* azAt, const char* szText);
     bool bHashJoinEligible(Stencil* pStencil, i8 iOpSketch, eHK eHandler);

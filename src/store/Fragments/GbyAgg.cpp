@@ -113,11 +113,18 @@ void vGbyAggHashIntKey(Dynamic_T* aDynamicT) {
   // marker-start
   // - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
   // find or add the group of the key
+  // (the rows of a group often come one after another: the group of the
+  // previous row, recorded by the int key end fragment, is tried first; a
+  // group's block never moves)
   bool bNewGroup = false;
 #ifdef WITH_CLANG
-  aEntFound = aExtern_GbyHashFindInt(&aDynamicT->m_xIndexInfoPL[CURRENT_DUP_OP],
-                                     *(i8*)aDynamicT->m_xIndexInfoPL[CURRENT_DUP_OP].m_aEntKey,
-                                     __PAYLOADBYTES__, &bNewGroup);
+  if (aDynamicT->m_xIndexInfoPL[CURRENT_DUP_OP].m_aEntLast &&
+      aDynamicT->m_xIndexInfoPL[CURRENT_DUP_OP].m_iKeyLast == *(i8*)aDynamicT->m_xIndexInfoPL[CURRENT_DUP_OP].m_aEntKey)
+    aEntFound = aDynamicT->m_xIndexInfoPL[CURRENT_DUP_OP].m_aEntLast;
+  else
+    aEntFound = aExtern_GbyHashFindInt(&aDynamicT->m_xIndexInfoPL[CURRENT_DUP_OP],
+                                       *(i8*)aDynamicT->m_xIndexInfoPL[CURRENT_DUP_OP].m_aEntKey,
+                                       __PAYLOADBYTES__, &bNewGroup);
 #endif
   if (bNewGroup) {
     aDynamicT->m_iRowsProcessed++;
