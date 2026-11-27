@@ -1035,6 +1035,19 @@ void CombinedSrc::vSynthesizeCode(Stencil* pStencil, bool bFirstStage, bool bLas
   if (m_iHgInside >= 0)
     vAppendCodeHavingGroups();
 
+  // The expression stack of a handler is an array of the handler
+  // (vFLAT_FunctionLocals.h) and no longer the one of Dynamic_T: only
+  // generated code uses it, a handler leaves it empty, and the C compiler can
+  // keep a stack that nothing else points to in registers, where every push
+  // to the shared one was a store that might change any other field read
+  // through aDynamicT. Same length, in place (the code is found by offsets).
+  if (! AM::JOB::bHasTag("<optimiser_off_local_stack>"_Stz)) {
+    static const char szShared[] = "aDynamicT->m_aW[0]";
+    static const char szLocal[]  = "aLocalW[0]        ";
+    for (char* a = strstr(m_caCode, szShared); a; a = strstr(a, szShared))
+      memcpy(a, szLocal, sizeof(szLocal) - 1);
+  }
+
   // - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
   // delete the code file pointers
   delete pOperatorFile;

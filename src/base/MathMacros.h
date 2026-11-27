@@ -103,6 +103,16 @@ static inline bool bBcd_fit(__int128 x, i8 iScale, union Bcd_T* pResult)
 // a + iSign * b, exact; returns false on overflow
 static inline bool bBcd_add(union Bcd_T a, union Bcd_T b, int iSign, union Bcd_T* pResult)
 {
+  // the usual case in 64 bits: equal scales (two values of a column, a
+  // running SUM) and a result that fits; both mantissas are below 2^55
+  if (a.m_iScale == b.m_iScale) {
+    i8 iSum = iSign > 0 ? (i8)a.m_iMantissa + (i8)b.m_iMantissa : (i8)a.m_iMantissa - (i8)b.m_iMantissa;
+    if (iSum <= C_BCD_MAX && iSum >= C_BCD_MIN) {
+      pResult->m_iMantissa = iSum;
+      pResult->m_iScale = a.m_iScale;
+      return true;
+    }
+  }
   __int128 xA = a.m_iMantissa;
   __int128 xB = b.m_iMantissa;
   i8 iScaleA = a.m_iScale;
@@ -121,6 +131,18 @@ static inline bool bBcd_add(union Bcd_T a, union Bcd_T b, int iSign, union Bcd_T
 // a * b, exact (scale s1 + s2); returns false on overflow
 static inline bool bBcd_mul(union Bcd_T a, union Bcd_T b, union Bcd_T* pResult)
 {
+  // the usual case in 64 bits: the product and its scale fit
+  {
+    i8 iProduct;
+    i8 iScale64 = (i8)a.m_iScale + (i8)b.m_iScale;
+    if (iScale64 <= C_BCD_SCALE_MAX_SYNTH && iScale64 >= -128 &&
+        ! __builtin_mul_overflow((i8)a.m_iMantissa, (i8)b.m_iMantissa, &iProduct) &&
+        iProduct <= C_BCD_MAX && iProduct >= C_BCD_MIN) {
+      pResult->m_iMantissa = iProduct;
+      pResult->m_iScale = iScale64;
+      return true;
+    }
+  }
   i8 iScale = a.m_iScale + b.m_iScale;
   __int128 x = (__int128)a.m_iMantissa * (__int128)b.m_iMantissa;
   while (iScale > C_BCD_SCALE_MAX_SYNTH) {

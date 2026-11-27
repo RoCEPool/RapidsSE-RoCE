@@ -42,6 +42,7 @@
   i8 iScale          __attribute__ ((unused));
   i8 iInCount        __attribute__ ((unused));
   i8 *paW            __attribute__ ((unused));
+  i8 aLocalW[256]    __attribute__ ((unused));   // the expression stack (CombinedSrc)
   i8 iScaleDiff      __attribute__ ((unused));
   i8 nMaxStrAreaLen  __attribute__ ((unused));
 

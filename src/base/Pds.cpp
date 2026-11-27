@@ -334,6 +334,23 @@ Row* Pds::pAllotRow(void)
 }
 
 /*----------------------------------------------------------------------------*/
+/* allot a row for generated code: every row a stage passes on comes through  */
+/* here, so the steps (space check, block, append, row, string area) are one  */
+/* flattened function instead of a dozen calls                                */
+/*----------------------------------------------------------------------------*/
+Row* Pds::pAllotRowDyn(char** paStrArea, i8* pnFreeBytes)
+{
+  if (m_xWsp.nFreeBytes() < C_2KB)
+    return nullptr;
+  Row* pRow = pAllotRow();
+  if (! pRow)
+    return nullptr;
+  *paStrArea = azDepositString_begin();
+  *pnFreeBytes = m_xWsp.nFreeBytes();
+  return pRow;
+}
+
+/*----------------------------------------------------------------------------*/
 /* allot a row copying the rowSingle into it                                  */
 /*----------------------------------------------------------------------------*/
 Row* Pds::pAllotRow(StreamDef* pStreamDef, i8 iVArgsBegin, ...)
