@@ -4,6 +4,7 @@
 
 #include <array>
 #include "BASE.h"
+namespace STORE { void vColCacheCatalogueChanged(void); }
 
 #include "RowCoder.hpp"
 #include "HeadLine.hpp"
@@ -65,6 +66,7 @@ HACK(Table,"define table partitioning");
 Table::Table(Stz* szTableNm, eTT eKind)
 : Operand(CN_TABLE)
 {
+  STORE::vColCacheCatalogueChanged();   // statement caches (Steps_SqlCompiler.cpp)
   _precondition_(_ADDRESS_,_MAGIC_,CN_TABLE,_FOOTER_);
 
 #ifdef WITH_STATISTICS_COUNTERS
@@ -123,6 +125,7 @@ Table::Table(Stz* szTableNm, eTT eKind)
 /*----------------------------------------------------------------------------*/
 Table::~Table(void) noexcept(false)
 {
+  STORE::vColCacheCatalogueChanged();   // statement caches (Steps_SqlCompiler.cpp)
   _precondition_(_ADDRESS_,_MAGIC_,CN_TABLE,_FOOTER_);
   //vTrace(">>>>>>>>>>>>>>>>>>>>> ~Table gets called\n"_Stz);
   m_pIdxVec->vClear();

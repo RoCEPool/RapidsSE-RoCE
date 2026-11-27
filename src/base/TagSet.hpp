@@ -2,6 +2,7 @@
 /* TagSet.hpp -- ename-value set                                              */
 /*============================================================================*/
 #pragma once
+#include <string>
 
 #include "eTN.h"
 #include "SegmentedArrayNL_t.hpp"
@@ -86,6 +87,8 @@ namespace BASE
     void vAppend(Stz* szName, Stz* szValue);
   
     void vConcat(String* pCmd);
+    // "name=value;" of every tag but szSkipName, in order (a key for caches)
+    void vAppendKey(std::string& rsKey, Stz* szSkipName);
     void vConcat(String* pCmd, i8 i_Tag);
     void vContentDump(void);
     void vCopy(TagSet* pSrcTagSet);

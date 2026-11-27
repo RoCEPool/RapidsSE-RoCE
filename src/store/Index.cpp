@@ -3,6 +3,7 @@
 /*============================================================================*/
 
 #include "BASE.h"
+namespace STORE { void vColCacheCatalogueChanged(void); }
 
 #include "SkipRoots.hpp"
 #include "EntBuffer.hpp"
@@ -119,6 +120,7 @@ void Index::operator delete(void* aAddrIndex)
 Index::Index(Stz* szIndexNm)
 : Operand(CN_INDEX)
 {
+  STORE::vColCacheCatalogueChanged();   // statement caches (Steps_SqlCompiler.cpp)
   _precondition_(_ADDRESS_,_MAGIC_,CN_INDEX,_FOOTER_);
 
 #ifdef WITH_STATISTICS_COUNTERS
@@ -142,6 +144,7 @@ Index::Index(Stz* szIndexNm)
 /*----------------------------------------------------------------------------*/
 Index::~Index(void) noexcept(false)
 {
+  STORE::vColCacheCatalogueChanged();   // statement caches (Steps_SqlCompiler.cpp)
   _precondition_(_ADDRESS_,_MAGIC_,CN_INDEX,_FOOTER_);
   
 #ifdef WITH_STATISTICS_COUNTERS
