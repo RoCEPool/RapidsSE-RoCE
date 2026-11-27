@@ -133,7 +133,20 @@ void Step::vDynamicExecute(void)
 
     // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
   // execute the dynamic function
-  iResult = afFun(aDynamicT);
+  if (pDynamic->m_bStageTimes) {
+    if (pDynamic->m_nStageCalls == 0 && m_pOp && m_pOp->pStage())
+      pDynamic->m_sStageName.vCopy(m_pOp->pStage()->szStageNm());
+    struct timespec xT0, xT1;
+    clock_gettime(CLOCK_MONOTONIC, &xT0);
+    iResult = afFun(aDynamicT);
+    clock_gettime(CLOCK_MONOTONIC, &xT1);
+    pDynamic->m_nStageNs += (i8) (xT1.tv_sec - xT0.tv_sec) * 1000000000 + (xT1.tv_nsec - xT0.tv_nsec);
+    pDynamic->m_nStageCalls++;
+    if (pDataBuffer)
+      pDynamic->m_nStageRows += aDynamicT->m_nRows;
+  }
+  else
+    iResult = afFun(aDynamicT);
 
   // EOS marker handler done ?
   if ( afFun ==  m_pLogicUnit->m_afEosHandler ) {

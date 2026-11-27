@@ -2,6 +2,7 @@
 /* CrwTablePtn.hpp -- Crw Table Partition                                     */
 /*============================================================================*/
 #pragma once
+#include <functional>
 
 namespace STORE
 {
@@ -34,6 +35,10 @@ namespace STORE
     ~CrwTablePtn(void) noexcept(false);
 
     void vAnalyze(i8& nBuffers, i8& nRows, i8& jSumRowBytes);
+    // calls fVisit for each CRW buffer of the partition, in order; false if
+    // the partition holds a buffer that is not a CRW buffer (a PDS) or
+    // fVisit returned false
+    bool bForEachCrwBuffer(const std::function<bool(CrwBuffer*)>& fVisit);
     void vAppendBuffer(CrwBuffer* pCrwBuffer);
     void vAppendBuffer(Pds* pPds);
     i8   nBuffers(void);

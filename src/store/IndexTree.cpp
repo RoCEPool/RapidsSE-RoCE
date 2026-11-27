@@ -36,10 +36,19 @@
 #include <stdlib.h>
 extern "C" void* aExtern_EntBufferNextEntry(void** ppEntBuffer, void* aPrevEntry);
 extern "C" void vExtern_GbyHashFree(void* aIndexInfo);
+namespace STORE {
+  const i8* aColCacheColumn(void* pCrwBuffer, i8 iCol, void** ppPin);
+  void vColCacheUnpin(void* pPin);
+}
 static void* aGbyHashFindGen(void* aIndexInfo, void* pEntWrk, void* aKey, i8 nPayloadBytes, bool* pbNew);
 #include "Op.hpp"
 #include "Stage.hpp"
 #include "Stream.hpp"
+#include "TablePtn.hpp"
+#include "CrwTablePtn.hpp"
+#include "StreamDef.hpp"
+#include "Column.hpp"
+#include "CrwBuffer.hpp"
 
 bool mbCheckPriorVec = false;
 
@@ -323,6 +332,7 @@ extern "C" void vExtern_IndexFind(void* aIndexInfo, char* aTableName, char* aInd
 
 	i8 iIndexNo = pIndex->iIndexNo();
 	pIndexInfo->m_aIndexTree = pTablePtn->pIndexTree(iIndexNo);
+	pIndexInfo->m_aTable = pTablePtn;   // a hash join scans its buffers
 }
 
 /*----------------------------------------------------------------------------*/
@@ -1899,6 +1909,10 @@ namespace {
     char* aAllLast = nullptr;
     i8 nRows = 0;
     std::vector<u8> auBloom;             // Bloom filter of the keys (walk)
+    // scan: the buffers of the joined table partition and the cached cells
+    // of its key column, read in place of a walk of the index
+    struct ScanBuf { i8 iBuffer; i8 nHeads; const i8* aiKeys; void* pPin; };
+    std::vector<ScanBuf> vScan;
     bool bBuilt = true;                  // axSlot holds every stored row
 
     static u8 uHash(i8 iKey) { u8 u = (u8) iKey * 0x9E3779B97F4A7C15ull; return u ^ (u >> 29); }
@@ -1986,22 +2000,90 @@ namespace {
     {
       for (char* a : aaBlock)
         free(a);
+      for (const ScanBuf& x : vScan)
+        vColCacheUnpin(x.pPin);
     }
   };
 }
 
 // how to probe, once all rows are stored: 0 none stored, 1 walk the index
 // (and the Bloom filter of the keys is ready), 2 look each stored row up in
-// the index (replay). A walk visits every entry of the index, mostly only
+// the index (replay), 3 scan the cached key column of the joined table where
+// it would walk (bHashJoinScanPrepare). A walk visits every entry of the index, mostly only
 // testing the Bloom filter; a lookup descends the index. Measured on SF1,
 // walking pays when the join's rows (those that went straight to the index
 // too) are at least one per HJ_ENTRIES_PER_ROW entries: Q3, Q7 (1 per 41-50)
 // and Q9 (1 per 75) are faster walking, Q19 (1 per 423) slower.
 static const i8 HJ_ENTRIES_PER_ROW = 150;
 
+// The probe of a walk without the index: each row of the joined table
+// partition, read from the cached cells of the index's key column, buffer by
+// buffer. A walk of the index read an entry of a tree buffer for each row
+// (about 33 ns each; TPC-H Q7 walks 3M entries of lineitem a partition to
+// join 60K rows); the cached cells are 8 bytes each, one after the other, as
+// DuckDB scans the column. The rows found are the rows of the index: only when
+// every buffer of the partition is a CRW buffer whose key column can be
+// cached (no deleted rows, within the budget) and their rows are as many as
+// the index's entries; otherwise the index is walked.
+static bool bHashJoinScanPrepare(IndexInfo* pIndexInfo, HashJoin* pHash)
+{
+  for (const HashJoin::ScanBuf& x : pHash->vScan)
+    vColCacheUnpin(x.pPin);
+  pHash->vScan.clear();
+  TablePtn* pTablePtn = (TablePtn*) pIndexInfo->m_aTable;
+  IndexDef* pIndexDef = (IndexDef*) pIndexInfo->m_aIndexDef;
+  IndexTree* pIndexTree = (IndexTree*) pIndexInfo->m_aIndexTree;
+  if (! pTablePtn || ! pIndexDef || ! pIndexTree || pIndexDef->nColumns() != 1 ||
+      ! pTablePtn->pCrwTablePtn())
+    return false;
+  Column* pKey = pTablePtn->pTable()->pStreamDef()->pFindColumn(pIndexDef->pGetColumn(0)->szColNm());
+  if (! pKey)
+    return false;
+  i8 iCol = pKey->iColumnNo();
+  i8 nRows = 0;
+  bool bOk = pTablePtn->pCrwTablePtn()->bForEachCrwBuffer([&](CrwBuffer* pCrwBuffer) {
+    i8 nHeads = pCrwBuffer->pRowTray()->pNub()->nHeads();
+    if (nHeads <= 0)
+      return true;
+    // the buffer number of the row references (Ent_int Rrf): its first head
+    // is at C_ADR_REGION + buffer * 1MB + C_CRW_FIRSTHEAD
+    u8 uHead0 = (u8) pCrwBuffer->aGetHead(0) - (u8) 0x204800000000ull;
+    if ((uHead0 & ((1u << 20) - 1)) != 640)
+      return false;
+    void* pPin = nullptr;
+    const i8* aiKeys = aColCacheColumn(pCrwBuffer, iCol, &pPin);
+    if (! aiKeys)
+      return false;
+    pHash->vScan.push_back(HashJoin::ScanBuf{(i8) (uHead0 >> 20), nHeads, aiKeys, pPin});
+    nRows += nHeads;
+    return true;
+  });
+  if (! bOk || nRows != pIndexTree->nEntriesNow()) {
+    for (const HashJoin::ScanBuf& x : pHash->vScan)
+      vColCacheUnpin(x.pPin);
+    pHash->vScan.clear();
+    return false;
+  }
+  return true;
+}
+
+// scan: buffer i of the joined table partition (*piBuffer its number, *paiKeys
+// the cells of the key column); its rows, or -1 past the last
+extern "C" i8 iExtern_HashJoinScanBuffer(void* aIndexInfo, i8 i, i8* piBuffer, void** paiKeys)
+{
+  IndexInfo* pIndexInfo = (IndexInfo*) aIndexInfo;
+  HashJoin* pHash = (HashJoin*) pIndexInfo->m_aHashJoin;
+  if (! pHash || i < 0 || i >= (i8) pHash->vScan.size())
+    return -1;
+  *piBuffer = pHash->vScan[i].iBuffer;
+  *paiKeys = (void*) pHash->vScan[i].aiKeys;
+  return pHash->vScan[i].nHeads;
+}
+
 // iFlags (job tags, read when the code was made: the tag set is not read
 // here, on a worker thread): 1 /hash_join_walk, 2 /hash_join_replay,
-// 4 /optimiser_off_hash_join_bloom, 8 /hash_join_trace
+// 4 /optimiser_off_hash_join_bloom, 8 /hash_join_trace,
+// 16 /optimiser_off_hash_join_scan. Returns 3 (scan) where a walk would be.
 extern "C" i8 iExtern_HashJoinMode(void* aIndexInfo, i8 iFlags)
 {
   IndexInfo* pIndexInfo = (IndexInfo*) aIndexInfo;
@@ -2037,6 +2119,13 @@ extern "C" i8 iExtern_HashJoinMode(void* aIndexInfo, i8 iFlags)
     }
   pIndexInfo->m_auHjBloom = pHash->auBloom.data();
   pIndexInfo->m_uHjBloomMask = nBits - 1;
+  // scan the key column of the joined table instead of walking its index
+  // (job tag /optimiser_off_hash_join_scan: walk)
+  if (! (iFlags & 16) && bHashJoinScanPrepare(pIndexInfo, pHash)) {
+    if (iFlags & 8)
+      vTrace("hash join: scan of %lld buffers\n"_Stz, (long long) pHash->vScan.size());
+    return 3;
+  }
   return 1;
 }
 

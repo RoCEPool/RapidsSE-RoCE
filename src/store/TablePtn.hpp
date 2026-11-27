@@ -44,6 +44,7 @@ namespace STORE
     LglPtn  tLglPtn(void);
 
     Table* pTable(void);
+    CrwTablePtn* pCrwTablePtn(void) { return m_pCrwTablePtn; }
 
     void vAddIndex(IndexTree* pIndexTree);
     void vAppendBuffer(DataBuffer* pDataBuffer, i8& nRowsInserted);

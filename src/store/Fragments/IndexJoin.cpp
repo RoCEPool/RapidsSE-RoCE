@@ -290,6 +290,9 @@ void vHashJoinPosition_int(Dynamic_T* aDynamicT) {
   void* hjNextEnt;
   void* hjNextBuf;
   char* hjNode;
+  i8 hjScanI, hjScanN, hjScanItem, hjScanBuf;
+  i8* hjScanKeys;
+  struct Ent_int hjScanEnt[2];
 #define __HJ_VCH__ {-1}
 
 	__L_LABEL_OUTER_LOOP__:
@@ -333,6 +336,8 @@ void vHashJoinPosition_int(Dynamic_T* aDynamicT) {
   L_HJProbe__HJ_N__:
   if (aDynamicT->m_bHashProbe == 2)
     goto L_HJReplay__HJ_N__;
+  if (aDynamicT->m_bHashProbe == 3)
+    goto L_HJScan__HJ_N__;
   hjEnt = aExtern_IndexTreeBegin(__INDEX_INFO__[CURRENT_DUP_OP].m_aIndexTree, &hjBuf);
 
   L_HJEntry__HJ_N__:
@@ -380,6 +385,62 @@ void vHashJoinPosition_int(Dynamic_T* aDynamicT) {
   hjEnt = hjNextEnt;
   hjBuf = hjNextBuf;
   goto L_HJEntry__HJ_N__;
+
+  // - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+  // hash join, scan (in place of the walk): the rows of the joined table
+  // partition, buffer by buffer, their keys from the cached key column; a row
+  // with stored rows is passed to the dereference as a one-entry range of a
+  // made-up entry with its key and row reference (the step to the next entry
+  // goes to the end of that range when m_bHashProbe is 3)
+  L_HJScan__HJ_N__:
+  hjScanI = -1;
+
+  L_HJScanBuf__HJ_N__:
+  hjScanI++;
+  hjScanN = iExtern_HashJoinScanBuffer(&__INDEX_INFO__[CURRENT_DUP_OP], hjScanI, &hjScanBuf, (void**)&hjScanKeys);
+  if (hjScanN < 0)
+    goto L_Return;
+  hjScanItem = -1;
+
+  L_HJScanRow__HJ_N__:
+  hjScanItem++;
+  if (hjScanItem >= hjScanN)
+    goto L_HJScanBuf__HJ_N__;
+  {
+    u8 uHjKey = (u8)hjScanKeys[hjScanItem] * 0x9E3779B97F4A7C15ull;
+    uHjKey ^= uHjKey >> 29;
+    u8 uHjMask = __INDEX_INFO__[CURRENT_DUP_OP].m_uHjBloomMask;
+    u8* auHjBloom = __INDEX_INFO__[CURRENT_DUP_OP].m_auHjBloom;
+    u8 vHjKey = uHjKey >> 32;
+    if (auHjBloom &&
+        ( ! (auHjBloom[(uHjKey & uHjMask) >> 6] & (1ull << (uHjKey & 63))) ||
+          ! (auHjBloom[(vHjKey & uHjMask) >> 6] & (1ull << (vHjKey & 63))) ))
+      goto L_HJScanRow__HJ_N__;
+  }
+  hjNode = (char*)aExtern_HashJoinFirst(&__INDEX_INFO__[CURRENT_DUP_OP], hjScanKeys[hjScanItem]);
+  if ( ! hjNode)
+    goto L_HJScanRow__HJ_N__;
+  memset(&hjScanEnt[0], 0, sizeof(hjScanEnt));
+  hjScanEnt[0].Rrf.m_uBuffer = (u8)hjScanBuf;
+  hjScanEnt[0].Rrf.m_uItem   = (u8)hjScanItem;
+  hjScanEnt[0].m_iIntElm0    = hjScanKeys[hjScanItem];
+
+  L_HJScanUse__HJ_N__:
+  p__STRUCT_FROM___PREV_OP = (struct __STRUCT_FROM___PREV_OP*)(hjNode + 24);
+  bPdsRowBuffer = false;
+  p__STRUCT_TO___CURRENT_OP = (struct __STRUCT_TO___CURRENT_OP*)__ROW_INFO_TO__[CURRENT_DUP_OP].m_aRowCellArray;
+  __ROW_INFO_TO__[CURRENT_DUP_OP].m_acStrArea = __ROW_INFO_TO__[CURRENT_DUP_OP].m_acStrAreaSav;
+  szStrArea = __ROW_INFO_TO__[CURRENT_DUP_OP].m_acStrArea;
+  __INDEX_INFO__[CURRENT_DUP_OP].m_aEntInt = &hjScanEnt[0];
+  __INDEX_INFO__[CURRENT_DUP_OP].m_aEntBuffer = 0;
+  __INDEX_INFO__[CURRENT_DUP_OP].m_aEntUpper = &hjScanEnt[1];
+  goto __L_LABEL_INDEX_DEREF__;
+
+  L_HJScanNext__HJ_N__:
+  hjNode = *(char**)hjNode;
+  if (hjNode)
+    goto L_HJScanUse__HJ_N__;
+  goto L_HJScanRow__HJ_N__;
 
   // - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
   // hash join, replay (few rows stored): each stored row, in arrival order,
@@ -607,7 +668,10 @@ void vIndexJoinReturn(Dynamic_T* aDynamicT) {
 
   // move to next entry
 #ifdef WITH_CLANG
-  __INDEX_INFO__[CURRENT_DUP_OP].m_aEntInt = (struct Ent_int*)aDynamicT->m_fp_aExtern_EntBufferNextEntry(
+  if (aDynamicT->m_bHashProbe == 3)
+    __INDEX_INFO__[CURRENT_DUP_OP].m_aEntInt = (struct Ent_int*)__INDEX_INFO__[CURRENT_DUP_OP].m_aEntUpper;
+  else
+    __INDEX_INFO__[CURRENT_DUP_OP].m_aEntInt = (struct Ent_int*)aDynamicT->m_fp_aExtern_EntBufferNextEntry(
       &__INDEX_INFO__[CURRENT_DUP_OP].m_aEntBuffer, __INDEX_INFO__[CURRENT_DUP_OP].m_aEntInt);
 #endif
 
@@ -687,7 +751,10 @@ i8 iIndexJoinConstraint(Dynamic_T* aDynamicT) {
 
   // move to next entry
 #ifdef WITH_CLANG
-  __INDEX_INFO__[CURRENT_DUP_OP].m_aEntInt = (struct Ent_int*)aDynamicT->m_fp_aExtern_EntBufferNextEntry(
+  if (aDynamicT->m_bHashProbe == 3)
+    __INDEX_INFO__[CURRENT_DUP_OP].m_aEntInt = (struct Ent_int*)__INDEX_INFO__[CURRENT_DUP_OP].m_aEntUpper;
+  else
+    __INDEX_INFO__[CURRENT_DUP_OP].m_aEntInt = (struct Ent_int*)aDynamicT->m_fp_aExtern_EntBufferNextEntry(
       &__INDEX_INFO__[CURRENT_DUP_OP].m_aEntBuffer, __INDEX_INFO__[CURRENT_DUP_OP].m_aEntInt);
 #endif
 
@@ -752,7 +819,10 @@ i8 iIndexAntiJoinConstraint(Dynamic_T* aDynamicT) {
 			aDynamicT->m_bProcessRow = false;
 
     // move to next entry
-    aDynamicT->m_xIndexInfoJ[CURRENT_DUP_OP].m_aEntInt = (struct Ent_int*)aDynamicT->m_fp_aExtern_EntBufferNextEntry(
+    if (aDynamicT->m_bHashProbe == 3)
+      aDynamicT->m_xIndexInfoJ[CURRENT_DUP_OP].m_aEntInt = (struct Ent_int*)aDynamicT->m_xIndexInfoJ[CURRENT_DUP_OP].m_aEntUpper;
+    else
+      aDynamicT->m_xIndexInfoJ[CURRENT_DUP_OP].m_aEntInt = (struct Ent_int*)aDynamicT->m_fp_aExtern_EntBufferNextEntry(
         &aDynamicT->m_xIndexInfoJ[CURRENT_DUP_OP].m_aEntBuffer, aDynamicT->m_xIndexInfoJ[CURRENT_DUP_OP].m_aEntInt);
 #endif
         goto __L_LABEL_INDEX_DEREF__;
@@ -810,7 +880,10 @@ i8 iIndexSemiJoinConstraint(Dynamic_T* aDynamicT) {
     if ( ! aDynamicT->m_bProcessRow ) {
 #ifdef WITH_CLANG
         // move to next entry
-    aDynamicT->m_xIndexInfoJ[CURRENT_DUP_OP].m_aEntInt = (struct Ent_int*)aDynamicT->m_fp_aExtern_EntBufferNextEntry(
+    if (aDynamicT->m_bHashProbe == 3)
+      aDynamicT->m_xIndexInfoJ[CURRENT_DUP_OP].m_aEntInt = (struct Ent_int*)aDynamicT->m_xIndexInfoJ[CURRENT_DUP_OP].m_aEntUpper;
+    else
+      aDynamicT->m_xIndexInfoJ[CURRENT_DUP_OP].m_aEntInt = (struct Ent_int*)aDynamicT->m_fp_aExtern_EntBufferNextEntry(
         &aDynamicT->m_xIndexInfoJ[CURRENT_DUP_OP].m_aEntBuffer, aDynamicT->m_xIndexInfoJ[CURRENT_DUP_OP].m_aEntInt);
 #endif
         goto __L_LABEL_INDEX_DEREF__;
