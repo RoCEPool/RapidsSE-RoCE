@@ -38,23 +38,15 @@ extern "C" void vExtern_TubAllotRowPds(void* aDynamic, char** aazStrArea, i8* pn
 		RASSERT(CN_TUB == pTub->eGetClassNo());
 
 		Pds* pPdsRowBuffer = _pPds(pTub->pWorkingBuffer());
-
-		if (! pPdsRowBuffer || pPdsRowBuffer->nFreeBytes() < C_2KB) {
-			pPdsRowBuffer = new Pds((StreamDef*)pDynamicT->m_aStreamDefOut);
-			pTub->vAddBuffer(pPdsRowBuffer);
-		}
-
-		Row* pRowDst = pPdsRowBuffer->pAllotRow();
+		Row* pRowDst = pPdsRowBuffer ? pPdsRowBuffer->pAllotRowDyn(aazStrArea, pnMaxStrAreaLen) : nullptr;
 
 		if (pRowDst == nullptr) {
 			pPdsRowBuffer = new Pds((StreamDef*)pDynamicT->m_aStreamDefOut);
 			pTub->vAddBuffer(pPdsRowBuffer);
-			pRowDst = pPdsRowBuffer->pAllotRow();
+			pRowDst = pPdsRowBuffer->pAllotRowDyn(aazStrArea, pnMaxStrAreaLen);
 			RASSERT(pRowDst);
 		}
 
-		*aazStrArea = (char*)pPdsRowBuffer->azDepositString_begin();
-		*pnMaxStrAreaLen = pPdsRowBuffer->nFreeBytes();
 		pDynamicT->m_xRowInfoPO[0].m_aPdsRowBuffer = pPdsRowBuffer;
 		pDynamicT->m_xRowInfoTO[0].m_aRowCellArray = pRowDst->aCellArray();
 	}

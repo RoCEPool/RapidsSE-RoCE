@@ -42,23 +42,14 @@ extern "C" void vExtern_PotAllotRowPds(void* aDynamicT, byte* aMixIn, i8 iMixInL
 
 		// get pds row buffer for given partition (new a first buffer if ncessary)
 		Pds* pPdsRowBuffer = _pPds(pPot->pBuffer(tLglPtn));
-		if (! pPdsRowBuffer || pPdsRowBuffer->nFreeBytes() < C_2KB) {
-			pPdsRowBuffer = new Pds((StreamDef*)pDynamic->m_aStreamDefOut);
-			pPot->vAddBuffer(tLglPtn,pPdsRowBuffer);
-		}
-
-		// new a row in pds row buffer (new another pds row buffer if necessary)
-		aDstRow = pPdsRowBuffer->pAllotRow();
+		aDstRow = pPdsRowBuffer ? pPdsRowBuffer->pAllotRowDyn(aazStrArea, pnMaxStrAreaLen) : nullptr;
 		if (! aDstRow) {
+			// (vAddBuffer sets the partition of the buffer)
 			pPdsRowBuffer = new Pds((StreamDef*)pDynamic->m_aStreamDefOut);
 			pPot->vAddBuffer(tLglPtn,pPdsRowBuffer);
-			aDstRow = pPdsRowBuffer->pAllotRow();
+			aDstRow = pPdsRowBuffer->pAllotRowDyn(aazStrArea, pnMaxStrAreaLen);
 			RASSERT(aDstRow);
 		}
-		*aazStrArea = (char*)pPdsRowBuffer->azDepositString_begin();
-		*pnMaxStrAreaLen = pPdsRowBuffer->nFreeBytes();
-
-		pPdsRowBuffer->vLglPtn(tLglPtn);
 
 		pDynamic->m_xRowInfoPO[0].m_aRowCellArray = aDstRow->aCellArray();
 		pDynamic->m_xRowInfoPO[0].m_aPdsRowBuffer = pPdsRowBuffer;

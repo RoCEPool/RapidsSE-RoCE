@@ -1,0 +1,190 @@
+/*----------------------------------------------------------------------------*/
+/* gbyKeyCache.test -- GROUP BY on short string keys                          */
+/*----------------------------------------------------------------------------*/
+
+// A GROUP BY whose keys are all strings packs each key shorter than 8 bytes
+// into a word and finds its group in a cache of the handler before the hash
+// table of the groups (CombinedSrc vGbyKeyCache). Each query runs twice and
+// once with /optimiser_off_gby_key_cache. The expected rows were computed from
+// TPCH/SF_0001 and DATA/Regression/gbyKeyCache.csv in Python.
+
+create table ${testName2}_orders (
+  O_ORDERKEY      INTEGER       NOT NULL,
+  O_CUSTKEY       INTEGER       NOT NULL,
+  O_ORDERSTATUS   CHAR(1)       NOT NULL,
+  O_TOTALPRICE    DECIMAL(15,2) NOT NULL,
+  O_ORDERDATE     DATE          NOT NULL,
+  O_ORDERPRIORITY CHAR(15)      NOT NULL,
+  O_CLERK         CHAR(15)      NOT NULL,
+  O_SHIPPRIORITY  INTEGER       NOT NULL,
+  O_COMMENT       VARCHAR(79)   NOT NULL
+);
+success
+create index ${testName2}_IxO_ORDERKEY on ${testName2}_orders (O_ORDERKEY);
+affected: 0
+load ${testName2}_orders "../TPCH/SF_0001/orders.tbl" <field_delimiter> = "|";
+success
+
+create table ${testName2}_lineitem (
+   L_ORDERKEY      INTEGER       NOT NULL,
+   L_PARTKEY       INTEGER       NOT NULL,
+   L_SUPPKEY       INTEGER       NOT NULL,
+   L_LINENUMBER    INTEGER       NOT NULL,
+   L_QUANTITY      DECIMAL(15,2) NOT NULL,
+   L_EXTENDEDPRICE DECIMAL(15,2) NOT NULL,
+   L_DISCOUNT      DECIMAL(15,2) NOT NULL,
+   L_TAX           DECIMAL(15,2) NOT NULL,
+   L_RETURNFLAG    CHAR(1)       NOT NULL,
+   L_LINESTATUS    CHAR(1)       NOT NULL,
+   L_SHIPDATE      DATE          NOT NULL,
+   L_COMMITDATE    DATE          NOT NULL,
+   L_RECEIPTDATE   DATE          NOT NULL,
+   L_SHIPINSTRUCT  CHAR(25)      NOT NULL,
+   L_SHIPMODE      CHAR(10)      NOT NULL,
+   L_COMMENT       VARCHAR(44)   NOT NULL
+);
+success
+create index ${testName2}_IxL_ORDERKEY on ${testName2}_lineitem (L_ORDERKEY);
+affected: 0
+load ${testName2}_lineitem "../TPCH/SF_0001/lineitem.tbl" <field_delimiter> = "|";
+success
+
+create table ${testName2}_keys (
+  s VARCHAR(20),
+  x INTEGER
+);
+success
+Load ${testName2}_keys "../DATA/Regression/gbyKeyCache.csv" ;
+success
+
+// one short key (1 byte)
+select o_orderstatus, count(*), sum(o_totalprice) from ${testName2}_orders group by o_orderstatus order by o_orderstatus;
+ordered rows:
+  ('F', 726, 71865528.68)
+  ('O', 729, 74094825.73)
+  ('P', 45, 5048550.14)
+
+select o_orderstatus, count(*), sum(o_totalprice) from ${testName2}_orders group by o_orderstatus order by o_orderstatus;
+ordered rows:
+  ('F', 726, 71865528.68)
+  ('O', 729, 74094825.73)
+  ('P', 45, 5048550.14)
+
+/optimiser_off_gby_key_cache
+select o_orderstatus, count(*), sum(o_totalprice) from ${testName2}_orders group by o_orderstatus order by o_orderstatus;
+ordered rows:
+  ('F', 726, 71865528.68)
+  ('O', 729, 74094825.73)
+  ('P', 45, 5048550.14)
+
+// two short keys (TPC-H Q1)
+select l_returnflag, l_linestatus, count(*), sum(l_quantity) from ${testName2}_lineitem
+ where l_shipdate <= date '1998-09-02' group by l_returnflag, l_linestatus order by l_returnflag, l_linestatus;
+ordered rows:
+  ('A', 'F', 1478, 37474)
+  ('N', 'F', 38, 1041)
+  ('N', 'O', 2937, 75067)
+  ('R', 'F', 1456, 36470)
+
+select l_returnflag, l_linestatus, count(*), sum(l_quantity) from ${testName2}_lineitem
+ where l_shipdate <= date '1998-09-02' group by l_returnflag, l_linestatus order by l_returnflag, l_linestatus;
+ordered rows:
+  ('A', 'F', 1478, 37474)
+  ('N', 'F', 38, 1041)
+  ('N', 'O', 2937, 75067)
+  ('R', 'F', 1456, 36470)
+
+/optimiser_off_gby_key_cache
+select l_returnflag, l_linestatus, count(*), sum(l_quantity) from ${testName2}_lineitem
+ where l_shipdate <= date '1998-09-02' group by l_returnflag, l_linestatus order by l_returnflag, l_linestatus;
+ordered rows:
+  ('A', 'F', 1478, 37474)
+  ('N', 'F', 38, 1041)
+  ('N', 'O', 2937, 75067)
+  ('R', 'F', 1456, 36470)
+
+// a key of 8 bytes or more goes to the hash table, with a short one
+select o_orderpriority, o_orderstatus, count(*), sum(o_orderkey) from ${testName2}_orders
+ group by o_orderpriority, o_orderstatus order by o_orderpriority, o_orderstatus;
+ordered rows:
+  ('1-URGENT', 'F', 138, 389927)
+  ('1-URGENT', 'O', 159, 525741)
+  ('1-URGENT', 'P', 9, 24183)
+  ('2-HIGH', 'F', 137, 388818)
+  ('2-HIGH', 'O', 143, 386243)
+  ('2-HIGH', 'P', 9, 22765)
+  ('3-MEDIUM', 'F', 147, 431991)
+  ('3-MEDIUM', 'O', 151, 474105)
+  ('3-MEDIUM', 'P', 7, 23007)
+  ('4-NOT SPECIFIED', 'F', 161, 504719)
+  ('4-NOT SPECIFIED', 'O', 139, 396705)
+  ('4-NOT SPECIFIED', 'P', 12, 35393)
+  ('5-LOW', 'F', 143, 440579)
+  ('5-LOW', 'O', 137, 418765)
+  ('5-LOW', 'P', 8, 24321)
+
+select o_orderpriority, o_orderstatus, count(*), sum(o_orderkey) from ${testName2}_orders
+ group by o_orderpriority, o_orderstatus order by o_orderpriority, o_orderstatus;
+ordered rows:
+  ('1-URGENT', 'F', 138, 389927)
+  ('1-URGENT', 'O', 159, 525741)
+  ('1-URGENT', 'P', 9, 24183)
+  ('2-HIGH', 'F', 137, 388818)
+  ('2-HIGH', 'O', 143, 386243)
+  ('2-HIGH', 'P', 9, 22765)
+  ('3-MEDIUM', 'F', 147, 431991)
+  ('3-MEDIUM', 'O', 151, 474105)
+  ('3-MEDIUM', 'P', 7, 23007)
+  ('4-NOT SPECIFIED', 'F', 161, 504719)
+  ('4-NOT SPECIFIED', 'O', 139, 396705)
+  ('4-NOT SPECIFIED', 'P', 12, 35393)
+  ('5-LOW', 'F', 143, 440579)
+  ('5-LOW', 'O', 137, 418765)
+  ('5-LOW', 'P', 8, 24321)
+
+/optimiser_off_gby_key_cache
+select o_orderpriority, o_orderstatus, count(*), sum(o_orderkey) from ${testName2}_orders
+ group by o_orderpriority, o_orderstatus order by o_orderpriority, o_orderstatus;
+ordered rows:
+  ('1-URGENT', 'F', 138, 389927)
+  ('1-URGENT', 'O', 159, 525741)
+  ('1-URGENT', 'P', 9, 24183)
+  ('2-HIGH', 'F', 137, 388818)
+  ('2-HIGH', 'O', 143, 386243)
+  ('2-HIGH', 'P', 9, 22765)
+  ('3-MEDIUM', 'F', 147, 431991)
+  ('3-MEDIUM', 'O', 151, 474105)
+  ('3-MEDIUM', 'P', 7, 23007)
+  ('4-NOT SPECIFIED', 'F', 161, 504719)
+  ('4-NOT SPECIFIED', 'O', 139, 396705)
+  ('4-NOT SPECIFIED', 'P', 12, 35393)
+  ('5-LOW', 'F', 143, 440579)
+  ('5-LOW', 'O', 137, 418765)
+  ('5-LOW', 'P', 8, 24321)
+
+// keys of 1, 2, 7, 8 and 9 bytes (NULL keys left out)
+select s, count(*), sum(x) from ${testName2}_keys where s is not null group by s;
+rows:
+  ('a', 2, 5)
+  ('abcdefg', 1, 6)
+  ('abcdefgh', 2, 12)
+  ('abcdefghi', 1, 10)
+  ('bb', 2, 11)
+
+select s, count(*), sum(x) from ${testName2}_keys where s is not null group by s;
+rows:
+  ('a', 2, 5)
+  ('abcdefg', 1, 6)
+  ('abcdefgh', 2, 12)
+  ('abcdefghi', 1, 10)
+  ('bb', 2, 11)
+
+/optimiser_off_gby_key_cache
+select s, count(*), sum(x) from ${testName2}_keys where s is not null group by s;
+rows:
+  ('a', 2, 5)
+  ('abcdefg', 1, 6)
+  ('abcdefgh', 2, 12)
+  ('abcdefghi', 1, 10)
+  ('bb', 2, 11)
+

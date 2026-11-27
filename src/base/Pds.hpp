@@ -62,6 +62,10 @@ namespace BASE
 
     // public:
     Row*            pAllotRow(void);
+    // a row for generated code (the tub and pot externs), in one call with
+    // the calls it makes inlined: the row, where its strings go and the free
+    // bytes; nullptr when the buffer is (nearly) full
+    Row* pAllotRowDyn(char** paStrArea, i8* pnFreeBytes) __attribute__((flatten));
     Row*            pAllotRow(StreamDef* pStreamDef, i8 iVargsBegin, ...);
 //  Row*            pAllotRowFull(char** aaStzSet);
     SkipListBlock*  pAppend(void* pKey);

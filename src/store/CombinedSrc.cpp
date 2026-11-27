@@ -1035,6 +1035,19 @@ void CombinedSrc::vSynthesizeCode(Stencil* pStencil, bool bFirstStage, bool bLas
   if (m_iHgInside >= 0)
     vAppendCodeHavingGroups();
 
+  // The expression stack of a handler is an array of the handler
+  // (vFLAT_FunctionLocals.h) and no longer the one of Dynamic_T: only
+  // generated code uses it, a handler leaves it empty, and the C compiler can
+  // keep a stack that nothing else points to in registers, where every push
+  // to the shared one was a store that might change any other field read
+  // through aDynamicT. Same length, in place (the code is found by offsets).
+  if (! AM::JOB::bHasTag("<optimiser_off_local_stack>"_Stz)) {
+    static const char szShared[] = "aDynamicT->m_aW[0]";
+    static const char szLocal[]  = "aLocalW[0]        ";
+    for (char* a = strstr(m_caCode, szShared); a; a = strstr(a, szShared))
+      memcpy(a, szLocal, sizeof(szLocal) - 1);
+  }
+
   // - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
   // delete the code file pointers
   delete pOperatorFile;
@@ -1357,6 +1370,152 @@ void CombinedSrc::vColCacheInflate(char* azStart, char* azEnd)
   while (azAt > azStart && azAt[-1] != '\n')
     azAt--;
   vInsertText(azAt, sFast.c_str());
+}
+
+/*----------------------------------------------------------------------------*/
+/* GROUP BY on strings: a cache of the groups of short keys. Runs on a        */
+/* complete row handler, before its footer. For every row the general-key     */
+/* GROUP BY copies each key string into a work entry (an extern call each),   */
+/* then hashes and compares the entry in the hash table of the groups         */
+/* (another call): TPC-H Q1 does this 6 million times for 4 groups. When all  */
+/* keys are strings, the handler first packs each key shorter than 8 bytes    */
+/* into a word and looks the words up in a small direct-mapped cache of its   */
+/* own (group -> payload); only a miss, a longer or a NULL key goes the old   */
+/* way, and its group is then cached. The payload of a group never moves      */
+/* while the groups are in the hash table (GbyHash); with the tree            */
+/* (/optimiser_off_hash_gbyagg) nothing is cached. Job tag                    */
+/* /optimiser_off_gby_key_cache: as before.                                   */
+/*----------------------------------------------------------------------------*/
+void CombinedSrc::vGbyKeyCache(void)
+{
+  _precondition_(_ADDRESS_,_MAGIC_,CN_COMBINEDSRC,_FOOTER_);
+
+  if (AM::JOB::bHasTag("<optimiser_off_gby_key_cache>"_Stz) || AM::JOB::bHasTag("<optimiser_off_all>"_Stz))
+    return;
+
+  // the handler
+  char* azHandler = nullptr;
+  for (char* a = m_azCodeCrs - 20; a > m_caCode; a--)
+    if (a[-1] == '\n' && (strncmp(a, "int iCrwHandler_", 16) == 0 || strncmp(a, "int iPdsRowHandler_", 19) == 0 ||
+                          strncmp(a, "int iRowHandler_", 16) == 0)) {
+      azHandler = a;
+      break;
+    }
+  if (! azHandler)
+    return;
+  if (m_iHgBefore >= azHandler - m_caCode || m_iHgInside >= azHandler - m_caCode)
+    return;
+  std::string sCode(azHandler, m_azCodeCrs - azHandler);
+  if (sCode.find("\nint ", 1) != std::string::npos)
+    return;                                   // not the last function
+  size_t u = sCode.find('_');
+  size_t e = sCode.find('(');
+  if (u == std::string::npos || e == std::string::npos || u > e)
+    return;
+  std::string sStage = sCode.substr(u + 1, e - u - 1);
+  if (sStage.empty() || sStage.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_") != std::string::npos)
+    return;
+
+  // one general-key GROUP BY on the first payload index
+  static const std::string sFind = "aEntFound = aDynamicT->m_fp_aExtern_IndexTreeFindInsertGenAsc(aDynamicT, ";
+  static const std::string sKey  = "  aDynamicT->m_xIndexInfoPL[0].m_aEntInt->m_iIntElm0 = 0;\n";
+  static const std::string sAgg  = "// aggregate the payload\n";
+  size_t pFind = sCode.find(sFind);
+  if (pFind == std::string::npos || sCode.find(sFind, pFind + 1) != std::string::npos)
+    return;
+  size_t pKey = sCode.rfind(sKey, pFind);
+  if (pKey == std::string::npos || sCode.find(sKey) != pKey)
+    return;
+  size_t pAgg = sCode.find(sAgg, pFind);
+  if (pAgg == std::string::npos)
+    return;
+  while (pAgg > 0 && sCode[pAgg - 1] != '\n')
+    pAgg--;
+  // nothing after the group is found reads how it was found
+  if (sCode.find("aEntFound", pAgg) != std::string::npos || sCode.find("bInsertedEntry", pAgg) != std::string::npos ||
+      sCode.find("L_GbyKeyCached_") != std::string::npos)
+    return;
+
+  // the keys: each a string cell pushed and appended to the work entry
+  std::vector<std::string> vsCell;
+  {
+    static const std::string sPush = "_PSH_COL(";
+    static const std::string sApp  = "_ASSIGN_TO_ENTSTZ(aDynamicT->m_xIndexInfoPL[0].m_aEntWrk)";
+    size_t pEnd = sCode.find("  // check for error\n", pKey);
+    if (pEnd == std::string::npos || pEnd > pFind)
+      return;
+    bool bPushed = false;
+    for (size_t a = pKey + sKey.size(); a < pEnd; ) {
+      size_t b = sCode.find('\n', a);
+      std::string sLine = sCode.substr(a, b - a);
+      a = b + 1;
+      size_t f = sLine.find_first_not_of(" \t");
+      if (f == std::string::npos)
+        continue;
+      sLine = sLine.substr(f);
+      if (! bPushed) {
+        if (sLine.compare(0, sPush.size(), sPush) != 0 || sLine.size() < sPush.size() + 10 ||
+            sLine.compare(sLine.size() - 9, 9, ".m_iAsI8)") != 0)
+          return;
+        std::string sCell = sLine.substr(sPush.size(), sLine.size() - sPush.size() - 1);
+        if (sCell.compare(0, 3, "pSR") != 0 ||
+            sCell.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_->.") != std::string::npos)
+          return;
+        vsCell.push_back(sCell);
+        bPushed = true;
+      }
+      else {
+        if (sLine != sApp)
+          return;
+        bPushed = false;
+      }
+    }
+    if (bPushed || vsCell.empty() || vsCell.size() > 4)
+      return;
+  }
+  std::string sN = std::to_string((long long) vsCell.size());
+
+  // back to front, the places stay valid
+  //  - after the group is found the old way: cache it
+  std::string sStore;
+  sStore += "  // cache the group of a short key (CombinedSrc::vGbyKeyCache)\n";
+  sStore += "  if (bGkShort && (u8)aDynamicT->m_xIndexInfoPL[0].m_aGbyHash > 1) {\n";
+  for (size_t k = 0; k < vsCell.size(); k++)
+    sStore += "    axGk[uGkSlot].auKey[" + std::to_string((long long) k) + "] = auGkKey[" + std::to_string((long long) k) + "];\n";
+  sStore += "    axGk[uGkSlot].aiPayload = aDynamicT->m_aiPayload;\n  }\n";
+  sStore += "  L_GbyKeyCached_" + sStage + ":;\n";
+  sCode.insert(pAgg, sStore);
+  //  - before the key is built: pack the keys and try the cache
+  std::string sTry;
+  sTry += "  // the group of a short key from the cache of the handler (CombinedSrc::vGbyKeyCache)\n";
+  sTry += "  bGkShort = 1;\n";
+  for (size_t k = 0; k < vsCell.size(); k++) {
+    std::string sK = std::to_string((long long) k);
+    sTry += "  {\n    i8 iGkCell = " + vsCell[k] + ";\n    auGkKey[" + sK + "] = 0;\n";
+    sTry += "    if (iGkCell == C_DATUM_NULL || iGkCell == 0)\n      bGkShort = 0;\n    else {\n";
+    sTry += "      const unsigned char* ayGk = (const unsigned char*)iGkCell;\n      int nGk;\n";
+    sTry += "      for (nGk = 0; nGk < 8 && ayGk[nGk]; nGk++)\n        auGkKey[" + sK + "] |= (u8)ayGk[nGk] << (8 * nGk);\n";
+    sTry += "      if (nGk == 8)\n        bGkShort = 0;\n    }\n  }\n";
+  }
+  sTry += "  if (bGkShort) {\n    uGkSlot = 0;\n";
+  for (size_t k = 0; k < vsCell.size(); k++)
+    sTry += "    uGkSlot = (uGkSlot ^ auGkKey[" + std::to_string((long long) k) + "]) * 0x9E3779B97F4A7C15ull;\n";
+  sTry += "    uGkSlot >>= 60;\n    if (axGk[uGkSlot].aiPayload";
+  for (size_t k = 0; k < vsCell.size(); k++)
+    sTry += " && axGk[uGkSlot].auKey[" + std::to_string((long long) k) + "] == auGkKey[" + std::to_string((long long) k) + "]";
+  sTry += ") {\n      aDynamicT->m_aiPayload = axGk[uGkSlot].aiPayload;\n      goto L_GbyKeyCached_" + sStage + ";\n    }\n  }\n";
+  sCode.insert(pKey, sTry);
+  //  - its locals
+  size_t pBrace = sCode.find("{\n");
+  if (pBrace == std::string::npos || pBrace > pKey)
+    return;
+  sCode.insert(pBrace + 2, "  u8 auGkKey[" + sN + "]; int bGkShort = 0; u8 uGkSlot = 0;\n"
+                           "  struct { u8 auKey[" + sN + "]; i8* aiPayload; } axGk[16] = {{{0}, 0}};\n");
+
+  RASSERT(azHandler + sCode.size() < m_caCode + sizeof(m_caCode));
+  memcpy(azHandler, sCode.data(), sCode.size());
+  m_azCodeCrs = azHandler + sCode.size();
+  *m_azCodeCrs = '\0';
 }
 
 /*----------------------------------------------------------------------------*/
@@ -2294,6 +2453,9 @@ void CombinedSrc::vAppendFunctionFooter(OpSketch* pOpSketch, eHK eHandlerKind, b
     default:
       NEVER_REACH;
   }
+  // the groups of short string keys, found without the hash table
+  if ((eHandlerKind == HK_CRWBUFFER || eHandlerKind == HK_PDSROWBUFFER || eHandlerKind == HK_ROWBUFFER) && ! bHasOrdAgg)
+    vGbyKeyCache();
   // vectorized filter of a columnar scan (see vVecFilter)
   if (eHandlerKind == HK_CRWBUFFER && ! bHasOrdAgg)
     vVecFilter();
