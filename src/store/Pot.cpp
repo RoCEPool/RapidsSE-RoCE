@@ -96,6 +96,8 @@ Pot::Pot(void)
 
   m_iSynthKey = 0;
   m_pPdsOfBufferAddrs = new Pds_t<PotPdsItem>(PdsUtils::iPotPdsItemKeyCompare);
+  for (i8 i = 0; i < C_LAST_PTNS; i++)
+    m_apLast[i] = nullptr;
   
   _checkInitialised_(CN_LGLBUFSET);
   
@@ -156,6 +158,9 @@ void Pot::vRepair(Object* pObject)
 DataBuffer* Pot::pBuffer(i8 i_Ptn)
 {
   _precondition_(_ADDRESS_,_MAGIC_,CN_POT,_FOOTER_);
+
+  if (i_Ptn >= 0 && i_Ptn < C_LAST_PTNS && m_apLast[i_Ptn])
+    return m_apLast[i_Ptn];
 
   PotPdsItem oSearchKey;
   oSearchKey.iLglPtn = i_Ptn;
@@ -256,6 +261,8 @@ DataBuffer* Pot::pDangling(i8 i_Ptn)
     // if the LglPtn matches.
     if(pItem != nullptr && pItem->iLglPtn == i_Ptn) {
       DataBuffer* pDataBuffer = pItem->pDataBuffer;
+      if (i_Ptn >= 0 && i_Ptn < C_LAST_PTNS)
+        m_apLast[i_Ptn] = nullptr;
       bool bResult = m_pPdsOfBufferAddrs->bDelete((void*)pItem);
       UNUSED(bResult);
       ASSERT(bResult);
@@ -342,6 +349,8 @@ void Pot::vAddBuffer(i8 i_Ptn, DataBuffer* pAddBuffer)
 
   SkipListBlock* pResultBlock = m_pPdsOfBufferAddrs->pInsert((void*) &oItem);
   RASSERT(pResultBlock != nullptr);
+  if (i_Ptn >= 0 && i_Ptn < C_LAST_PTNS)
+    m_apLast[i_Ptn] = pAddBuffer;
 
   *(PotPdsItem*)(pResultBlock->aItem()) = oItem;
 }

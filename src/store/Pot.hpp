@@ -16,6 +16,10 @@ namespace STORE
   public:
     i8                      m_iSynthKey;     // Synthetic key used to append buffers to the Pds structure
     Pds_t<PotPdsItem>*      m_pPdsOfBufferAddrs; // Pds of buffers
+    // the last buffer added for each of the first partitions (the one rows
+    // are allotted in), so that a row does not search the Pds of buffers
+    static const i8         C_LAST_PTNS = 64;
+    DataBuffer*             m_apLast[C_LAST_PTNS];
 
     // must be last
     Footer m_xFooter;
