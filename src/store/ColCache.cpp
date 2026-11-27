@@ -124,8 +124,18 @@ namespace STORE {
   void vColCacheJoinDropNL(void* pCrwBuffer);
   void vColCacheJoinDropAllNL(void);
 
+  // counts the changes of table data (every hook of CrwBuffer.cpp that drops
+  // a buffer's entry, and truncate) and of the catalogue (a Table or an Index
+  // made or deleted): a cached statement is as old as the count it was
+  // compiled at (Steps_SqlCompiler.cpp)
+  std::atomic<i8> g_iDataEpoch(0);
+  i8 iColCacheDataEpoch(void) { return g_iDataEpoch.load(std::memory_order_relaxed); }
+  // a table or an index was made or dropped
+  void vColCacheCatalogueChanged(void) { g_iDataEpoch.fetch_add(1, std::memory_order_relaxed); }
+
   void vColCacheDrop(void* pCrwBuffer)
   {
+    g_iDataEpoch.fetch_add(1, std::memory_order_relaxed);
     std::lock_guard<std::mutex> oGuard(g_oColCacheLock);
     vColCacheJoinDropNL(pCrwBuffer);
     auto it = g_oColCache.find(pCrwBuffer);
@@ -141,6 +151,7 @@ namespace STORE {
   // Drops the whole cache (truncate).
   void vColCacheBumpEpoch(void)
   {
+    g_iDataEpoch.fetch_add(1, std::memory_order_relaxed);
     std::lock_guard<std::mutex> oGuard(g_oColCacheLock);
     g_iColCacheEpoch++;
     vColCacheJoinDropAllNL();

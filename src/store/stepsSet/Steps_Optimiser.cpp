@@ -18,6 +18,57 @@
 #include "LogicUnit.hpp"
 #include "Error.hpp"
 #include "Card.hpp"
+#include "ExtendedText.hpp"
+#include "StatementCache.hpp"
+#include <mutex>
+#include <unordered_map>
+
+// Optimiser cache (see the statement cache in Steps_SqlCompiler.cpp): the
+// optimiser turns the text of a pipeline statement into the text of the
+// optimised statement and of its C code, reading the job tags, the catalogue
+// and the statistics. The same text with the same tags, while no data or
+// catalogue object has changed, gets the same two texts back: dissect notes
+// the hit, transform does nothing, weave hands the texts to the job. Not
+// used with the join order tags (they return rows), on a grid of more than
+// one node, or with the job tag /optimiser_off_sql_cache.
+namespace {
+  struct OptPending { std::string sKey; i8 iEpoch = 0; bool bHit = false; STORE::OptCacheItem xItem; };
+  std::mutex g_oOptPendingLock;
+  std::unordered_map<void*, OptPending> g_oOptPending;     // by Optimiser
+
+  void vTextBlocks(ExtendedText* pText, std::vector<std::string>& rvs)
+  {
+    for (i8 i = 0; i < pText->nTextBlocks(); i++)
+      rvs.push_back(std::string((const char*) pText->szTextBlock(i)->azChar()));
+  }
+
+  ExtendedText* pTextOfBlocks(const std::vector<std::string>& rvs)
+  {
+    ExtendedText* pText = new ExtendedText();
+    for (const std::string& s : rvs)
+      pText->vConcat((Stz*) s.c_str());
+    return pText;
+  }
+
+  // the note of dissect for this optimiser, taken out
+  bool bTakePending(void* pOptimiser, OptPending& rxPending)
+  {
+    std::lock_guard<std::mutex> oGuard(g_oOptPendingLock);
+    auto it = g_oOptPending.find(pOptimiser);
+    if (it == g_oOptPending.end())
+      return false;
+    rxPending = it->second;
+    g_oOptPending.erase(it);
+    return true;
+  }
+
+  bool bPendingHit(void* pOptimiser)
+  {
+    std::lock_guard<std::mutex> oGuard(g_oOptPendingLock);
+    auto it = g_oOptPending.find(pOptimiser);
+    return it != g_oOptPending.end() && it->second.bHit;
+  }
+}
 
 /*----------------------------------------------------------------------------*/
 /* add primitives                                                             */
@@ -55,6 +106,37 @@ void Step::vOptimiserDissect(void)
     
   VertexSpec* pUnOptPlineSpec =
   _pVertexSpec(m_oDataStack.pPopPtr(__func__));
+
+  // optimiser cache: the key is the statement of the job and its tags
+  {
+    Job* pJob = MY::pJob();
+    TagSet* pJobTags = pJob ? pJob->pJobTags() : nullptr;
+    ExtendedText* pCmdText = m_pJob.bIsNotNull() ? m_pJob->pCmdText() : nullptr;
+    if (pJobTags && pCmdText && AM::GRID::nKnownNodes() <= 1 &&
+        ! pJobTags->bHasName("<optimiser_off_sql_cache>"_Stz) &&
+        ! pJobTags->bHasName("<joinOrder>"_Stz) && ! pJobTags->bHasName("<joinPermutations>"_Stz) &&
+        ! pJobTags->bHasName("<optimiser_trace>"_Stz)) {
+      OptPending xPending;
+      xPending.iEpoch = STORE::iColCacheDataEpoch();
+      pJobTags->vAppendKey(xPending.sKey, "<sqlStatement>"_Stz);
+      std::vector<std::string> vsCmd;
+      vTextBlocks(pCmdText, vsCmd);
+      for (const std::string& sBlock : vsCmd) {
+        xPending.sKey += '\n';
+        xPending.sKey += sBlock;
+      }
+      xPending.bHit = STORE::bOptCacheGet(xPending.sKey, xPending.iEpoch, xPending.xItem);
+      bool bHit = xPending.bHit;
+      {
+        std::lock_guard<std::mutex> oGuard(g_oOptPendingLock);
+        g_oOptPending[(void*) *m_pLogicUnit->m_xpOptimiser] = xPending;
+      }
+      if (bHit) {
+        EXIT();
+        return;
+      }
+    }
+  }
 
   m_pLogicUnit->m_xpOptimiser->vDissect(pUnOptPlineSpec);
 
@@ -149,9 +231,21 @@ void Step::vOptimiserTransform(void)
 		pPdsRowBuffer = _pPds(*(m_pLogicUnit)->m_xpPds);
   }
 
+  // optimiser cache: the result is known
+  if (bPendingHit((void*) *m_pLogicUnit->m_xpOptimiser)) {
+    m_oDataStack.vPushBol(true);
+    vPhaseMark("optimise_end");
+    EXIT();
+    return;
+  }
+
   Error xError;
   CardIter::vXformTimesReset();
   bResult = m_pLogicUnit->m_xpOptimiser->bTransform(xError, pPdsRowBuffer);
+  if (! bResult) {                        // nothing to keep
+    OptPending xDropped;
+    bTakePending((void*) *m_pLogicUnit->m_xpOptimiser, xDropped);
+  }
   if (pJobTags->bHasName("<phaseTimes>"_Stz)) {
     s256 sJob;
     sJob.vSprint("J%04lld.%04lld"_Stz, pJob->tJobId().uNodeId(), pJob->tJobId().uJobNo());
@@ -178,6 +272,20 @@ void Step::vOptimiserWeave(void)
 {
   ENTRY();
     
+  // optimiser cache: hand the kept texts to the job, or keep the new ones
+  OptPending xPending;
+  bool bPending = bTakePending((void*) *m_pLogicUnit->m_xpOptimiser, xPending);
+  if (bPending && xPending.bHit) {
+    ExtendedText* pOldCmd = m_pJob->pCmdText();
+    m_pJob->vCmdText((ExtendedText*)nullptr);
+    delete pOldCmd;
+    m_pJob->vCmdText(pTextOfBlocks(xPending.xItem.vsStmt));
+    m_pJob->vCodeBlock(xPending.xItem.bHasCode ? pTextOfBlocks(xPending.xItem.vsCode) : (ExtendedText*)nullptr);
+    vPhaseMark("weave_end");
+    EXIT();
+    return;
+  }
+
   Stz* szOptStmt = m_pLogicUnit->m_xpOptimiser->szWeave();
   UNUSED(szOptStmt);
 
@@ -205,6 +313,14 @@ void Step::vOptimiserWeave(void)
   m_pLogicUnit->m_xpOptimiser->vOptStmt((ExtendedText*)nullptr);
 
   ExtendedText* pCodeBlock = m_pLogicUnit->m_xpOptimiser->pCodeBlock();
+  if (bPending) {
+    xPending.xItem.iEpoch = xPending.iEpoch;
+    vTextBlocks(m_pJob->pCmdText(), xPending.xItem.vsStmt);
+    xPending.xItem.bHasCode = pCodeBlock != nullptr;
+    if (pCodeBlock)
+      vTextBlocks(pCodeBlock, xPending.xItem.vsCode);
+    STORE::vOptCachePut(xPending.sKey, xPending.xItem);
+  }
   if (pCodeBlock) {
     m_pLogicUnit->m_xpOptimiser->vCodeBlock(nullptr);
   }

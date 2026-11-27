@@ -1,0 +1,79 @@
+/*----------------------------------------------------------------------------*/
+/* sqlCache.test -- the statement and optimiser caches are never stale        */
+/*----------------------------------------------------------------------------*/
+
+// A SELECT whose text and job tags were compiled before reuses the pipeline
+// statement of the SQL compiler and the result of the run-time optimiser
+// (Steps_SqlCompiler.cpp, Steps_Optimiser.cpp). The same text must give the
+// answer of the moment after rows are loaded, after a truncate, after an
+// index is created, and after the table is dropped and created again with
+// other columns. The expected rows were computed from
+// DATA/Regression/gbyKeyCache.csv and DATA/Regression/vecFilter.csv.
+
+create table ${testName2}_t (
+  s VARCHAR(20),
+  x INTEGER
+);
+success
+Load ${testName2}_t "../DATA/Regression/gbyKeyCache.csv" ;
+success
+
+// compiled, then twice from the cache
+select count(*), sum(x) from ${testName2}_t where x > 2;
+rows: (8, 52)
+
+select count(*), sum(x) from ${testName2}_t where x > 2;
+rows: (8, 52)
+
+select count(*), sum(x) from ${testName2}_t where x > 2;
+rows: (8, 52)
+
+// without the caches
+/optimiser_off_sql_cache
+select count(*), sum(x) from ${testName2}_t where x > 2;
+rows: (8, 52)
+
+// more rows
+Load ${testName2}_t "../DATA/Regression/gbyKeyCache.csv" ;
+success
+
+select count(*), sum(x) from ${testName2}_t where x > 2;
+rows: (16, 104)
+
+select count(*), sum(x) from ${testName2}_t where x > 2;
+rows: (16, 104)
+
+// an index on the filtered column
+create index ${testName2}_ix on ${testName2}_t (x);
+affected: 0
+
+select count(*), sum(x) from ${testName2}_t where x > 2;
+rows: (16, 104)
+
+select count(*), sum(x) from ${testName2}_t where x = 5;
+rows: (2, 10)
+
+select count(*), sum(x) from ${testName2}_t where x = 5;
+rows: (2, 10)
+
+// the table dropped and created again with other columns: x is now the third
+drop table ${testName2}_t;
+success
+
+create table ${testName2}_t (
+  a INTEGER,
+  d DATE,
+  x INTEGER
+);
+success
+Load ${testName2}_t "../DATA/Regression/vecFilter.csv" ;
+success
+
+select count(*), sum(x) from ${testName2}_t where x > 2;
+rows: (7, 280)
+
+select count(*), sum(x) from ${testName2}_t where x > 2;
+rows: (7, 280)
+
+select count(*), sum(x) from ${testName2}_t where x = 5;
+rows: (0, NULL)

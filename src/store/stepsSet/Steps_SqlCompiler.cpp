@@ -6,6 +6,8 @@
 #include <regex>
 #include <functional>
 #include <string>
+#include <unordered_map>
+#include <mutex>
 #include "Step.hpp"
 #include "EnterExit.h"
 #include "StepAccum.hpp"
@@ -144,6 +146,12 @@ void Step::vSqlCompilerAggregateSplit(void) {
 
 
   PlanOperand* pPlanOperand = _pPlanOperand(m_oDataStack.pPopPtr(__func__));
+  // a statement from the cache has no plan: pass it on (see the parser step)
+  if (pPlanOperand && pPlanOperand->azCachedPipeline()) {
+    m_oDataStack.vPushPtr(pPlanOperand);
+    EXIT();
+    return;
+  }
   Parser::RootNode* pPlanRoot = Parser::_pRootNode(pPlanOperand->pPlanNode());
   UNUSED(pPlanRoot);
   ASSERT(ShadowRoot::bIsExactType(pPlanRoot));
@@ -221,6 +229,12 @@ void Step::vSqlCompilerCorrBySquash(void) {
 
 
   PlanOperand* pPlanOperand = _pPlanOperand(m_oDataStack.pPopPtr(__func__));
+  // a statement from the cache has no plan: pass it on (see the parser step)
+  if (pPlanOperand && pPlanOperand->azCachedPipeline()) {
+    m_oDataStack.vPushPtr(pPlanOperand);
+    EXIT();
+    return;
+  }
   Parser::RootNode* pPlanRoot = Parser::_pRootNode(pPlanOperand->pPlanNode());
   UNUSED(pPlanRoot);
   ASSERT(ShadowRoot::bIsExactType(pPlanRoot));
@@ -290,6 +304,10 @@ void Step::vSqlCompilerDeletePlan(void) {
 
   // Get the plan operand
   PlanOperand *pPlanOperand = _pPlanOperand(m_oDataStack.pPopPtr(__func__));
+  if (pPlanOperand->azCachedPipeline()) {     // from the statement cache: no plan
+    EXIT();
+    return;
+  }
   Parser::RootNode* pRootNode = Parser::_pRootNode(pPlanOperand->pPlanNode());
   ASSERT(ShadowRoot::bIsExactType(pRootNode));
   delete pRootNode;
@@ -598,6 +616,12 @@ void Step::vSqlCompilerExprPushdown(void)
    */
 
   PlanOperand* pPlanOperand = _pPlanOperand(m_oDataStack.pPopPtr(__func__));
+  // a statement from the cache has no plan: pass it on (see the parser step)
+  if (pPlanOperand && pPlanOperand->azCachedPipeline()) {
+    m_oDataStack.vPushPtr(pPlanOperand);
+    EXIT();
+    return;
+  }
   Parser::RootNode* pPlanRoot = Parser::_pRootNode(pPlanOperand->pPlanNode());
   UNUSED(pPlanRoot);
   ASSERT(ShadowRoot::bIsExactType(pPlanRoot));
@@ -652,6 +676,12 @@ void Step::vSqlCompilerJoinOptimisation(void)
    */
 
   PlanOperand* pPlanOperand = _pPlanOperand(m_oDataStack.pPopPtr(__func__));
+  // a statement from the cache has no plan: pass it on (see the parser step)
+  if (pPlanOperand && pPlanOperand->azCachedPipeline()) {
+    m_oDataStack.vPushPtr(pPlanOperand);
+    EXIT();
+    return;
+  }
   Parser::RootNode* pPlanRoot = Parser::_pRootNode(pPlanOperand->pPlanNode());
   UNUSED(pPlanRoot);
   ASSERT(ShadowRoot::bIsExactType(pPlanRoot));
@@ -719,6 +749,12 @@ void Step::vSqlCompilerExprValidate(void)
    */
 
   PlanOperand* pPlanOperand = _pPlanOperand(m_oDataStack.pPopPtr(__func__));
+  // a statement from the cache has no plan: pass it on (see the parser step)
+  if (pPlanOperand && pPlanOperand->azCachedPipeline()) {
+    m_oDataStack.vPushPtr(pPlanOperand);
+    EXIT();
+    return;
+  }
   Parser::RootNode* pPlanRoot = Parser::_pRootNode(pPlanOperand->pPlanNode());
   UNUSED(pPlanRoot);
   ASSERT(ShadowRoot::bIsExactType(pPlanRoot));
@@ -773,6 +809,13 @@ void Step::vSqlCompilerHasExplain(void) {
 
   // Get the plan operand
   PlanOperand *pPlanOperand = _pPlanOperand(m_oDataStack.pPopPtr(__func__));
+
+  // a statement from the cache (never an EXPLAIN) has no plan
+  if (pPlanOperand->azCachedPipeline()) {
+    m_oDataStack.vPushInt(false);
+    EXIT();
+    return;
+  }
 
   Parser::RootNode* pRootNode = Parser::_pRootNode(pPlanOperand->pPlanNode());
   UNUSED(pRootNode);
@@ -835,6 +878,12 @@ void Step::vSqlCompilerNameValidate(void)
    */
 
   PlanOperand* pPlanOperand = _pPlanOperand(m_oDataStack.pPopPtr(__func__));
+  // a statement from the cache has no plan: pass it on (see the parser step)
+  if (pPlanOperand && pPlanOperand->azCachedPipeline()) {
+    m_oDataStack.vPushPtr(pPlanOperand);
+    EXIT();
+    return;
+  }
   Parser::RootNode* pPlanRoot = Parser::_pRootNode(pPlanOperand->pPlanNode());
   UNUSED(pPlanRoot);
   ASSERT(ShadowRoot::bIsExactType(pPlanRoot));
@@ -915,6 +964,104 @@ L_Exit:
 }
 
 /*----------------------------------------------------------------------------*/
+/* Statement cache: SELECT text -> pipeline statement.                        */
+/*                                                                            */
+/* The SQL compiler (the operators parser ... transliterate of the pipeline   */
+/* sqlCompiler) turns the text of a statement into the text of a pipeline     */
+/* statement; for the 22 TPC-H queries that is 19-35 ms each, more than       */
+/* DuckDB needs for the whole of Q7 or Q8. A SELECT whose text and job tags   */
+/* were compiled before gets the same pipeline statement again: the parser    */
+/* step returns a plan operand without a plan that carries it, the steps in   */
+/* between pass that operand on, and transliterate returns its text.          */
+/*                                                                            */
+/* What a compile reads besides the text: the job tags (part of the key), the */
+/* catalogue and the statistics of the tables. So the cache is emptied by     */
+/* every statement that is not a SELECT (DDL, load, insert, analyse ... all   */
+/* come through the parser step), and an entry is used only while no table    */
+/* data has changed since it was compiled (iColCacheDataEpoch, counted in the */
+/* hooks of CrwBuffer.cpp). Not cached: statements with parameters or with    */
+/* functions of the moment (current_date, now, random ...), EXPLAIN, and any  */
+/* statement on a grid of more than one node (another node's DDL is not seen  */
+/* here). Job tag /optimiser_off_sql_cache: compile every time.               */
+/*----------------------------------------------------------------------------*/
+namespace STORE { i8 iColCacheDataEpoch(void); }
+#include "StatementCache.hpp"
+
+namespace {
+  struct SqlCacheItem { std::string sPipeline; i8 iEpoch; };
+  std::mutex g_oSqlCacheLock;
+  std::unordered_map<std::string, SqlCacheItem> g_oSqlCache;
+
+  // the run-time optimiser's result for a pipeline statement (see
+  // Steps_Optimiser.cpp): the optimised statement and the C code, as text
+  std::unordered_map<std::string, STORE::OptCacheItem> g_oOptCache;
+
+  // the first word of the statement, lower case (comments and blanks skipped)
+  std::string sSqlFirstWord(const char* az)
+  {
+    for (;;) {
+      while (*az == ' ' || *az == '\t' || *az == '\n' || *az == '\r')
+        az++;
+      if (az[0] == '-' && az[1] == '-') {
+        while (*az && *az != '\n')
+          az++;
+        continue;
+      }
+      if (az[0] == '/' && az[1] == '*') {
+        const char* azEnd = strstr(az + 2, "*/");
+        if (! azEnd)
+          return "";
+        az = azEnd + 2;
+        continue;
+      }
+      break;
+    }
+    std::string sWord;
+    while ((*az >= 'a' && *az <= 'z') || (*az >= 'A' && *az <= 'Z'))
+      sWord += (char) (*az++ | 0x20);
+    return sWord;
+  }
+
+  bool bSqlCacheable(const char* azSql)
+  {
+    std::string sLower(azSql);
+    for (char& c : sLower)
+      if (c >= 'A' && c <= 'Z')
+        c |= 0x20;
+    static const char* aszNot[] = {"?", "current", "now", "today", "rand", "sysdate", "localtime", "uuid",
+                                   "explain", "user", "session", "into"};
+    for (const char* sz : aszNot)
+      if (sLower.find(sz) != std::string::npos)
+        return false;
+    return true;
+  }
+}
+
+namespace STORE {
+  bool bOptCacheGet(const std::string& rsKey, i8 iEpoch, OptCacheItem& rxItem)
+  {
+    std::lock_guard<std::mutex> oGuard(g_oSqlCacheLock);
+    auto it = g_oOptCache.find(rsKey);
+    if (it == g_oOptCache.end())
+      return false;
+    if (it->second.iEpoch != iEpoch) {
+      g_oOptCache.erase(it);
+      return false;
+    }
+    rxItem = it->second;
+    return true;
+  }
+
+  void vOptCachePut(const std::string& rsKey, const OptCacheItem& rxItem)
+  {
+    std::lock_guard<std::mutex> oGuard(g_oSqlCacheLock);
+    if (g_oOptCache.size() >= 256)
+      g_oOptCache.clear();
+    g_oOptCache[rsKey] = rxItem;
+  }
+}
+
+/*----------------------------------------------------------------------------*/
 /* sqlCompiler::parser -- sql parser                                          */
 /*----------------------------------------------------------------------------*/
 void Step::vSqlCompilerParser(void)
@@ -980,6 +1127,46 @@ void Step::vSqlCompilerParser(void)
   
   //vTrace("vSqlCompilerParser got : %s\n"_Stz,sSqlStatement.szStz());
 
+  // statement cache (see above)
+  std::string sCacheKey;
+  i8 iCacheEpoch = STORE::iColCacheDataEpoch();
+  {
+    std::string sWord = sSqlFirstWord(sSqlStatement.szStz()->azChar());
+    if (sWord != "select" && sWord != "with") {
+      std::lock_guard<std::mutex> oGuard(g_oSqlCacheLock);
+      g_oSqlCache.clear();
+      g_oOptCache.clear();
+    }
+    else if (AM::GRID::nKnownNodes() <= 1 && ! AM::JOB::bHasTag("<optimiser_off_sql_cache>"_Stz) &&
+             bSqlCacheable(sSqlStatement.szStz()->azChar())) {
+      Job* pJob = MY::pJob();
+      TagSet* pJobTags = pJob ? pJob->pJobTags() : nullptr;
+      if (pJobTags)
+        pJobTags->vAppendKey(sCacheKey, "<sqlStatement>"_Stz);
+      sCacheKey += '\n';
+      sCacheKey += sSqlStatement.szStz()->azChar();
+      std::string sHit;
+      {
+        std::lock_guard<std::mutex> oGuard(g_oSqlCacheLock);
+        auto it = g_oSqlCache.find(sCacheKey);
+        if (it != g_oSqlCache.end()) {
+          if (it->second.iEpoch == iCacheEpoch)
+            sHit = it->second.sPipeline;
+          else
+            g_oSqlCache.erase(it);
+        }
+      }
+      if (! sHit.empty()) {
+        PlanOperand* pCached = new PlanOperand(nullptr);
+        pCached->vSqlText(sSqlStatement.szStz()->azChar());
+        pCached->vCachedPipeline(sHit.c_str());
+        m_oDataStack.vPushPtr(pCached);
+        EXIT();
+        return;
+      }
+    }
+  }
+
   // Read in and parse the plan graph definitions
   const Parser::PlanNode* pGraphTemplate = Parser::PlanDefinitionParser::pGraphTemplate();
   RASSERT(pGraphTemplate);
@@ -1033,6 +1220,8 @@ void Step::vSqlCompilerParser(void)
 
   pPlanOperand = new PlanOperand(pPlanRoot);
   pPlanOperand->vSqlText(sSqlStatement.szStz()->azChar());
+  if (! sCacheKey.empty())
+    pPlanOperand->vCacheKey(sCacheKey.c_str(), iCacheEpoch);
   m_oDataStack.vPushPtr(pPlanOperand);
 
   //vTrace("  antlr(%s) -> RootNode %p\n"_Stz,
@@ -1085,6 +1274,12 @@ void Step::vSqlCompilerPartitionPlan(void)
    */
 
   PlanOperand* pPlanOperand = _pPlanOperand(m_oDataStack.pPopPtr(__func__));
+  // a statement from the cache has no plan: pass it on (see the parser step)
+  if (pPlanOperand && pPlanOperand->azCachedPipeline()) {
+    m_oDataStack.vPushPtr(pPlanOperand);
+    EXIT();
+    return;
+  }
   Parser::RootNode* pRootNode = Parser::_pRootNode(pPlanOperand->pPlanNode());
   ASSERT(ShadowRoot::bIsExactType(pRootNode));
 
@@ -1152,6 +1347,12 @@ void Step::vSqlCompilerPostProject(void)
    */
 
   PlanOperand* pPlanOperand = _pPlanOperand(m_oDataStack.pPopPtr(__func__));
+  // a statement from the cache has no plan: pass it on (see the parser step)
+  if (pPlanOperand && pPlanOperand->azCachedPipeline()) {
+    m_oDataStack.vPushPtr(pPlanOperand);
+    EXIT();
+    return;
+  }
   Parser::RootNode* pRootNode = Parser::_pRootNode(pPlanOperand->pPlanNode());
   UNUSED(pRootNode);
   ASSERT(ShadowRoot::bIsExactType(pRootNode));
@@ -1215,6 +1416,12 @@ void Step::vSqlCompilerProjValidation(void)
    */
 
   PlanOperand* pPlanOperand = _pPlanOperand(m_oDataStack.pPopPtr(__func__));
+  // a statement from the cache has no plan: pass it on (see the parser step)
+  if (pPlanOperand && pPlanOperand->azCachedPipeline()) {
+    m_oDataStack.vPushPtr(pPlanOperand);
+    EXIT();
+    return;
+  }
   Parser::RootNode* pPlanRoot = Parser::_pRootNode(pPlanOperand->pPlanNode());
   UNUSED(pPlanRoot);
   ASSERT(ShadowRoot::bIsExactType(pPlanRoot));
@@ -1270,6 +1477,12 @@ void Step::vSqlCompilerSetOpValidate(void)
    */
 
   PlanOperand* pPlanOperand = _pPlanOperand(m_oDataStack.pPopPtr(__func__));
+  // a statement from the cache has no plan: pass it on (see the parser step)
+  if (pPlanOperand && pPlanOperand->azCachedPipeline()) {
+    m_oDataStack.vPushPtr(pPlanOperand);
+    EXIT();
+    return;
+  }
   Parser::RootNode* pPlanRoot = Parser::_pRootNode(pPlanOperand->pPlanNode());
   UNUSED(pPlanRoot);
   ASSERT(ShadowRoot::bIsExactType(pPlanRoot));
@@ -1326,6 +1539,12 @@ void Step::vSqlCompilerStageMarkers(void)
    */
 
   PlanOperand* pPlanOperand = _pPlanOperand(m_oDataStack.pPopPtr(__func__));
+  // a statement from the cache has no plan: pass it on (see the parser step)
+  if (pPlanOperand && pPlanOperand->azCachedPipeline()) {
+    m_oDataStack.vPushPtr(pPlanOperand);
+    EXIT();
+    return;
+  }
   Parser::RootNode* pPlanRoot = Parser::_pRootNode(pPlanOperand->pPlanNode());
   UNUSED(pPlanRoot);
   ASSERT(ShadowRoot::bIsExactType(pPlanRoot));
@@ -1572,11 +1791,22 @@ void Step::vSqlCompilerTransliterate(void)
   //vTrace("\nStep::vSqlCompilerTransliterate\n"_Stz);
 
   PlanOperand* pPlanOperand = _pPlanOperand(m_oDataStack.pPopPtr(__func__));
-  Parser::RootNode* pPlanRoot = Parser::_pRootNode(pPlanOperand->pPlanNode());
-  ASSERT(ShadowRoot::bIsExactType(pPlanRoot));
 
   // get the pipeline name
   m_oDataStack.vPopStr(sPipelineName, __func__);
+
+  // a statement from the cache: its pipeline statement as it was made
+  if (pPlanOperand->azCachedPipeline()) {
+    s48K sCachedStmt;
+    sCachedStmt.vSprint("%s"_Stz, pPlanOperand->azCachedPipeline());
+    m_oDataStack.vPushStr(sCachedStmt);
+    vPhaseMark("sqlcompile_end");
+    EXIT();
+    return;
+  }
+
+  Parser::RootNode* pPlanRoot = Parser::_pRootNode(pPlanOperand->pPlanNode());
+  ASSERT(ShadowRoot::bIsExactType(pPlanRoot));
 
   // Walk the graph and produce a pipeline statement.
   //bool bTransliterate = Dynamo::bPlanToPipeline(sPipelineStmt,pPlanRoot);
@@ -1625,6 +1855,14 @@ void Step::vSqlCompilerTransliterate(void)
   // job tag /show_pipeline: trace the pipeline statement the SQL became
   if (AM::JOB::bHasTag("<show_pipeline>"_Stz))
     vTrace("Transliterated pipeline:\n%s\nEnd of transliterated pipeline\n"_Stz, sPipelineStmt.azChar());
+
+  // statement cache: keep the pipeline statement of a cacheable SELECT
+  if (pPlanOperand->azCacheKey()) {
+    std::lock_guard<std::mutex> oGuard(g_oSqlCacheLock);
+    if (g_oSqlCache.size() >= 256)
+      g_oSqlCache.clear();
+    g_oSqlCache[pPlanOperand->azCacheKey()] = SqlCacheItem{std::string(sPipelineStmt.azChar()), pPlanOperand->iCacheEpoch()};
+  }
 
   // return the pipeline
   m_oDataStack.vPushStr(sPipelineStmt);

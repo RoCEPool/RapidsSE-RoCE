@@ -27,6 +27,9 @@ PlanOperand::PlanOperand(Parser::PlanNode* pPlanNode)
   
   m_pPlanNode = pPlanNode;
   m_azSqlText = nullptr;
+  m_azCachedPipeline = nullptr;
+  m_azCacheKey = nullptr;
+  m_iCacheEpoch = 0;
 }
 
 /*----------------------------------------------------------------------------*/
@@ -37,6 +40,10 @@ PlanOperand::~PlanOperand(void) noexcept(false)
   _precondition_(_ADDRESS_,_MAGIC_);
   free(m_azSqlText);
   m_azSqlText = nullptr;
+  free(m_azCachedPipeline);
+  m_azCachedPipeline = nullptr;
+  free(m_azCacheKey);
+  m_azCacheKey = nullptr;
 }
 
 /*----------------------------------------------------------------------------*/
@@ -85,6 +92,39 @@ const char* PlanOperand::azSqlText(void)
 {
   _precondition_(_ADDRESS_,_MAGIC_);
   return m_azSqlText;
+}
+
+void PlanOperand::vCachedPipeline(const char* azPipeline)
+{
+  _precondition_(_ADDRESS_,_MAGIC_);
+  free(m_azCachedPipeline);
+  m_azCachedPipeline = azPipeline ? strdup(azPipeline) : nullptr;
+}
+
+const char* PlanOperand::azCachedPipeline(void)
+{
+  _precondition_(_ADDRESS_,_MAGIC_);
+  return m_azCachedPipeline;
+}
+
+void PlanOperand::vCacheKey(const char* azKey, i8 iEpoch)
+{
+  _precondition_(_ADDRESS_,_MAGIC_);
+  free(m_azCacheKey);
+  m_azCacheKey = azKey ? strdup(azKey) : nullptr;
+  m_iCacheEpoch = iEpoch;
+}
+
+const char* PlanOperand::azCacheKey(void)
+{
+  _precondition_(_ADDRESS_,_MAGIC_);
+  return m_azCacheKey;
+}
+
+i8 PlanOperand::iCacheEpoch(void)
+{
+  _precondition_(_ADDRESS_,_MAGIC_);
+  return m_iCacheEpoch;
 }
 
 /*============================================================================*/

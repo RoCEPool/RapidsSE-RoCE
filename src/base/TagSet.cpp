@@ -355,6 +355,33 @@ void TagSet::vAppend(Stz* szName, Stz* szValue)
 /*----------------------------------------------------------------------------*/
 /* concat tagSet to cmd string                                              */
 /*----------------------------------------------------------------------------*/
+/* append "name=value;" of every tag but szSkipName (a key for caches)        */
+/*----------------------------------------------------------------------------*/
+void TagSet::vAppendKey(std::string& rsKey, Stz* szSkipName)
+{
+  _precondition_(_MAGIC_,CN_TAGSET,_FOOTER_);
+
+  ReadLocker oReadLocker(&m_oLock);
+
+  TagArrayIter xIter = m_oTagArray.xIterator();
+  Tag* pTag;
+
+  while ((pTag = xIter.pNext()) != nullptr) {
+    if (pTag->m_szName && szSkipName && 0 == strcmp(pTag->m_szName->azChar(), szSkipName->azChar()))
+      continue;
+    rsKey += pTag->m_szName ? pTag->m_szName->azChar() : "";
+    rsKey += '=';
+    if (TN_INTEGER == pTag->m_eToken)
+      rsKey += std::to_string((long long) pTag->m_iValue);
+    else if (TN_STRING == pTag->m_eToken && pTag->m_szValue)
+      rsKey += pTag->m_szValue->azChar();
+    else
+      rsKey += '?';
+    rsKey += ';';
+  }
+}
+
+/*----------------------------------------------------------------------------*/
 void TagSet::vConcat(String* pCmd)
 {
   _precondition_(_MAGIC_,CN_TAGSET,_FOOTER_);

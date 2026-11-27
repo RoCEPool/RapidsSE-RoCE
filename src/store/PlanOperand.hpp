@@ -17,6 +17,11 @@ namespace STORE
   protected:
     Parser::PlanNode* m_pPlanNode;
     char*             m_azSqlText;   // the statement the plan was made from (owned)
+    // statement cache (Steps_SqlCompiler.cpp): the pipeline statement of a
+    // cache hit (no plan then), or the key to store it under (both owned)
+    char*             m_azCachedPipeline;
+    char*             m_azCacheKey;
+    i8                m_iCacheEpoch;
     
     // must be last
     Footer m_xFooter;
@@ -34,6 +39,11 @@ namespace STORE
     void              vPlanNode(Parser::PlanNode* pPlanNode);
     void              vSqlText(const char* azSqlText);
     const char*       azSqlText(void);
+    void              vCachedPipeline(const char* azPipeline);
+    const char*       azCachedPipeline(void);
+    void              vCacheKey(const char* azKey, i8 iEpoch);
+    const char*       azCacheKey(void);
+    i8                iCacheEpoch(void);
   
   private:
     Footer* aFooter(void);
