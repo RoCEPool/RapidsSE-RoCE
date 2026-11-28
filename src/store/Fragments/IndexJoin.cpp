@@ -303,6 +303,11 @@ void vHashJoinPosition_int(Dynamic_T* aDynamicT) {
   // - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
   // hash join, build: store the arriving row under its key
   if ( ! aDynamicT->m_bHashProbe) {
+    // (with a join hash that fits the cache each row is joined as it
+    // arrives and none is stored; with a larger one the rows are stored and
+    // the probe is chosen as before, a replay then takes its ranges from it)
+    if (__INDEX_INFO__[CURRENT_DUP_OP].m_bJoinHashSmall)
+      goto L_HJPosition__HJ_N__;
     // the first rows, one per 1000 entries of the index, go straight to the
     // index as in an index join: a join of few rows (TPC-H Q17) stays one
     if (__INDEX_INFO__[CURRENT_DUP_OP].m_iHjEntries == 0)
@@ -670,6 +675,8 @@ void vIndexJoinReturn(Dynamic_T* aDynamicT) {
 #ifdef WITH_CLANG
   if (aDynamicT->m_bHashProbe == 3)
     __INDEX_INFO__[CURRENT_DUP_OP].m_aEntInt = (struct Ent_int*)__INDEX_INFO__[CURRENT_DUP_OP].m_aEntUpper;
+  else if (__INDEX_INFO__[CURRENT_DUP_OP].m_aJoinHash && aDynamicT->m_bHashProbe != 1)
+    __INDEX_INFO__[CURRENT_DUP_OP].m_aEntInt = (struct Ent_int*)((char*)__INDEX_INFO__[CURRENT_DUP_OP].m_aEntInt + 8);
   else
     __INDEX_INFO__[CURRENT_DUP_OP].m_aEntInt = (struct Ent_int*)aDynamicT->m_fp_aExtern_EntBufferNextEntry(
       &__INDEX_INFO__[CURRENT_DUP_OP].m_aEntBuffer, __INDEX_INFO__[CURRENT_DUP_OP].m_aEntInt);
@@ -753,6 +760,8 @@ i8 iIndexJoinConstraint(Dynamic_T* aDynamicT) {
 #ifdef WITH_CLANG
   if (aDynamicT->m_bHashProbe == 3)
     __INDEX_INFO__[CURRENT_DUP_OP].m_aEntInt = (struct Ent_int*)__INDEX_INFO__[CURRENT_DUP_OP].m_aEntUpper;
+  else if (__INDEX_INFO__[CURRENT_DUP_OP].m_aJoinHash && aDynamicT->m_bHashProbe != 1)
+    __INDEX_INFO__[CURRENT_DUP_OP].m_aEntInt = (struct Ent_int*)((char*)__INDEX_INFO__[CURRENT_DUP_OP].m_aEntInt + 8);
   else
     __INDEX_INFO__[CURRENT_DUP_OP].m_aEntInt = (struct Ent_int*)aDynamicT->m_fp_aExtern_EntBufferNextEntry(
       &__INDEX_INFO__[CURRENT_DUP_OP].m_aEntBuffer, __INDEX_INFO__[CURRENT_DUP_OP].m_aEntInt);
@@ -821,6 +830,8 @@ i8 iIndexAntiJoinConstraint(Dynamic_T* aDynamicT) {
     // move to next entry
     if (aDynamicT->m_bHashProbe == 3)
       aDynamicT->m_xIndexInfoJ[CURRENT_DUP_OP].m_aEntInt = (struct Ent_int*)aDynamicT->m_xIndexInfoJ[CURRENT_DUP_OP].m_aEntUpper;
+    else if (aDynamicT->m_xIndexInfoJ[CURRENT_DUP_OP].m_aJoinHash && aDynamicT->m_bHashProbe != 1)
+      aDynamicT->m_xIndexInfoJ[CURRENT_DUP_OP].m_aEntInt = (struct Ent_int*)((char*)aDynamicT->m_xIndexInfoJ[CURRENT_DUP_OP].m_aEntInt + 8);
     else
       aDynamicT->m_xIndexInfoJ[CURRENT_DUP_OP].m_aEntInt = (struct Ent_int*)aDynamicT->m_fp_aExtern_EntBufferNextEntry(
         &aDynamicT->m_xIndexInfoJ[CURRENT_DUP_OP].m_aEntBuffer, aDynamicT->m_xIndexInfoJ[CURRENT_DUP_OP].m_aEntInt);
@@ -882,6 +893,8 @@ i8 iIndexSemiJoinConstraint(Dynamic_T* aDynamicT) {
         // move to next entry
     if (aDynamicT->m_bHashProbe == 3)
       aDynamicT->m_xIndexInfoJ[CURRENT_DUP_OP].m_aEntInt = (struct Ent_int*)aDynamicT->m_xIndexInfoJ[CURRENT_DUP_OP].m_aEntUpper;
+    else if (aDynamicT->m_xIndexInfoJ[CURRENT_DUP_OP].m_aJoinHash && aDynamicT->m_bHashProbe != 1)
+      aDynamicT->m_xIndexInfoJ[CURRENT_DUP_OP].m_aEntInt = (struct Ent_int*)((char*)aDynamicT->m_xIndexInfoJ[CURRENT_DUP_OP].m_aEntInt + 8);
     else
       aDynamicT->m_xIndexInfoJ[CURRENT_DUP_OP].m_aEntInt = (struct Ent_int*)aDynamicT->m_fp_aExtern_EntBufferNextEntry(
         &aDynamicT->m_xIndexInfoJ[CURRENT_DUP_OP].m_aEntBuffer, aDynamicT->m_xIndexInfoJ[CURRENT_DUP_OP].m_aEntInt);
