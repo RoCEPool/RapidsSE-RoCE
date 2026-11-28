@@ -155,6 +155,10 @@ void CombinedSrc::vSynthesizeCode(Stencil* pStencil, bool bFirstStage, bool bLas
       case SK_SEMIJOIN:
 
         bHasIndexInflate = true;
+        // (the joined row is read by the join's constraint only: the columns
+        // it does not name are skipped, the others come from the column cache)
+        if (bJoinPrune && ! AM::JOB::bHasTag("<optimiser_off_semi_join_prune>"_Stz))
+          vJoinPrune.push_back(m_azCodeCrs);
 
         // - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
         // open the index, indexJoin, inflate  and filter code fragments file
@@ -1373,6 +1377,220 @@ void CombinedSrc::vColCacheInflate(char* azStart, char* azEnd)
 }
 
 /*----------------------------------------------------------------------------*/
+/* The filter on the groups of a GROUP BY (HAVING), applied before a group    */
+/* leaves its stage. Runs when the code of every stage is made                */
+/* (Stencil::eSynthesise), on the code of two consecutive stages: stage A     */
+/* ends in a GROUP BY whose EOS handler writes one row per group to its tub,  */
+/* and the first operator of stage B is a filter on those rows.               */
+/*                                                                            */
+/* TPC-H Q18 groups lineitem by l_orderkey: 1.5 million groups were written   */
+/* to the tub and read back by the next stage, whose filter                   */
+/* (sum(l_quantity) > 300) kept 57. DuckDB filters the groups as it scans its */
+/* hash table. Here the filter of B is copied into the traversal of A's EOS   */
+/* handler, in front of the allocation of the row, with each cell of B's row  */
+/* replaced by the expression A stores in that cell. B keeps its filter (it   */
+/* passes every row it now gets). Only for a filter that reads fixed-width    */
+/* cells whose values A stores with a plain assignment. Job tag               */
+/* /optimiser_off_eos_filter: as before.                                      */
+/*----------------------------------------------------------------------------*/
+bool CombinedSrc::bFilterInEos(std::string& rsStageA, const std::string& rsStageB)
+{
+  _static_
+
+  if (AM::JOB::bHasTag("<optimiser_off_eos_filter>"_Stz) || AM::JOB::bHasTag("<optimiser_off_all>"_Stz))
+    return false;
+
+  // B: a row handler whose first operator is a filter
+  static const std::string sPds = "\nint iPdsRowHandler_";
+  size_t pB = rsStageB.find(sPds);
+  if (pB == std::string::npos)
+    return false;
+  pB++;
+  size_t pBEnd = rsStageB.find("\nint ", pB);
+  std::string sB = rsStageB.substr(pB, pBEnd == std::string::npos ? std::string::npos : pBEnd + 1 - pB);
+
+  // A: its EOS handler, and no stage but S<n>, S<n+1>
+  static const std::string sEos = "\nint iEosHandler_";
+  size_t pA = rsStageA.find(sEos);
+  if (pA == std::string::npos || rsStageA.find(sEos, pA + 1) != std::string::npos)
+    return false;
+  pA++;
+  size_t pAEnd = rsStageA.find("\nint ", pA);
+  if (pAEnd == std::string::npos)
+    return false;
+  pAEnd++;
+  std::string sA = rsStageA.substr(pA, pAEnd - pA);
+  auto iStageNo = [](const std::string& sFun) -> i8 {
+    size_t u = sFun.find("_S");
+    size_t e = sFun.find('(');
+    if (u == std::string::npos || e == std::string::npos || u > e || e - u - 2 < 1 || e - u - 2 > 6)
+      return -1;
+    std::string sNo = sFun.substr(u + 2, e - u - 2);
+    if (sNo.find_first_not_of("0123456789") != std::string::npos)
+      return -1;
+    return atoll(sNo.c_str());
+  };
+  i8 iA = iStageNo(sA), iB = iStageNo(sB);
+  if (iA < 0 || iB != iA + 1 || sA.find("L_EosSkipGroup") != std::string::npos)
+    return false;
+
+  // the members of a struct, one a line: "<type> <name>"
+  auto bMembers = [](const std::string& sCode, size_t pStruct, std::vector<std::string>& rvType,
+                     std::vector<std::string>& rvName) -> bool {
+    size_t a = sCode.find("{\n", pStruct);
+    if (a == std::string::npos)
+      return false;
+    a += 2;
+    for (;;) {
+      size_t b = sCode.find('\n', a);
+      if (b == std::string::npos)
+        return false;
+      std::string sLine = sCode.substr(a, b - a);
+      a = b + 1;
+      size_t f = sLine.find_first_not_of(" \t");
+      if (f == std::string::npos)
+        continue;
+      if (sLine.compare(f, 2, "};") == 0)
+        return ! rvName.empty();
+      size_t l = sLine.rfind(' ');
+      if (sLine.back() != ';' || l == std::string::npos || l <= f)
+        return false;
+      rvType.push_back(sLine.substr(f, l - f));
+      rvName.push_back(sLine.substr(l + 1, sLine.size() - l - 2));
+    }
+  };
+
+  // B's row struct is A's tub struct (the same members)
+  static const std::string sIt = "  struct SR_IT_0 {\n";
+  size_t pIt = sB.find(sIt);
+  static const std::string sTo = "  struct SR_TO_";
+  // (its declaration: "struct SR_TO_<n> {"; the pointer to it is declared too)
+  size_t pTo = std::string::npos, pToBrace = std::string::npos;
+  for (size_t p = sA.find(sTo); p != std::string::npos; p = sA.find(sTo, p + 1)) {
+    size_t e = sA.find_first_not_of("0123456789", p + sTo.size());
+    if (e == std::string::npos || sA.compare(e, 3, " {\n") != 0)
+      continue;
+    if (pTo != std::string::npos)
+      return false;
+    pTo = p;
+    pToBrace = e;
+  }
+  if (pIt == std::string::npos || pTo == std::string::npos)
+    return false;
+  std::string sToName = sA.substr(pTo + 9, pToBrace - pTo - 9);         // SR_TO_<n>
+  std::vector<std::string> vTypeB, vNameB, vTypeA, vNameA;
+  if (! bMembers(sB, pIt, vTypeB, vNameB) || ! bMembers(sA, pTo, vTypeA, vNameA) ||
+      vNameA != vNameB || vTypeA != vTypeB)
+    return false;
+
+  // B's filter: the first operator behind the inflate of the row
+  static const std::string sFilter = "\n  // FILTER\n";
+  size_t pF = sB.find(sFilter);
+  if (pF == std::string::npos)
+    return false;
+  for (const char* szOp : {"\n  // INDEXJOIN\n", "\n  // SEMIJOIN\n", "\n  // ANTIJOIN\n", "\n  // PROJECT\n",
+                           "\n  // GBYAGG\n", "\n  // ORDAGG\n", "\n  // SORT\n", "\n  // TOP\n", "\n  // LIMIT\n",
+                           "\n  // CROSSJOIN\n", "\n  // TUB\n", "\n  // POT\n"}) {
+    size_t pOp = sB.find(szOp);
+    if (pOp != std::string::npos && pOp < pF)
+      return false;
+  }
+  static const std::string sPre = "    goto L_AdvanceNextRowT;\n  }\n";
+  static const std::string sAssign = "  _ASSIGN(bFilterResult)\n";
+  size_t pPre = sB.find(sPre, pF);
+  size_t pAssign = sB.find(sAssign, pF);
+  if (pPre == std::string::npos || pAssign == std::string::npos || pPre > pAssign)
+    return false;
+  std::string sExpr = sB.substr(pPre + sPre.size(), pAssign - pPre - sPre.size());
+  // macros only, one a line
+  {
+    size_t a = 0;
+    bool bAny = false;
+    while (a < sExpr.size()) {
+      size_t b = sExpr.find('\n', a);
+      if (b == std::string::npos)
+        return false;
+      size_t f = sExpr.find_first_not_of(" \t", a);
+      if (f < b) {
+        if (sExpr[f] != '_')
+          return false;
+        bAny = true;
+      }
+      a = b + 1;
+    }
+    if (! bAny || sExpr.find("szStrArea") != std::string::npos || sExpr.find("pSR_TJ_") != std::string::npos)
+      return false;
+  }
+
+  // A's traversal of the groups: the allocation of the row, the stores of
+  // its cells, the step to the next group
+  static const std::string sLoop  = "  while (aDynamicT->m_xIndexInfoPL[0].m_aEntInt) {\n";
+  static const std::string sAllot = "  // allocate a row from the tub/pot\n";
+  static const std::string sNext  = "    // move to next entry\n";
+  size_t pLoop = sA.find(sLoop);
+  size_t pAllot = pLoop == std::string::npos ? pLoop : sA.find(sAllot, pLoop);
+  size_t pNext = pAllot == std::string::npos ? pAllot : sA.find(sNext, pAllot);
+  if (pNext == std::string::npos || sA.find(sLoop, pLoop + 1) != std::string::npos ||
+      sA.find(sAllot, pAllot + 1) != std::string::npos || sA.find(sNext, pNext + 1) != std::string::npos)
+    return false;
+  // the rule above the comment of the step belongs to it
+  size_t pNextLine = pNext;
+  {
+    size_t r = sA.rfind('\n', pNext - 2);
+    if (r != std::string::npos && sA.compare(r + 1, 9, "    // - ") == 0)
+      pNextLine = r + 1;
+  }
+
+  // each cell of B's row in the filter: the expression A stores in it
+  const std::string sCellB = "pSR_IT_0->";
+  for (size_t p = sExpr.find(sCellB); p != std::string::npos; p = sExpr.find(sCellB, p)) {
+    size_t e = sExpr.find(".m_iAsI8", p);
+    if (e == std::string::npos)
+      return false;
+    std::string sName = sExpr.substr(p + sCellB.size(), e - p - sCellB.size());
+    size_t k = 0;
+    while (k < vNameB.size() && vNameB[k] != sName)
+      k++;
+    if (k == vNameB.size() || vTypeB[k].find("Vch_T") != std::string::npos)
+      return false;
+    std::string sStore = "p" + sToName + "->" + sName + ".m_iAsI8 = ";
+    size_t pStore = sA.find(sStore, pAllot);
+    if (pStore == std::string::npos || pStore > pNext || sA.find(sStore, pStore + 1) < pNext)
+      return false;
+    size_t pEol = sA.find('\n', pStore);
+    if (pEol == std::string::npos || sA[pEol - 1] != ';')
+      return false;
+    std::string sRhs = sA.substr(pStore + sStore.size(), pEol - 1 - pStore - sStore.size());
+    if (sRhs.empty() || sRhs.find("SR_TO_") != std::string::npos || sRhs.find("StrArea") != std::string::npos ||
+        sRhs.find("azStringDyn") != std::string::npos)
+      return false;
+    sExpr.replace(p, e + 8 - p, "(" + sRhs + ")");
+    p += sRhs.size() + 2;
+  }
+
+  std::string sTest =
+    "  // the filter of the next stage, before the group gets a row (bFilterInEos)\n" +
+    sExpr +
+    "  _ASSIGN(bFilterResult)\n"
+    "  if (aDynamicT->m_iErrorCode != (i8) EC_NONE) {\n"
+    "    return 0;\n"
+    "  }\n"
+    "  if ( ! (bFilterResult && bFilterResult != C_DATUM_NULL))\n"
+    "    goto L_EosSkipGroup;\n\n";
+  // (the later insertion first)
+  sA.insert(pNextLine, "    L_EosSkipGroup: ;\n");
+  size_t pAllotLine = pAllot;
+  {
+    size_t r = sA.rfind('\n', pAllot - 2);
+    if (r != std::string::npos && sA.compare(r + 1, 7, "  // - ") == 0)
+      pAllotLine = r + 1;
+  }
+  sA.insert(pAllotLine, sTest);
+  rsStageA.replace(pA, pAEnd - pA, sA);
+  return true;
+}
+
+/*----------------------------------------------------------------------------*/
 /* Columns of a tub that the next stage never reads. Runs when the code of    */
 /* every stage is made (Stencil::eSynthesise), on the code of two consecutive */
 /* stages: it edits the row handler of stage A, whose tub stage B reads.      */
@@ -2234,16 +2452,29 @@ void CombinedSrc::vColCacheJoin(char* azStart, char* azEnd)
   size_t p = pFirst;
   while (p != std::string::npos) {
     i8 i_Col = atoll(sCode.c_str() + p + sColNo.size());
-    std::string sThis = sLabel + std::to_string((long long)i_Col) + ":";
-    size_t pLab = sCode.find(sThis, p);
+    // the column's return label, as its own jump names it (a semi or anti
+    // join numbers them from 1, an index join from 0)
     size_t pNext = sCode.find(sColNo, p + 1);
-    if (pLab == std::string::npos || (pNext != std::string::npos && pLab > pNext))
+    static const std::string sRetAny = "aSubReturnLabel = && ";
+    size_t pRet = sCode.find(sRetAny, p);
+    size_t pSemi = pRet == std::string::npos ? pRet : sCode.find(';', pRet);
+    if (pSemi == std::string::npos || (pNext != std::string::npos && pSemi > pNext))
       break;                                  // not a column of this join
+    std::string sThis = sCode.substr(pRet + sRetAny.size(), pSemi - pRet - sRetAny.size()) + ":";
+    if (sThis.compare(0, sLabel.size(), sLabel) != 0)
+      break;
+    size_t pLab = sCode.find(sThis, pSemi);
+    if (pLab == std::string::npos || (pNext != std::string::npos && pLab > pNext))
+      break;
+    // (a column that is not in the join's row at all is stepped over without
+    // a destination: TPC-H Q8, l_orderkey in the join of lineitem)
     size_t d = sCode.find(sDst, p);
     size_t g = sCode.find("goto L_", p);
-    if (d == std::string::npos || g == std::string::npos || d > pLab || g > pLab)
+    if (g == std::string::npos || g > pLab)
       return;
     if (sCode.compare(g, sJump.size(), sJump) == 0) {
+      if (d == std::string::npos || d > pLab)
+        return;
       size_t q = sCode.find(sCell, d);
       if (q == std::string::npos || q > pLab || i_Col < 0 || i_Col >= 64)
         return;

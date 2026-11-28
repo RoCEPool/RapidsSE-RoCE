@@ -42,6 +42,7 @@ namespace STORE {
   public:
     // between two consecutive stages (Stencil::eSynthesise)
     static bool bPruneTub(std::string& rsStageA, const std::string& rsStageB);
+    static bool bFilterInEos(std::string& rsStageA, const std::string& rsStageB);
     void vHavingGroupsHere(bool b) { m_bHavingGroupsHere = b; }
     void *operator new(size_t);
 

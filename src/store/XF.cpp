@@ -281,6 +281,11 @@ void XF::vTransform(void)
     m_pCI->E.p_deck->bLocalise_gbyAgg(m_pCI);   // Card_Deck.cpp
     m_pCI->vEndTransform(__LINE__);
   }
+  if (! bOptimisationOff("single_node_gbyagg")) {
+    m_pCI->vTransform(__FILE__, __func__, XF_OPTIMISE_LOCAL_GBYAGG);
+    m_pCI->E.p_deck->bDropNodeMerge_gbyAgg();   // Card_Deck.cpp
+    m_pCI->vEndTransform(__LINE__);
+  }
   //
   m_pCI->vEndPhase();                                  //
                                                        //

@@ -23,6 +23,7 @@ namespace STORE
     void vAddStageCasts(CardIter* pCI);
 
     bool bLocalise_gbyAgg(CardIter* pCI);
+    bool bDropNodeMerge_gbyAgg(void);
 
     eXK eAddStageCast_toPrev_cast(CardIter*        pCI,
                                   Card_StreamPtn*  p_streamPtn,
