@@ -81,8 +81,8 @@ over partitions, `/stageTimes`): Q7 S06 (lineitem) 190 -> 152 ms, S04
 
 ## Limits and next steps
 
-- Outer joins, string or multi-column keys, joins that are not the first
-  operator of a row handler: still index joins.
+- String or multi-column keys, joins that are not the first operator of a
+  row handler: still index joins. (Outer, semi and anti joins: see below.)
 - The scan still reads every key of the joined table; the matched rows are
   then decoded one by one through the column-cache join path.
 
