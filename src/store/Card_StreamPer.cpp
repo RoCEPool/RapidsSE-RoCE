@@ -3,6 +3,7 @@
 /*============================================================================*/
 
 #include "Card_StreamPer.hpp"
+#include <math.h>
 
 #include "Card_Predicate.hpp"
 #include "Card_RlnConj.hpp"
@@ -401,7 +402,32 @@ i8 Card_StreamPer::nJoinFanOut(Card_Deck* p_pipeline,
     if (! bReplicated && ! bPtnColumn) {
       i8 nPtns = AM::PTNMAP::nPtnsInGrid();
       if (nPtns > 1) {
-        nFanOut *= nPtns;
+        // The sample saw the keys that have rows in its partition. When the F
+        // rows of a key are spread over the n partitions at random, a
+        // partition that has the key has F/n / (1 - (1 - 1/n)^F) of them:
+        // F/n for a key of many rows (lineitem by l_suppkey), but 1 for a
+        // unique key (orders by o_orderkey, partitioned by o_custkey), whose
+        // row is in one partition only. F is found from the sampled value by
+        // bisection. (Multiplying by n made every lookup of a unique key on a
+        // table partitioned by another column return n rows; with four
+        // partitions TPC-H Q21 then started from a scan of orders.)
+        d8 dSeen = (d8) nFanOut;
+        d8 dLow = dSeen, dHigh = dSeen * (d8) nPtns;
+        for (i8 i = 0; i < 40; i++) {
+          d8 dMid = (dLow + dHigh) / 2;
+          d8 dExpect = (dMid / (d8) nPtns) / (1.0 - pow(1.0 - 1.0 / (d8) nPtns, dMid));
+          if (dExpect < dSeen)
+            dLow = dMid;
+          else
+            dHigh = dMid;
+        }
+        nFanOut = (i8) (dHigh + 0.5);
+        // (Not below 2: the weights of the join order were set with two
+        // partitions, where such a lookup counted as 2 rows, and with 1 the
+        // order of TPC-H Q7 changes for the worse. What this keeps is that
+        // the estimate no longer grows with the number of partitions.)
+        if (nFanOut < 2)
+          nFanOut = 2;
         if (pnProbePtns)
           *pnProbePtns = nPtns;
       }
