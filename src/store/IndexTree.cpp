@@ -1928,6 +1928,7 @@ namespace {
     // of its key column, read in place of a walk of the index
     struct ScanBuf { i8 iBuffer; i8 nHeads; const i8* aiKeys; void* pPin; };
     std::vector<ScanBuf> vScan;
+    std::vector<i8> aiScanHit;           // the hits of the buffer being joined (iExtern_HashJoinScanHits)
     bool bBuilt = true;                  // axSlot holds every stored row
 
     static u8 uHash(i8 iKey) { u8 u = (u8) iKey * 0x9E3779B97F4A7C15ull; return u ^ (u >> 29); }
@@ -2093,6 +2094,71 @@ extern "C" i8 iExtern_HashJoinScanBuffer(void* aIndexInfo, i8 i, i8* piBuffer, v
   *piBuffer = pHash->vScan[i].iBuffer;
   *paiKeys = (void*) pHash->vScan[i].aiKeys;
   return pHash->vScan[i].nHeads;
+}
+
+// scan, a buffer at a time: the rows of buffer i of the joined table partition
+// whose key has stored rows, as pairs [item][first stored row of the key]
+// (*paiHits; one pair of zeros behind the last), and their number, or -1 past
+// the last buffer. The generated code tested the Bloom filter and looked the
+// key up row by row, between its own jumps; here it is one loop over the
+// cached keys of the buffer, and a key equal to the key before it (the lines
+// of an order follow each other) takes that key's answer.
+extern "C" i8 iExtern_HashJoinScanHits(void* aIndexInfo, i8 i, i8* piBuffer, void** paiHits)
+{
+  IndexInfo* pIndexInfo = (IndexInfo*) aIndexInfo;
+  HashJoin* pHash = (HashJoin*) pIndexInfo->m_aHashJoin;
+  if (! pHash || i < 0 || i >= (i8) pHash->vScan.size())
+    return -1;
+  const HashJoin::ScanBuf& rBuf = pHash->vScan[i];
+  *piBuffer = rBuf.iBuffer;
+  std::vector<i8>& raiHit = pHash->aiScanHit;
+  if ((i8) raiHit.size() < 2 * rBuf.nHeads + 2)
+    raiHit.resize(2 * rBuf.nHeads + 2);
+  i8* aiOut = raiHit.data();
+  const i8* aiKeys = rBuf.aiKeys;
+  const u8* auBloom = pIndexInfo->m_auHjBloom;
+  const u8 uBloomMask = pIndexInfo->m_uHjBloomMask;
+  const HashJoin::Slot* axSlot = pHash->axSlot.data();
+  const u8 uMask = pHash->uMask;
+  i8 nHits = 0;
+  i8 iPrevKey = 0;
+  char* aPrev = nullptr;
+  bool bPrev = false;
+  for (i8 k = 0; k < rBuf.nHeads; k++) {
+    i8 iKey = aiKeys[k];
+    char* aFirst;
+    if (bPrev && iKey == iPrevKey)
+      aFirst = aPrev;
+    else {
+      aFirst = nullptr;
+      u8 u = HashJoin::uHash(iKey);
+      u8 v = u >> 32;
+      if ( ! auBloom ||
+           ((auBloom[(u & uBloomMask) >> 6] & (1ull << (u & 63))) &&
+            (auBloom[(v & uBloomMask) >> 6] & (1ull << (v & 63))))) {
+        u8 s = u & uMask;
+        while (axSlot[s].aFirst) {
+          if (axSlot[s].iKey == iKey) {
+            aFirst = axSlot[s].aFirst;
+            break;
+          }
+          s = (s + 1) & uMask;
+        }
+      }
+      iPrevKey = iKey;
+      aPrev = aFirst;
+      bPrev = true;
+    }
+    if (aFirst) {
+      aiOut[2 * nHits] = k;
+      aiOut[2 * nHits + 1] = (i8) aFirst;
+      nHits++;
+    }
+  }
+  aiOut[2 * nHits] = 0;
+  aiOut[2 * nHits + 1] = 0;
+  *paiHits = (void*) aiOut;
+  return nHits;
 }
 
 // iFlags (job tags, read when the code was made: the tag set is not read
