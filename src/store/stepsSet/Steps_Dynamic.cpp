@@ -88,6 +88,7 @@ void Step::vDynamicExecute(void)
   aDynamicT->m_pPot = * m_pLogicUnit->m_xpPot;
   aDynamicT->m_pTub = * m_pLogicUnit->m_xpTub;
   aDynamicT->m_iErrorCode = (i8)EC_NONE;
+  aDynamicT->m_iOpLglPtn = m_pOp ? m_pOp->tLglPtn().iAsI8() : 0;
   aDynamicT->m_eStrInflateRule = SI_STRAREA_ADR;
   aDynamicT->m_bTrace     = bTrace;
 
@@ -130,6 +131,20 @@ void Step::vDynamicExecute(void)
     }
   }
   *******************************************************/
+
+  // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+  // fault injection for tests: job tag /test_low_memory_rows (or _scan) makes
+  // the handler of a row buffer (table buffer) report low memory without
+  // running, as a handler does that runs out of region memory
+  // (Regression/lowMemory.test)
+  if (pDataBuffer &&
+      AM::JOB::bHasTag(pDataBuffer->eGetClassNo() == CN_CRWBUFFER ? "<test_low_memory_scan>"_Stz
+                                                                  : "<test_low_memory_rows>"_Stz)) {
+    m_oDataStack.vPushInt((i8) EC_LOW_MEMORY);
+    m_oDataStack.vPushInt(0);
+    EXIT();
+    return;
+  }
 
     // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
   // execute the dynamic function

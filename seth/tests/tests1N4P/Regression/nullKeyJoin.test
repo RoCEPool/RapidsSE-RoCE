@@ -1,0 +1,85 @@
+/*----------------------------------------------------------------------------*/
+/* nullKeyJoin.test -- NULL keys and outer joins                              */
+/*----------------------------------------------------------------------------*/
+
+// f has a row whose key is NULL (id 14) and one whose key d does not have
+// (id 13).
+// - NOT EXISTS keeps both: the sub-query finds nothing for them. The anti
+//   join dropped the NULL key (CombinedSrc vNullPasses).
+// - NOT IN keeps neither the NULL key (NULL NOT IN (...) is not true) nor,
+//   as before, anything else that d has.
+// - A left outer join keeps every row of f. The cost-based join order put d
+//   first and lost the rows without a match (Card_TableList: P_NotFirst).
+// Each query runs with and without /optimiser_off_all.
+
+create table ${testName2}_d (k integer not null, name varchar(20));
+success
+create index ${testName2}_d_Ix on ${testName2}_d (k);
+affected: 0
+create table ${testName2}_f (id integer not null, k integer, v integer);
+success
+create index ${testName2}_f_Ix on ${testName2}_f (k);
+affected: 0
+load ${testName2}_d "../DATA/NullKey/d.tbl" <field_delimiter> = "|";
+success
+load ${testName2}_f "../DATA/NullKey/f.tbl" <field_delimiter> = "|";
+success
+
+select count(*), sum(v) from ${testName2}_f where not exists (select * from ${testName2}_d where ${testName2}_d.k = ${testName2}_f.k);
+rows: (2, 270)
+
+/optimiser_off_all
+select count(*), sum(v) from ${testName2}_f where not exists (select * from ${testName2}_d where ${testName2}_d.k = ${testName2}_f.k);
+rows: (2, 270)
+
+select id from ${testName2}_f where not exists (select * from ${testName2}_d where ${testName2}_d.k = ${testName2}_f.k) order by id;
+rows: (13)
+      (14)
+
+/optimiser_off_all
+select id from ${testName2}_f where not exists (select * from ${testName2}_d where ${testName2}_d.k = ${testName2}_f.k) order by id;
+rows: (13)
+      (14)
+
+select count(*) from ${testName2}_f where k not in (select k from ${testName2}_d);
+rows: (1)
+
+/optimiser_off_all
+select count(*) from ${testName2}_f where k not in (select k from ${testName2}_d);
+rows: (1)
+
+select count(*) from ${testName2}_f where exists (select * from ${testName2}_d where ${testName2}_d.k = ${testName2}_f.k);
+rows: (4)
+
+/optimiser_off_all
+select count(*) from ${testName2}_f where exists (select * from ${testName2}_d where ${testName2}_d.k = ${testName2}_f.k);
+rows: (4)
+
+select count(*), count(name), sum(v) from ${testName2}_f left outer join ${testName2}_d on ${testName2}_f.k = ${testName2}_d.k;
+rows: (6, 4, 750)
+
+/optimiser_off_all
+select count(*), count(name), sum(v) from ${testName2}_f left outer join ${testName2}_d on ${testName2}_f.k = ${testName2}_d.k;
+rows: (6, 4, 750)
+
+select id, name from ${testName2}_f left outer join ${testName2}_d on ${testName2}_f.k = ${testName2}_d.k order by id;
+rows: (10, 'one')
+      (11, 'one')
+      (12, 'two')
+      (13, NULL)
+      (14, NULL)
+      (15, 'five')
+
+/optimiser_off_all
+select id, name from ${testName2}_f left outer join ${testName2}_d on ${testName2}_f.k = ${testName2}_d.k order by id;
+rows: (10, 'one')
+      (11, 'one')
+      (12, 'two')
+      (13, NULL)
+      (14, NULL)
+      (15, 'five')
+
+drop table ${testName2}_d;
+success
+drop table ${testName2}_f;
+success

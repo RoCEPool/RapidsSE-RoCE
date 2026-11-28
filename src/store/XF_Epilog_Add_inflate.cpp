@@ -2,6 +2,7 @@
 /* XF_Epilog_Add_inflate.cpp -- Add Hash (opt) and Cast                     */
 /*============================================================================*/
 
+#include "Card_Deck.hpp"
 #include "XF_Epilog_Add_inflate.hpp"
 
 
@@ -71,6 +72,9 @@ void XF_Epilog_Add_inflate::vBifurcate_inflate(void)
     if (CK_o_SCAN == m_pCI->E.e_Op) {
       m_pCI->E.p_inflate = new Card_Inflate;
       m_pCI->vInsertAfter(m_pCI->E.p_inflate, m_pCI->E.p_scan);
+      // (a scan read in the first partition only: so is its inflate)
+      if (Card_Deck::bScanOnce(m_pCI->E.p_scan->szCoord()->azChar()))
+        Card_Deck::st_sScanOnce.insert(std::string(m_pCI->E.p_inflate->szCoord()->azChar()));
 
       if (m_pCI->E.p_scan->pSymbol()->Y_bHas(P_FusedProject))
         m_pCI->E.p_inflate->pSymbol()->Y_vSet(P_FusedProject);

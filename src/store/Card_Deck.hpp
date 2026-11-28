@@ -2,6 +2,8 @@
 /* Card_Deck.hpp -- Deck of Cards                                             */
 /*============================================================================*/
 #pragma once
+#include <set>
+#include <string>
 
 #include "Card_symbol.hpp"
 
@@ -24,6 +26,9 @@ namespace STORE
 
     bool bLocalise_gbyAgg(CardIter* pCI);
     bool bDropNodeMerge_gbyAgg(void);
+    void vMarkReplicatedScanOnce(void);
+    static bool bScanOnce(const char* azCoord);
+    static thread_local std::set<std::string> st_sScanOnce;
 
     eXK eAddStageCast_toPrev_cast(CardIter*        pCI,
                                   Card_StreamPtn*  p_streamPtn,

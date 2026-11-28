@@ -2,6 +2,7 @@
 /* Card_OP.hpp -- Abstract Op                                                 */
 /*============================================================================*/
 #pragma once
+#include <string>
 
 #include "Card.hpp"
 #include "Card_symbol.hpp"
@@ -13,6 +14,10 @@ namespace STORE
   class Card_OP : public Card_symbol<Card_OP>
   {  
   public:
+    // table synonyms of the NOT EXISTS sub-queries of the statement (XF_FLATTEN,
+    // vRpn_keyNotExists; cleared in XF prolog)
+    static thread_local std::string st_sNullPasses;
+
     Card_OP(eCK eCard, i8 iFixedDepth);
    ~Card_OP(void) noexcept(false);
 

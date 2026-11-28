@@ -138,6 +138,8 @@ OpSketch::OpSketch(StageDef* pStageDef, Stz* sExprStr, eHK eHandlerKind, eSK eSk
   }
 
   m_bLeftOuter = false;
+  m_bScanOnce = false;
+  m_bNullPasses = false;
   m_bCrossJoin = false;
 
   m_eLowerIP = IP_NONE;
@@ -634,6 +636,12 @@ void OpSketch::vGenerateExprStacks(Stz* sExpr, bool bConstraint)
     // left_outer
     if (pTkn->bSame("left_outer"_Stz)) {
       m_bLeftOuter = true;
+      continue;
+    }
+
+    // null_passes (NOT EXISTS: a NULL key has no match, the row passes)
+    if (pTkn->bSame("null_passes"_Stz)) {
+      m_bNullPasses = true;
       continue;
     }
 

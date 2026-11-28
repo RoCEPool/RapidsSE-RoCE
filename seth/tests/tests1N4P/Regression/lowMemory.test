@@ -1,0 +1,64 @@
+/*----------------------------------------------------------------------------*/
+/* lowMemory.test -- a statement that runs out of memory fails, the node      */
+/* stays up                                                                   */
+/*----------------------------------------------------------------------------*/
+
+// The job tags /test_low_memory_scan and /test_low_memory_rows make the
+// generated handler of a table buffer or a row buffer report low memory, as
+// one does that runs out of region memory (Steps_Dynamic.cpp). The statement
+// fails with EC_LOW_MEMORY (it used to give no answer, or the node died with
+// SIGSEGV in the row-buffer path), and the next statement runs.
+
+create table ${testName2}_d (k integer not null, name varchar(20));
+success
+create index ${testName2}_d_Ix on ${testName2}_d (k);
+affected: 0
+create table ${testName2}_f (id integer not null, k integer, v integer);
+success
+create index ${testName2}_f_Ix on ${testName2}_f (k);
+affected: 0
+load ${testName2}_d "../DATA/NullKey/d.tbl" <field_delimiter> = "|";
+success
+load ${testName2}_f "../DATA/NullKey/f.tbl" <field_delimiter> = "|";
+success
+
+/test_low_memory_scan
+select count(*) from ${testName2}_f where v > 100;
+failure contains: 'EC_LOW_MEMORY'
+
+select count(*) from ${testName2}_f where v > 100;
+rows: (5)
+
+/test_low_memory_rows
+select k, count(*) from ${testName2}_f group by k;
+failure contains: 'EC_LOW_MEMORY'
+
+select k, count(*) from ${testName2}_f group by k order by k;
+rows: (1, 2)
+      (2, 1)
+      (4, 1)
+      (5, 1)
+      (NULL, 1)
+
+
+/test_low_memory_rows
+select count(*) from ${testName2}_f, ${testName2}_d where ${testName2}_f.k = ${testName2}_d.k;
+failure contains: 'EC_LOW_MEMORY'
+
+select count(*) from ${testName2}_f, ${testName2}_d where ${testName2}_f.k = ${testName2}_d.k;
+rows: (4)
+
+/test_low_memory_rows
+select count(*) from ${testName2}_f where not exists (select * from ${testName2}_d where ${testName2}_d.k = ${testName2}_f.k);
+failure contains: 'EC_LOW_MEMORY'
+
+select count(*) from ${testName2}_f where not exists (select * from ${testName2}_d where ${testName2}_d.k = ${testName2}_f.k);
+rows: (2)
+
+select count(*), sum(v) from ${testName2}_f;
+rows: (6, 750)
+
+drop table ${testName2}_d;
+success
+drop table ${testName2}_f;
+success
