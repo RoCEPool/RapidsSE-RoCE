@@ -71,6 +71,7 @@ struct Dynamic_T
 
   i8 m_bTrace;
   i8 m_iErrorCode;
+  i8 m_iOpLglPtn;     // logical partition of the running operator (Steps_Dynamic.cpp)
   i8 m_iRowsProcessed;
   i8 m_iLimitRows;
 

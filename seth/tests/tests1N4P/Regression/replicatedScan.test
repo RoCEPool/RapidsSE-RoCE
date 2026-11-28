@@ -1,0 +1,116 @@
+/*----------------------------------------------------------------------------*/
+/* replicatedScan.test -- a stream of replicated tables counts each row once  */
+/*----------------------------------------------------------------------------*/
+
+// Every partition holds the whole of a replicated table. A query whose rows
+// come from replicated tables only (no inner join to a partitioned table
+// before they leave the partitions) returned each row once per partition:
+// select count(*) from nation gave 25 x the partitions. Such a scan is read
+// in the first partition of the grid only (Card_Deck
+// vMarkReplicatedScanOnce). A join from it to a partitioned table still
+// reads it everywhere. Each query runs with and without /optimiser_off_all.
+
+create table ${testName2}_region ( R_REGIONKEY INTEGER NOT NULL, R_NAME CHAR(25) NOT NULL, R_COMMENT VARCHAR(152) ) replicated tableSize 1;
+success
+CREATE INDEX ${testName2}_region_Ix ON ${testName2}_region(R_REGIONKEY);
+affected: 0
+loadReplicated ${testName2}_region "../TPCH/SF_0001/region.tbl";
+success
+create table ${testName2}_nation ( N_NATIONKEY INTEGER NOT NULL, N_NAME CHAR(25) NOT NULL, N_REGIONKEY INTEGER NOT NULL, N_COMMENT VARCHAR(152) ) replicated tableSize 1;
+success
+CREATE INDEX ${testName2}_nation_Ix ON ${testName2}_nation(N_NATIONKEY);
+affected: 0
+CREATE INDEX ${testName2}_nation_IxR ON ${testName2}_nation(N_REGIONKEY);
+affected: 0
+loadReplicated ${testName2}_nation "../TPCH/SF_0001/nation.tbl";
+success
+create table ${testName2}_supplier ( S_SUPPKEY INTEGER NOT NULL, S_NAME CHAR(25) NOT NULL, S_ADDRESS VARCHAR(40) NOT NULL, S_NATIONKEY INTEGER NOT NULL, S_PHONE CHAR(15) NOT NULL, S_ACCTBAL DECIMAL(15,2) NOT NULL, S_COMMENT VARCHAR(101) NOT NULL );
+success
+CREATE INDEX ${testName2}_supplier_Ix ON ${testName2}_supplier(S_SUPPKEY);
+affected: 0
+CREATE INDEX ${testName2}_supplier_IxN ON ${testName2}_supplier(S_NATIONKEY);
+affected: 0
+load ${testName2}_supplier "../TPCH/SF_0001/supplier.tbl";
+success
+
+select count(*) from ${testName2}_nation;
+rows: (25)
+
+/optimiser_off_all
+select count(*) from ${testName2}_nation;
+rows: (25)
+
+select count(*) from ${testName2}_region;
+rows: (5)
+
+/optimiser_off_all
+select count(*) from ${testName2}_region;
+rows: (5)
+
+select sum(n_regionkey) from ${testName2}_nation;
+rows: (50)
+
+/optimiser_off_all
+select sum(n_regionkey) from ${testName2}_nation;
+rows: (50)
+
+select n_regionkey, count(*) from ${testName2}_nation group by n_regionkey order by n_regionkey;
+rows: (0, 5)
+      (1, 5)
+      (2, 5)
+      (3, 5)
+      (4, 5)
+
+/optimiser_off_all
+select n_regionkey, count(*) from ${testName2}_nation group by n_regionkey order by n_regionkey;
+rows: (0, 5)
+      (1, 5)
+      (2, 5)
+      (3, 5)
+      (4, 5)
+
+select n_name from ${testName2}_nation where n_nationkey < 3 order by n_name;
+rows: ('ALGERIA')
+      ('ARGENTINA')
+      ('BRAZIL')
+
+/optimiser_off_all
+select n_name from ${testName2}_nation where n_nationkey < 3 order by n_name;
+rows: ('ALGERIA')
+      ('ARGENTINA')
+      ('BRAZIL')
+
+select count(*) from ${testName2}_region, ${testName2}_nation where r_regionkey = n_regionkey;
+rows: (25)
+
+/optimiser_off_all
+select count(*) from ${testName2}_region, ${testName2}_nation where r_regionkey = n_regionkey;
+rows: (25)
+
+select count(*) from (select distinct n_regionkey from ${testName2}_nation) t;
+rows: (5)
+
+/optimiser_off_all
+select count(*) from (select distinct n_regionkey from ${testName2}_nation) t;
+rows: (5)
+
+select count(*) from ${testName2}_nation, ${testName2}_supplier where n_nationkey = s_nationkey;
+rows: (10)
+
+/optimiser_off_all
+select count(*) from ${testName2}_nation, ${testName2}_supplier where n_nationkey = s_nationkey;
+rows: (10)
+
+select count(*) from ${testName2}_supplier;
+rows: (10)
+
+/optimiser_off_all
+select count(*) from ${testName2}_supplier;
+rows: (10)
+
+drop table ${testName2}_supplier;
+success
+drop table ${testName2}_nation;
+success
+drop table ${testName2}_region;
+success

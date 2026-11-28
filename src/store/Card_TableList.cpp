@@ -103,7 +103,10 @@ Card_TableList* Card_TableList::pExtractList(Card_Deck* p_deck)
     // constraint is its ON condition, evaluated by the index join that reads
     // it). It cannot head the join order; without this, an order that puts it
     // first (an empty table has the fewest estimated rows) fails validation.
-    if (xDeck.pChild() && xDeck.pChild()->pSub_constraint())
+    // (An outer join on the join columns alone has no constraint, only its
+    // LEFT_OUTER member, XF_Prolog_Move_on: with a cost-based order the inner
+    // table came first and the rows without a match were lost.)
+    if (xDeck.pChild() && (xDeck.pChild()->pSub_constraint() || xDeck.pChild()->pSub_outerJoin()))
       p_table_dup->pSymbol()->Y_vSet(P_NotFirst);
 
     // XF_FLATTEN::vInto_KEYnotEXISTS puts the <keyExists>/<keyNotExists> on
@@ -123,7 +126,11 @@ Card_TableList* Card_TableList::pExtractList(Card_Deck* p_deck)
     }
     else
     if (p_keyNotExists) {
+      bool bNullPasses = p_keyNotExists->pSymbol()->Y_bHas(P_NullPasses);
       p_keyNotExists = _pCard_KeyNotExists(p_keyNotExists->pDupCard());
+      // (pDupCard copies no properties: NOT EXISTS, see XF_FLATTEN)
+      if (bNullPasses)
+        p_keyNotExists->pSymbol()->Y_vSet(P_NullPasses);
       p_table_dup->vAppendChild(p_keyNotExists);
     }
   }

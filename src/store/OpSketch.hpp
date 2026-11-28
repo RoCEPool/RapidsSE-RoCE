@@ -105,6 +105,8 @@ namespace STORE
 
     bool m_bLeftOuter;
     bool m_bCrossJoin;
+    bool m_bNullPasses;   // anti join of NOT EXISTS: a NULL key passes the row on
+    bool m_bScanOnce;     // replicated-table scan read in the first partition only (Card_Deck)
 
     eIP m_eLowerIP;
     eIP m_eUpperIP;

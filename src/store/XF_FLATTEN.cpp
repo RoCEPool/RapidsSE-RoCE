@@ -360,8 +360,17 @@ void XF_FLATTEN::vInto_KEYnotEXISTS(CardIter* pCI)
     p_from_exists->vAppendChild(new Card_KeyExists);
   else
   if (pCI->E.p_rlnConj->pSymbol()->bHasFacet("notIn"_Stz) ||
-      pCI->E.p_rlnConj->pSymbol()->bHasFacet("notExists"_Stz))
-    p_from_exists->vAppendChild(new Card_KeyNotExists);
+      pCI->E.p_rlnConj->pSymbol()->bHasFacet("notExists"_Stz)) {
+    Card_KeyNotExists* p_keyNotExists = new Card_KeyNotExists;
+    // NOT EXISTS keeps an outer row whose key is NULL (the sub-query finds
+    // nothing); NOT IN does not (NULL NOT IN (...) is not true)
+    if (pCI->E.p_rlnConj->pSymbol()->bHasFacet("notExists"_Stz)) {
+      p_keyNotExists->pSymbol()->Y_vSet(P_NullPasses);
+      if (Card_Table* p_table = p_from_exists->pSub_table())
+        Card_OP::st_sNullPasses.push_back(p_table->pSymbol()->cTblSyn());
+    }
+    p_from_exists->vAppendChild(p_keyNotExists);
+  }
 
   pCI->vSnapIf_arriving(p_emitted_table,nullptr);
   pCI->E.p_rlnConj->vMorph_sqlOp_To_EQ(pCI, pCI->E.p_term);

@@ -95,6 +95,7 @@ void CombinedSrc::vSynthesizeCode(Stencil* pStencil, bool bFirstStage, bool bLas
   bool bHasIndexInflate = false;
 	bool bHasOrdAgg = false;
   char* azPruneStart = nullptr;   // start of a table-scan inflate whose columns may be pruned
+  char* azHandlerStart = nullptr; // the table-buffer handler being made
   i8 iPruneEnd = -1;              // sketch that ends the consumers of the inflated row
   std::vector<char*> vJoinPrune;  // starts of index joins whose unread columns may be skipped
   bool bStageGbyAgg = false;      // the stage has a group by (its EOS emits the groups)
@@ -186,7 +187,11 @@ void CombinedSrc::vSynthesizeCode(Stencil* pStencil, bool bFirstStage, bool bLas
         // - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
         // generate expressions for null check
         if (pOpSketch->m_pNullStack->nValues()) {
+            char* azNullCheck = m_azCodeCrs;
             vAppendCodeFragment(pOpSketch, "vNullCheck"_Stz);
+            // NOT EXISTS: a row whose key is NULL has no match and goes on
+            if (pOpSketch->m_bNullPasses)
+              vNullPasses(pOpSketch, azNullCheck);
         }
 
         // - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -505,7 +510,11 @@ void CombinedSrc::vSynthesizeCode(Stencil* pStencil, bool bFirstStage, bool bLas
         
         // - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
         // new INDEXBUFFER handler
+        azHandlerStart = m_azCodeCrs;
         vAppendFunctionHeader(pOpSketch, eCurrentHandler, pStencil->szStageNm(), bHasIndexInflate);
+        // a stream of replicated tables only: read in the first partition
+        if (pOpSketch->m_bScanOnce)
+          vScanOnce(azHandlerStart);
 
         // - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
         // operator stub
@@ -711,11 +720,16 @@ void CombinedSrc::vSynthesizeCode(Stencil* pStencil, bool bFirstStage, bool bLas
 
         // - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
         // new CRWBUFFER handler
+        azHandlerStart = m_azCodeCrs;
         vAppendFunctionHeader(pOpSketch, eCurrentHandler, pStencil->szStageNm(), bHasIndexInflate);
 
         // - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
         // operator stub
         vAppendCodeFragment(pOpSketch, "vOperatorStub"_Stz);
+
+        // a stream of replicated tables only: read in the first partition
+        if (pOpSketch->m_bScanOnce)
+          vScanOnce(azHandlerStart);
 
         // - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
         // append to-stencil
@@ -1196,6 +1210,46 @@ void CombinedSrc::vJoinHashAttach(OpSketch* pOpSketch, char* azInit)
     return;
   std::string sCall = "    vExtern_JoinHashAttach(" + std::string(azInfo, azComma - azInfo) + ");\n";
   vInsertText(azEol + 1, sCall.c_str());
+}
+
+// A scan of a replicated table whose stream meets no inner join to a
+// partitioned table before it leaves the partitions is read in the first
+// partition of the grid only (Card_Deck::vMarkReplicatedScanOnce): the
+// handler that starts at azHandler returns at once in the others. (A
+// replicated table's buffers carry partition 0 in every partition: the
+// partition of the running operator decides.)
+void CombinedSrc::vScanOnce(char* azHandler)
+{
+  _precondition_(_ADDRESS_,_MAGIC_,CN_COMBINEDSRC,_FOOTER_);
+
+  char* azBody = azHandler ? strstr(azHandler, "(struct Dynamic_T* aDynamicT) {\n") : nullptr;
+  RASSERT(azBody);
+  azBody = strchr(azBody, '\n') + 1;
+  vInsertText(azBody, "\n  if (aDynamicT->m_iOpLglPtn != 0)\n"
+                      "    return 1;\n");
+}
+
+// The NULL check of an anti join (from azNullCheck) drops the row whose key
+// is NULL. For NOT EXISTS (OpSketch::m_bNullPasses) the row has no match and
+// passes: it goes to the operator after the join.
+void CombinedSrc::vNullPasses(OpSketch* pOpSketch, char* azNullCheck)
+{
+  _precondition_(_ADDRESS_,_MAGIC_,CN_COMBINEDSRC,_FOOTER_);
+
+  static const char* szDrop = "aDynamicT->m_bProcessRow = false;\n";
+  char* azDrop = strstr(azNullCheck, szDrop);
+  RASSERT(azDrop);
+  char* azGoto = strstr(azDrop, "goto ");
+  char* azEnd = azGoto ? strchr(azGoto, ';') : nullptr;
+  RASSERT(azEnd && azEnd < m_azCodeCrs);
+  std::string sTail(azEnd);
+  std::string sNew = std::string("aDynamicT->m_bProcessRow = true;\n") +
+                     std::string(azDrop + strlen(szDrop), azGoto - azDrop - strlen(szDrop)) +
+                     "goto " + pOpSketch->m_sLabelNext.azChar();
+  m_azCodeCrs = azDrop;
+  *m_azCodeCrs = '\0';
+  vAppendText(sNew.c_str());
+  vAppendText(sTail.c_str());
 }
 
 // insert text at a place in the code already generated

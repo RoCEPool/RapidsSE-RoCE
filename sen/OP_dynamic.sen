@@ -74,15 +74,12 @@
 
       // not already detected low memory ?
       [pipeline].lowMemory@ not if
-
-        Marker[].newLowMemory
-        Marker[]
-            nullptr to Marker[]
-
-        [op].pipeout
-        //"dynamicOP PIPED OUT LOW MEMORY!!!" .
-      else
-        "dynamicOP ALREADY DETECTED LOW MEMORY!!!" .
+        true [pipeline].lowMemory!
+        // fail the statement as any other execution error does: the
+        // client gets EC_LOW_MEMORY. (The low-memory marker cancelled the
+        // pipeline without an error, and the client waited for an answer
+        // until its own timeout.)
+        EC_LOW_MEMORY op__execErr
       then
 
       //"dynamicOP TOGGLING TO ABNORMAL HANDLERS FOR OP"  .
@@ -232,15 +229,12 @@
 
       // not already detected low memory ?
       [pipeline].lowMemory@ not if
-
-        Marker[].newLowMemory
-        Marker[]
-            nullptr to Marker[]
-
-        [op].pipeout
-        "dynamicOP PIPED OUT LOW MEMORY!!!" .
-      else
-        "dynamicOP ALREADY DETECTED LOW MEMORY!!!" .
+        true [pipeline].lowMemory!
+        // fail the statement as any other execution error does: the
+        // client gets EC_LOW_MEMORY. (The low-memory marker cancelled the
+        // pipeline without an error, and the client waited for an answer
+        // until its own timeout.)
+        EC_LOW_MEMORY op__execErr
       then
 
       //"dynamicOP TOGGLING TO ABNORMAL HANDLERS FOR OP"  .

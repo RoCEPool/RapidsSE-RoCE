@@ -123,10 +123,10 @@ void Locator::vLocate(Location* pLocation)
   //vTrace("%s %s\n"_Stz,pWord->szWordNm(), pWord->pCategory()->szWordNm());
   
   pWord = pDic->pFindWord(pLocation->szCatalog());
-  pObject = pWord->pObject();
-  m_pCatalog = pDic = _pDic(pObject);
   if (!pWord)
     return;
+  pObject = pWord->pObject();
+  m_pCatalog = pDic = _pDic(pObject);
   //vTrace("%s %s\n"_Stz,pWord->szWordNm(), pWord->pCategory()->szWordNm());
   
   pWord = pDic->pFindWord("schemas"_Stz);

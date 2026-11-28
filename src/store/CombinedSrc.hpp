@@ -43,6 +43,8 @@ namespace STORE {
     // between two consecutive stages (Stencil::eSynthesise)
     static bool bPruneTub(std::string& rsStageA, const std::string& rsStageB);
     void vJoinHashAttach(OpSketch* pOpSketch, char* azInit);
+    void vScanOnce(char* azHandler);
+    void vNullPasses(OpSketch* pOpSketch, char* azNullCheck);
     static bool bFilterInEos(std::string& rsStageA, const std::string& rsStageB);
     void vHavingGroupsHere(bool b) { m_bHavingGroupsHere = b; }
     void *operator new(size_t);

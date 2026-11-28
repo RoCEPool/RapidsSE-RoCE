@@ -203,7 +203,15 @@ void Step::vSenExecute(void)
   
   fpSTEPFN fpStepFn;
 
-  Word* pWord = _pWord(m_oDataStack.pPopPtr(__func__));
+  // (a FIND of a name that is not defined leaves a null: fail the operator
+  // with an internal error instead of dereferencing it. A handler script
+  // named an undefined word on its low-memory path, and the segfault took
+  // the node down.)
+  void* aWord = m_oDataStack.pPopPtr(__func__);
+  if (! aWord)
+    vThrow(FK_INTERNALERROR,__func__,__FILE__,__LINE__,
+           "execute: no word (FIND of an undefined name?)"_Stz);
+  Word* pWord = _pWord(aWord);
   
   eWK eWord = pWord->eWord();
   

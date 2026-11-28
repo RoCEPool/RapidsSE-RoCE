@@ -3,6 +3,8 @@
 /*============================================================================*/
 
 #include "Card_Deck.hpp"
+#include <set>
+#include <string>
 #include "AM.hpp"
 #include "Card_COLUMN.hpp"
 #include "Card_TablePtn.hpp"
@@ -241,6 +243,73 @@ namespace
         return i;
     return C_UNKNOWN;
   }
+}
+
+/*----------------------------------------------------------------------------*/
+/* A scan of a replicated table that drives the partitions' stream reads the  */
+/* whole table in every partition. That is what a join from it to a           */
+/* partitioned table needs (each partition joins its own rows with its copy). */
+/* When no inner join to a partitioned table follows before the stream leaves */
+/* the partitions, every row came out once per partition:                     */
+/*   select count(*) from nation          -> 25 x the number of partitions   */
+/*   select ... from region, nation where ...                                */
+/* Such a scan is marked; its table-buffer handler reads only in the first    */
+/* partition of the grid (CombinedSrc, OpSketch::m_bScanOnce). Semi, anti and */
+/* outer joins from such a stream to a partitioned table are not handled:     */
+/* left as they were. Job tag /optimiser_off_replicated_scan_once.            */
+/*----------------------------------------------------------------------------*/
+thread_local std::set<std::string> Card_Deck::st_sScanOnce;
+
+void Card_Deck::vMarkReplicatedScanOnce(void)
+{
+  _precondition_(_ADDRESS_,_MAGIC_,CN_CARD,_FOOTER_);
+
+  st_sScanOnce.clear();
+  if (AM::PTNMAP::nPtnsInGrid() <= 1 ||
+      AM::JOB::bHasTag("<optimiser_off_replicated_scan_once>"_Stz))
+    return;
+
+  Card_OP* p_scan = nullptr;
+  for (i8 i_Main = 0; i_Main < nChildCards(); i_Main++) {
+    Card* p_main = pGetChild(i_Main);
+    if (! p_main->bIsOp())
+      continue;
+    Card_OP* p_OP = (Card_OP*) p_main;
+    eCK e_main = p_OP->eCard();
+
+    // the stream has left the partitions
+    if (AL_PARTITION != eLevelOf(p_OP))
+      break;
+
+    if (CK_o_SCAN != e_main && CK_o_INDEXSCAN != e_main && CK_o_INDEXJOIN != e_main &&
+        CK_o_KEYEXISTS != e_main && CK_o_KEYNOTEXISTS != e_main && CK_o_CROSSJOIN != e_main)
+      continue;
+    Card_TablePtn* p_tablePtn = p_OP->pSub_tablePtn();
+    if (! p_tablePtn)
+      return;
+    bool bReplicated = Card_COLUMN::bIsReplicated(p_tablePtn->pSymbol());
+
+    if (! p_scan) {
+      if (! bReplicated || (CK_o_SCAN != e_main && CK_o_INDEXSCAN != e_main))
+        return;
+      p_scan = p_OP;
+      continue;
+    }
+    if (bReplicated)
+      continue;
+    // a partitioned table: an inner join makes the stream partitioned (each
+    // partition joins its copy with its rows); the others are not handled
+    return;
+  }
+  if (p_scan)
+    st_sScanOnce.insert(std::string(p_scan->szCoord()->azChar()));
+}
+
+bool Card_Deck::bScanOnce(const char* azCoord)
+{
+  _static_
+
+  return st_sScanOnce.count(std::string(azCoord)) != 0;
 }
 
 bool Card_Deck::bLocalise_gbyAgg(CardIter* pCI)

@@ -7,6 +7,7 @@
 #include <string>
 
 #include "Stencil.hpp"
+#include "Card_Deck.hpp"
 #include "Stream.hpp"
 #include "StreamDef.hpp"
 #include "Op.hpp"
@@ -794,6 +795,8 @@ OpSketch* Stencil::pSketchIndexScan(StageDef* pStageDef, OpDef* pOpDef)
   // create a new opSketch for this OP
   pOpSketch = new OpSketch(pStageDef, sIndexScanExpr, m_eHandlerKind, SK_INDEXSCAN, SR_NONE, SR_IT, II_ST);
   pOpSketch->vSetOpNos(i_Op, iOpSketchCount, m_iPrevOpNo, m_iPrevDupOpNo);
+  for (i8 i = 0; i < pStageDef->nItems() && ! pOpSketch->m_bScanOnce; i++)
+    pOpSketch->m_bScanOnce = Card_Deck::bScanOnce(pStageDef->pGet(i)->md_Coord);
 
   // set the streamDef's
   pOpSketch->vStreamDefs(pStreamDefLft, nullptr, pStreamDefOut);
@@ -852,6 +855,9 @@ OpSketch* Stencil::pSketchInflateCrw(StageDef* pStageDef, OpDef* pOpDef) {
   // create a new opSketch for this OP
   pOpSketch = new OpSketch(pStageDef, ""_Stz, m_eHandlerKind, SK_INFLATE_CRW, SR_NONE, SR_IT, II_NONE);
   pOpSketch->vSetOpNos(i_Op, iOpSketchCount, m_iPrevOpNo, m_iPrevDupOpNo);
+  // (the mark is on the scan of the stage, not on this inflate)
+  for (i8 i = 0; i < pStageDef->nItems() && ! pOpSketch->m_bScanOnce; i++)
+    pOpSketch->m_bScanOnce = Card_Deck::bScanOnce(pStageDef->pGet(i)->md_Coord);
 
   // set the streamDef's
   pOpSketch->vStreamDefs(pStreamDefLft, nullptr, pStreamDefOut);

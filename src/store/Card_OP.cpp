@@ -973,6 +973,8 @@ void Card_OP::vRpn_keyExists_constraint(CardIter* pCI, String* psRpnExpr, Card_K
 /*----------------------------------------------------------------------------*/
 /* produce <expr> for indexJoin op                                            */
 /*----------------------------------------------------------------------------*/
+thread_local std::string Card_OP::st_sNullPasses;
+
 void Card_OP::vRpn_keyNotExists(CardIter* pCI, String* psRpnExpr, Card_KeyNotExists* p_keyNotExists)
 {
   _precondition_(_ADDRESS_, _MAGIC_, CN_CARD, _FOOTER_);
@@ -999,6 +1001,13 @@ void Card_OP::vRpn_keyNotExists(CardIter* pCI, String* psRpnExpr, Card_KeyNotExi
     if (! p_bound->bIsEBound())
       continue;
 
+    // (NOT EXISTS: XF_FLATTEN records the synonym of the table; card copies
+    // on the way here lose the mark)
+    Card_TablePtn* p_tablePtn_ne = pSub_tablePtn();
+    if (p_keyNotExists->pSymbol()->Y_bHas(P_NullPasses) ||
+        (p_tablePtn_ne && p_tablePtn_ne->pSymbol() &&
+         st_sNullPasses.find(p_tablePtn_ne->pSymbol()->cTblSyn()) != std::string::npos))
+      psRpnExpr->vCatSprint(" %s"_Stz, "NULL_PASSES"_Stz);
     psRpnExpr->vCatSprint(" %s"_Stz, "BOUND"_Stz);
 
     i8 nSubs = p_bound->nChildCards();

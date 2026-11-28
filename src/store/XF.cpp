@@ -172,6 +172,7 @@ void XF::vTransform(void)
   // 1/5) prolog
 
   m_pCI->m_pBench->vPhase(m_pCI,OH_PROLOG);                        //
+  Card_OP::st_sNullPasses.clear();
                                                    //
   if (AM::JOB::bHasTag(C_OPTIMISER_TRACE)) {
     m_pCI->m_pBench->vDump(__func__);
@@ -281,6 +282,11 @@ void XF::vTransform(void)
     m_pCI->E.p_deck->bLocalise_gbyAgg(m_pCI);   // Card_Deck.cpp
     m_pCI->vEndTransform(__LINE__);
   }
+  // (always: it clears the marks of the statement before)
+  m_pCI->vTransform(__FILE__, __func__, XF_OPTIMISE_LOCAL_GBYAGG);
+  m_pCI->E.p_deck->vMarkReplicatedScanOnce();   // Card_Deck.cpp
+  m_pCI->vEndTransform(__LINE__);
+
   if (! bOptimisationOff("single_node_gbyagg")) {
     m_pCI->vTransform(__FILE__, __func__, XF_OPTIMISE_LOCAL_GBYAGG);
     m_pCI->E.p_deck->bDropNodeMerge_gbyAgg();   // Card_Deck.cpp
