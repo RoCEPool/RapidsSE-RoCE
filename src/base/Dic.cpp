@@ -3,6 +3,7 @@
 /*============================================================================*/
 
 #include "BASE.h"
+#include <atomic>
 
 CompareFp g_fp_bWordCompare = bWordCompare;
 
@@ -71,10 +72,22 @@ void Dic::vAddSkipNode(SkipNode *pSkipNode)
 }
 
 /*----------------------------------------------------------------------------*/
+/* counts the words added to and removed from any dictionary: what was read   */
+/* from a dictionary is as old as the count it was read at (CmdHelper.cpp)    */
+/*----------------------------------------------------------------------------*/
+static std::atomic<i8> g_iDicEpoch(0);
+
+i8 iDicEpoch(void)
+{
+  return g_iDicEpoch.load(std::memory_order_acquire);
+}
+
+/*----------------------------------------------------------------------------*/
 /* add word to this dictionary                                                */
 /*----------------------------------------------------------------------------*/
 void Dic::vAddWord(Word* pWord)
 {
+  g_iDicEpoch.fetch_add(1, std::memory_order_release);
   _precondition_(_ADDRESS_,_MAGIC_,CN_DIC,_FOOTER_);
   
   ASSERT(pWord->eGetClassNo() == CN_WORD);
@@ -635,6 +648,8 @@ Word* Dic::pRemoveWord(Stz* szWordNm)
   Word* pWordRemove = pFindWord(szWordNm);
   if (! pWordRemove)
     return pWordRemove;
+
+  g_iDicEpoch.fetch_add(1, std::memory_order_release);
   
   m_okLock.vGrabWrite();
   

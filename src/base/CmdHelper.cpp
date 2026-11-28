@@ -3,6 +3,9 @@
 /*============================================================================*/
 
 #include "BASE.h"
+#include <vector>
+#include <mutex>
+i8 iDicEpoch(void);            // Dic.cpp
 
 #include "SP_TagSet.hpp"
 
@@ -175,8 +178,33 @@ bool CmdHelper::bParseCmd(TokenVec* pCmdTknVec, TagSet* pCmdTagSet)
   // can we find a job which matches the syntax?
 
   pSyntax   = nullptr;
-  
-  while ( (pSyntax = pDicRoot->pEachWordWc(pSyntax,WC_CMDSYNTAX)) ) {
+
+  // The command syntax words of the root dictionary, in its order. Every
+  // operator of every stream of a pipeline is parsed here when the pipeline is
+  // created, and each search walked all the words of the dictionary (4-7 ms a
+  // TPC-H query): the list is kept while no word is added or removed anywhere.
+  std::vector<Word*> vpSyntax;
+  {
+    static std::mutex oLock;
+    static std::vector<Word*> vpKept;
+    static Dic* pKeptRoot = nullptr;
+    static i8 iKeptEpoch = -1;
+    std::lock_guard<std::mutex> oGuard(oLock);
+    i8 iEpoch = ::iDicEpoch();
+    if (pKeptRoot != pDicRoot || iKeptEpoch != iEpoch) {
+      vpKept.clear();
+      Word* pWord = nullptr;
+      while ( (pWord = pDicRoot->pEachWordWc(pWord,WC_CMDSYNTAX)) )
+        vpKept.push_back(pWord);
+      pKeptRoot = pDicRoot;
+      // (a word added meanwhile: the list is read again next time)
+      iKeptEpoch = iEpoch;
+    }
+    vpSyntax = vpKept;
+  }
+
+  for (size_t i_Syntax = 0; i_Syntax < vpSyntax.size(); i_Syntax++) {
+    pSyntax = vpSyntax[i_Syntax];
     
     //vTrace("  jobSyntax: %s\n"_Stz,pSyntax->szWordNm());
     //pSyntax->pTagSet()->vDumpSet();
@@ -196,6 +224,7 @@ bool CmdHelper::bParseCmd(TokenVec* pCmdTknVec, TagSet* pCmdTagSet)
       goto L_Matched;
     }
   }
+  pSyntax = nullptr;
     
   // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
   // no match
