@@ -175,8 +175,11 @@ void CombinedSrc::vSynthesizeCode(Stencil* pStencil, bool bFirstStage, bool bLas
 
         // - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
         // initialize the indexJoin
-        if (pOpSketch->m_pIndexDef->eKeyKind() == KE_INT)
+        if (pOpSketch->m_pIndexDef->eKeyKind() == KE_INT) {
+          char* azInit = m_azCodeCrs;
           vAppendCodeFragment(pOpSketch, "vIndexJoinIntKey"_Stz, pOperatorFile);
+          vJoinHashAttach(pOpSketch, azInit);
+        }
         else
           vAppendCodeFragment(pOpSketch, "vIndexJoinGenKey"_Stz, pOperatorFile);
 
@@ -568,8 +571,11 @@ void CombinedSrc::vSynthesizeCode(Stencil* pStencil, bool bFirstStage, bool bLas
 
         // - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
         // initialize with key kind
-        if (pOpSketch->m_pIndexDef->eKeyKind() == KE_INT)
+        if (pOpSketch->m_pIndexDef->eKeyKind() == KE_INT) {
+          char* azInit = m_azCodeCrs;
           vAppendCodeFragment(pOpSketch, "vIndexJoinIntKey"_Stz, pOperatorFile);
+          vJoinHashAttach(pOpSketch, azInit);
+        }
         else
           vAppendCodeFragment(pOpSketch, "vIndexJoinGenKey"_Stz, pOperatorFile);
 
@@ -1166,6 +1172,30 @@ bool CombinedSrc::bHashJoinEligible(Stencil* pStencil, i8 iOpSketch, eHK eHandle
       return false;
   }
   return true;
+}
+
+// An index join on one integer key takes the ranges of its keys from the join
+// hash of the index (IndexTree.cpp, JoinHash) when the index has one: the
+// stage asks for it once, behind the lookup of the index in the join's
+// initialisation (from azInit). Not a cross join, which reads every entry.
+// Job tag /optimiser_off_join_hash: the index, or the scanning hash join.
+void CombinedSrc::vJoinHashAttach(OpSketch* pOpSketch, char* azInit)
+{
+  _precondition_(_ADDRESS_,_MAGIC_,CN_COMBINEDSRC,_FOOTER_);
+
+  if (pOpSketch->m_bCrossJoin || pOpSketch->m_pIndexDef->nColumns() != 1 ||
+      AM::JOB::bHasTag("<optimiser_off_join_hash>"_Stz) || AM::JOB::bHasTag("<optimiser_off_all>"_Stz))
+    return;
+  char* azFind = strstr(azInit, "m_fp_vExtern_IndexFind(&");
+  if (! azFind)
+    return;
+  char* azInfo = azFind + strlen("m_fp_vExtern_IndexFind(");
+  char* azComma = strchr(azInfo, ',');
+  char* azEol = strchr(azFind, '\n');
+  if (! azComma || ! azEol || azComma > azEol)
+    return;
+  std::string sCall = "    vExtern_JoinHashAttach(" + std::string(azInfo, azComma - azInfo) + ");\n";
+  vInsertText(azEol + 1, sCall.c_str());
 }
 
 // insert text at a place in the code already generated

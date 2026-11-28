@@ -33,6 +33,11 @@
 #include "ClangDynamic.h"
 #include <algorithm>
 #include <vector>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <cstddef>
+#include "StatementCache.hpp"
 #include <stdlib.h>
 extern "C" void* aExtern_EntBufferNextEntry(void** ppEntBuffer, void* aPrevEntry);
 extern "C" void vExtern_GbyHashFree(void* aIndexInfo);
@@ -368,9 +373,16 @@ extern "C" void vExtern_IndexTreePositionGE_gen(void* aIndexInfo) {
 /*----------------------------------------------------------------------------*/
 /* position at entry greater than equal to given int key                      */
 /*----------------------------------------------------------------------------*/
+// the range of the key from the join hash of the index (JoinHash, below)
+static void vJoinHashRange(IndexInfo* pIndexInfo);
+
 extern "C" void vExtern_IndexTreePositionGE_int(void* aIndexInfo) {
 
 	IndexInfo *pIndexInfo = (IndexInfo *) aIndexInfo;
+	if (pIndexInfo->m_aJoinHash) {
+		vJoinHashRange(pIndexInfo);
+		return;
+	}
 	IndexTree *pIndexTree = (IndexTree *) pIndexInfo->m_aIndexTree;
 	Key *aKey = (Key *) pIndexInfo->m_aEntKey;
 
@@ -512,6 +524,9 @@ extern "C" void vExtern_IndexTreePositionLE_gen(void* aIndexInfo) {
 extern "C" void vExtern_IndexTreePositionLE_int(void* aIndexInfo) {
 
 	IndexInfo *pIndexInfo = (IndexInfo *) aIndexInfo;
+	// (the range from a join hash has its upper end already)
+	if (pIndexInfo->m_aJoinHash)
+		return;
 	IndexTree *pIndexTree = (IndexTree *) pIndexInfo->m_aIndexTree;
 	Key *aKey = (Key *) pIndexInfo->m_aEntKey;
 
@@ -2175,9 +2190,198 @@ extern "C" void* aExtern_HashJoinFirst(void* aIndexInfo, i8 iKey)
   return ((HashJoin*) pIndexInfo->m_aHashJoin)->aFirst(iKey);
 }
 
+/*----------------------------------------------------------------------------*/
+/* join hash: the row references of an integer-key index by key                */
+/*----------------------------------------------------------------------------*/
+// An index join descends the index for every arriving row, a hash join scans
+// the whole key column of the joined table for every query. Both repeat work
+// that depends on the table only. The join hash is made once per index of a
+// table partition, from a walk of the index, and kept between queries: an
+// open-addressing table key -> (offset, count) into an array of the row
+// references of the index, in the order of the index. A join then takes the
+// range of a key with one probe (vExtern_IndexTreePositionGE_int), and the
+// rows of the range are read as an index join reads them, in the same order.
+// DuckDB builds the hash table of a join for each query; this one is an index
+// that the first join on it builds.
+//
+// It is used when the rows of a key are few (two a key at most: a unique key
+// or nearly) or are stored together (TPC-H lineitem by l_orderkey), so that
+// reading them is one place in the table. Otherwise (lineitem by l_partkey:
+// 30 rows a key, in 30 buffers) the scanning hash join, which reads the table
+// in storage order, stays.
+//
+// Valid while the index is the same: the catalogue epoch of the column cache,
+// the insert and delete counts of the tree and its root. A stale one is
+// rebuilt by the next join; a running stage keeps the one it attached.
+namespace {
+  struct JoinHash {
+    struct Slot { i8 iKey; uint32_t uOff; uint32_t nRows; };
+    i8 iEpoch = 0; i8 nInsert = 0; i8 nDelete = 0; void* pRoot = nullptr;
+    bool bUse = false;
+    std::vector<Slot> axSlot;          // nRows 0: empty
+    u8 uMask = 0;
+    std::vector<u8> auRef;             // row references (Ent_int Rrf), one more at the end
+    size_t nBytes(void) const { return axSlot.size() * sizeof(Slot) + auRef.size() * 8; }
+    static u8 uHash(i8 iKey) { u8 u = (u8) iKey * 0x9E3779B97F4A7C15ull; return u ^ (u >> 29); }
+  };
+  std::mutex goJoinHashLock;
+  std::map<IndexTree*, std::shared_ptr<JoinHash>> goJoinHash;
+  static const size_t C_JOINHASH_BUDGET = (size_t) 2 << 30;
+  // A probe of a join hash of this size stays in the cache (TPC-H SF1: part,
+  // partsupp, customer, supplier; not orders or lineitem, where a probe is a
+  // cache miss or two and the scan of the stored keys wins once the join has
+  // more than a few rows per hundred of the table).
+  static const size_t C_JOINHASH_SMALL = (size_t) 16 << 20;
+
+  std::shared_ptr<JoinHash> pJoinHashBuild(IndexTree* pIndexTree, size_t nBudget)
+  {
+    std::shared_ptr<JoinHash> pHash = std::make_shared<JoinHash>();
+    pHash->iEpoch = STORE::iColCacheDataEpoch();
+    pHash->nInsert = pIndexTree->nTreeInsertCnt();
+    pHash->nDelete = pIndexTree->nTreeDeleteCnt();
+    pHash->pRoot = pIndexTree->pRootBuffer();
+    i8 nEntries = pIndexTree->nEntriesNow();
+    if (nEntries <= 0 || nEntries >= ((i8) 1 << 31) || (size_t) nEntries * 8 > nBudget)
+      return pHash;
+    pHash->auRef.reserve(nEntries + 1);
+    std::vector<JoinHash::Slot> axKey;         // the keys in index order
+    i8 nTogether = 0;                          // rows that follow a row of their key in its buffer
+    void* aBuf = nullptr;
+    u8 uPrevBuffer = 0;
+    for (void* aEnt = aExtern_IndexTreeBegin(pIndexTree, &aBuf); aEnt;
+         aEnt = aExtern_EntBufferNextEntry(&aBuf, aEnt)) {
+      Ent_int* pEnt = (Ent_int*) aEnt;
+      if ((i8) pHash->auRef.size() >= nEntries)
+        return pHash;                          // not the entries it counts
+      i8 iKey = pEnt->m_iIntElm0;
+      if (axKey.empty() || axKey.back().iKey != iKey) {
+        if (! axKey.empty() && axKey.back().iKey > iKey)
+          return pHash;                        // not in ascending key order
+        axKey.push_back(JoinHash::Slot{iKey, (uint32_t) pHash->auRef.size(), 0});
+      }
+      else if (pEnt->Rrf.m_uBuffer == uPrevBuffer)
+        nTogether++;
+      axKey.back().nRows++;
+      uPrevBuffer = pEnt->Rrf.m_uBuffer;
+      u8 uRef = 0;
+      memcpy(&uRef, &pEnt->Rrf, 8);
+      pHash->auRef.push_back(uRef);
+    }
+    if ((i8) pHash->auRef.size() != nEntries)
+      return pHash;
+    pHash->auRef.push_back(0);
+    i8 nKeys = (i8) axKey.size();
+    i8 nRepeats = nEntries - nKeys;
+    if (nEntries > 2 * nKeys && nTogether * 10 < nRepeats * 9) {
+      pHash->auRef.clear();
+      pHash->auRef.shrink_to_fit();
+      return pHash;                            // many rows a key, apart: the scan
+    }
+    u8 nSlots = 16;
+    while (nSlots < (u8) nKeys * 2)
+      nSlots <<= 1;
+    if (nSlots * sizeof(JoinHash::Slot) + pHash->auRef.size() * 8 > nBudget) {
+      pHash->auRef.clear();
+      pHash->auRef.shrink_to_fit();
+      return pHash;
+    }
+    pHash->axSlot.assign(nSlots, JoinHash::Slot{0, 0, 0});
+    pHash->uMask = nSlots - 1;
+    for (const JoinHash::Slot& x : axKey) {
+      u8 u = JoinHash::uHash(x.iKey) & pHash->uMask;
+      while (pHash->axSlot[u].nRows)
+        u = (u + 1) & pHash->uMask;
+      pHash->axSlot[u] = x;
+    }
+    pHash->bUse = true;
+    return pHash;
+  }
+}
+
+// Called once by a stage for an index join on an integer key (generated code,
+// after vExtern_IndexFind): attach the join hash of the index, made now if
+// there is none or the index has changed.
+extern "C" void vExtern_JoinHashAttach(void* aIndexInfo)
+{
+  IndexInfo* pIndexInfo = (IndexInfo*) aIndexInfo;
+  IndexTree* pIndexTree = (IndexTree*) pIndexInfo->m_aIndexTree;
+  IndexDef* pIndexDef = (IndexDef*) pIndexInfo->m_aIndexDef;
+  if (! pIndexTree || ! pIndexDef || pIndexDef->eKeyKind() != KE_INT || pIndexDef->nColumns() != 1 ||
+      pIndexInfo->m_aJoinHash)
+    return;
+  std::shared_ptr<JoinHash> pHash;
+  {
+    std::lock_guard<std::mutex> oGuard(goJoinHashLock);
+    auto it = goJoinHash.find(pIndexTree);
+    if (it != goJoinHash.end()) {
+      JoinHash* p = it->second.get();
+      if (p->iEpoch == STORE::iColCacheDataEpoch() && p->nInsert == pIndexTree->nTreeInsertCnt() &&
+          p->nDelete == pIndexTree->nTreeDeleteCnt() && p->pRoot == (void*) pIndexTree->pRootBuffer())
+        pHash = it->second;
+      else
+        goJoinHash.erase(it);
+    }
+  }
+  if (! pHash) {
+    // (made outside the lock: the partitions of a table make theirs at the
+    // same time; two stages on one partition may both make it, one is kept)
+    size_t nUsed = 0;
+    {
+      std::lock_guard<std::mutex> oGuard(goJoinHashLock);
+      i8 iEpoch = STORE::iColCacheDataEpoch();
+      for (auto it = goJoinHash.begin(); it != goJoinHash.end(); )
+        if (it->second->iEpoch != iEpoch)
+          it = goJoinHash.erase(it);           // of a dropped or changed table
+        else {
+          nUsed += it->second->nBytes();
+          ++it;
+        }
+    }
+    pHash = pJoinHashBuild(pIndexTree, nUsed < C_JOINHASH_BUDGET ? C_JOINHASH_BUDGET - nUsed : 0);
+    std::lock_guard<std::mutex> oGuard(goJoinHashLock);
+    goJoinHash[pIndexTree] = pHash;
+  }
+  if (! pHash->bUse)
+    return;
+  pIndexInfo->m_aJoinHashPin = new std::shared_ptr<JoinHash>(pHash);
+  pIndexInfo->m_aJoinHash = pHash.get();
+  pIndexInfo->m_bJoinHashSmall = pHash->nBytes() <= C_JOINHASH_SMALL;
+}
+
+static void vJoinHashRange(IndexInfo* pIndexInfo)
+{
+  JoinHash* pHash = (JoinHash*) pIndexInfo->m_aJoinHash;
+  i8 iKey = *(i8*) pIndexInfo->m_aEntKey;
+  // (the generated code reads the row reference of an entry: the address
+  // handed out is that of an entry whose Rrf is the stored reference)
+  char* aBase = (char*) pHash->auRef.data() - offsetof(Ent_int, Rrf);
+  u8 u = JoinHash::uHash(iKey) & pHash->uMask;
+  for (;;) {
+    const JoinHash::Slot& x = pHash->axSlot[u];
+    if (! x.nRows) {
+      // no row: an empty range at the end
+      pIndexInfo->m_aEntInt = (Ent_int*) (aBase + (pHash->auRef.size() - 1) * 8);
+      pIndexInfo->m_aEntUpper = pIndexInfo->m_aEntInt;
+      break;
+    }
+    if (x.iKey == iKey) {
+      pIndexInfo->m_aEntInt = (Ent_int*) (aBase + (size_t) x.uOff * 8);
+      pIndexInfo->m_aEntUpper = (Ent_int*) (aBase + ((size_t) x.uOff + x.nRows) * 8);
+      break;
+    }
+    u = (u + 1) & pHash->uMask;
+  }
+  pIndexInfo->m_aEntBuffer = nullptr;
+}
+
 extern "C" void vExtern_HashJoinFree(void* aIndexInfo)
 {
   IndexInfo* pIndexInfo = (IndexInfo*) aIndexInfo;
+  if (pIndexInfo->m_aJoinHashPin)
+    delete (std::shared_ptr<JoinHash>*) pIndexInfo->m_aJoinHashPin;
+  pIndexInfo->m_aJoinHashPin = nullptr;
+  pIndexInfo->m_aJoinHash = nullptr;
+  pIndexInfo->m_bJoinHashSmall = 0;
   delete (HashJoin*) pIndexInfo->m_aHashJoin;
   pIndexInfo->m_aHashJoin = nullptr;
   pIndexInfo->m_auHjBloom = nullptr;

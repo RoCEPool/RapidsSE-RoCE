@@ -56,6 +56,12 @@ struct IndexInfo {
   u8    m_uHjBloomMask;  // its bits - 1
   i8    m_iHjEntries;    // entries of the joined index (0: not looked up yet)
   i8    m_iHjSeen;       // rows joined straight through the index so far
+  // join hash (IndexTree.cpp, JoinHash): the row references of the joined
+  // index by key, kept between queries; PositionGE_int hands out the range of
+  // the key from it instead of descending the index. Null: the index.
+  void* m_aJoinHash;
+  void* m_aJoinHashPin;
+  i8    m_bJoinHashSmall; // it fits the cache: a hash join stores no rows, each is joined as it arrives
 };
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -

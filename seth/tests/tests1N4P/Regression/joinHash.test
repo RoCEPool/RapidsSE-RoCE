@@ -1,0 +1,179 @@
+/*----------------------------------------------------------------------------*/
+/* joinHash.test -- the join hash of an index, kept between queries           */
+/*----------------------------------------------------------------------------*/
+
+// An index join on one integer key takes the rows of a key from the join hash
+// of the index (IndexTree.cpp JoinHash): the row references of the index by
+// key, made by the first join on the index and kept. It has to follow the
+// table: the joins below run again after rows are loaded into the tables,
+// after a truncate and a reload, and after the table is dropped and made
+// again. Each runs twice and once with /optimiser_off_join_hash.
+
+create table ${testName2}_d (k integer not null, name varchar(20));
+success
+create index ${testName2}_d_Ix on ${testName2}_d (k);
+affected: 0
+create table ${testName2}_f (id integer not null, k integer, v integer);
+success
+create index ${testName2}_f_Ix on ${testName2}_f (k);
+affected: 0
+load ${testName2}_d "../DATA/JoinHash/d1.tbl" <field_delimiter> = "|";
+success
+load ${testName2}_f "../DATA/JoinHash/f1.tbl" <field_delimiter> = "|";
+success
+
+select count(*), sum(v), min(name), max(name) from ${testName2}_f f, ${testName2}_d d where f.k = d.k;
+rows: (4, 480, 'five', 'two')
+
+select count(*), sum(v), min(name), max(name) from ${testName2}_f f, ${testName2}_d d where f.k = d.k;
+rows: (4, 480, 'five', 'two')
+
+/optimiser_off_join_hash
+select count(*), sum(v), min(name), max(name) from ${testName2}_f f, ${testName2}_d d where f.k = d.k;
+rows: (4, 480, 'five', 'two')
+
+select d.k, count(*), sum(v) from ${testName2}_d d, ${testName2}_f f where d.k = f.k group by d.k order by d.k;
+rows: (1, 2, 210)
+      (2, 1, 120)
+      (5, 1, 150)
+
+select d.k, count(*), sum(v) from ${testName2}_d d, ${testName2}_f f where d.k = f.k group by d.k order by d.k;
+rows: (1, 2, 210)
+      (2, 1, 120)
+      (5, 1, 150)
+
+/optimiser_off_join_hash
+select d.k, count(*), sum(v) from ${testName2}_d d, ${testName2}_f f where d.k = f.k group by d.k order by d.k;
+rows: (1, 2, 210)
+      (2, 1, 120)
+      (5, 1, 150)
+
+select count(*), sum(v) from ${testName2}_f f where exists (select * from ${testName2}_d d where d.k = f.k and d.name <> 'two');
+rows: (3, 360)
+
+select count(*), sum(v) from ${testName2}_f f where exists (select * from ${testName2}_d d where d.k = f.k and d.name <> 'two');
+rows: (3, 360)
+
+/optimiser_off_join_hash
+select count(*), sum(v) from ${testName2}_f f where exists (select * from ${testName2}_d d where d.k = f.k and d.name <> 'two');
+rows: (3, 360)
+
+select count(*), sum(v) from ${testName2}_f f where not exists (select * from ${testName2}_d d where d.k = f.k);
+rows: (2, 270)
+
+select count(*), sum(v) from ${testName2}_f f where not exists (select * from ${testName2}_d d where d.k = f.k);
+rows: (2, 270)
+
+/optimiser_off_join_hash
+select count(*), sum(v) from ${testName2}_f f where not exists (select * from ${testName2}_d d where d.k = f.k);
+rows: (2, 270)
+
+// rows are added: a new key, a second row of a key
+load ${testName2}_d "../DATA/JoinHash/d2.tbl" <field_delimiter> = "|";
+success
+load ${testName2}_f "../DATA/JoinHash/f2.tbl" <field_delimiter> = "|";
+success
+
+select count(*), sum(v), min(name), max(name) from ${testName2}_f f, ${testName2}_d d where f.k = d.k;
+rows: (7, 890, 'deux', 'two')
+
+select count(*), sum(v), min(name), max(name) from ${testName2}_f f, ${testName2}_d d where f.k = d.k;
+rows: (7, 890, 'deux', 'two')
+
+/optimiser_off_join_hash
+select count(*), sum(v), min(name), max(name) from ${testName2}_f f, ${testName2}_d d where f.k = d.k;
+rows: (7, 890, 'deux', 'two')
+
+select d.k, count(*), sum(v) from ${testName2}_d d, ${testName2}_f f where d.k = f.k group by d.k order by d.k;
+rows: (1, 2, 210)
+      (2, 2, 240)
+      (3, 1, 160)
+      (4, 1, 130)
+      (5, 1, 150)
+
+select d.k, count(*), sum(v) from ${testName2}_d d, ${testName2}_f f where d.k = f.k group by d.k order by d.k;
+rows: (1, 2, 210)
+      (2, 2, 240)
+      (3, 1, 160)
+      (4, 1, 130)
+      (5, 1, 150)
+
+/optimiser_off_join_hash
+select d.k, count(*), sum(v) from ${testName2}_d d, ${testName2}_f f where d.k = f.k group by d.k order by d.k;
+rows: (1, 2, 210)
+      (2, 2, 240)
+      (3, 1, 160)
+      (4, 1, 130)
+      (5, 1, 150)
+
+select count(*), sum(v) from ${testName2}_f f where not exists (select * from ${testName2}_d d where d.k = f.k);
+rows: (1, 140)
+
+select count(*), sum(v) from ${testName2}_f f where not exists (select * from ${testName2}_d d where d.k = f.k);
+rows: (1, 140)
+
+/optimiser_off_join_hash
+select count(*), sum(v) from ${testName2}_f f where not exists (select * from ${testName2}_d d where d.k = f.k);
+rows: (1, 140)
+
+// the table is emptied and loaded with other rows
+truncate ${testName2}_d;
+success
+
+select count(*), sum(v), min(name), max(name) from ${testName2}_f f, ${testName2}_d d where f.k = d.k;
+rows: (0, NULL, NULL, NULL)
+
+select count(*), sum(v), min(name), max(name) from ${testName2}_f f, ${testName2}_d d where f.k = d.k;
+rows: (0, NULL, NULL, NULL)
+
+/optimiser_off_join_hash
+select count(*), sum(v), min(name), max(name) from ${testName2}_f f, ${testName2}_d d where f.k = d.k;
+rows: (0, NULL, NULL, NULL)
+
+select count(*), sum(v) from ${testName2}_f f where not exists (select * from ${testName2}_d d where d.k = f.k);
+rows: (7, 910)
+
+select count(*), sum(v) from ${testName2}_f f where not exists (select * from ${testName2}_d d where d.k = f.k);
+rows: (7, 910)
+
+/optimiser_off_join_hash
+select count(*), sum(v) from ${testName2}_f f where not exists (select * from ${testName2}_d d where d.k = f.k);
+rows: (7, 910)
+
+load ${testName2}_d "../DATA/JoinHash/d3.tbl" <field_delimiter> = "|";
+success
+
+select count(*), sum(v), min(name), max(name) from ${testName2}_f f, ${testName2}_d d where f.k = d.k;
+rows: (5, 650, 'cinco', 'uno')
+
+select count(*), sum(v), min(name), max(name) from ${testName2}_f f, ${testName2}_d d where f.k = d.k;
+rows: (5, 650, 'cinco', 'uno')
+
+/optimiser_off_join_hash
+select count(*), sum(v), min(name), max(name) from ${testName2}_f f, ${testName2}_d d where f.k = d.k;
+rows: (5, 650, 'cinco', 'uno')
+
+// the table is dropped and made again
+drop table ${testName2}_d;
+success
+create table ${testName2}_d (k integer not null, name varchar(20));
+success
+create index ${testName2}_d_Ix on ${testName2}_d (k);
+affected: 0
+load ${testName2}_d "../DATA/JoinHash/d1.tbl" <field_delimiter> = "|";
+success
+
+select count(*), sum(v), min(name), max(name) from ${testName2}_f f, ${testName2}_d d where f.k = d.k;
+rows: (5, 640, 'five', 'two')
+
+select count(*), sum(v), min(name), max(name) from ${testName2}_f f, ${testName2}_d d where f.k = d.k;
+rows: (5, 640, 'five', 'two')
+
+/optimiser_off_join_hash
+select count(*), sum(v), min(name), max(name) from ${testName2}_f f, ${testName2}_d d where f.k = d.k;
+rows: (5, 640, 'five', 'two')
+
+drop table ${testName2}_d;
+success
+drop table ${testName2}_f;
+success

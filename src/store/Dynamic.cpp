@@ -219,6 +219,9 @@ Dynamic::Dynamic(LogicUnit* pLogicUnit)
     m_xDynamicT.m_xIndexInfoT[iIndex].m_aTable = nullptr;
     m_xDynamicT.m_xIndexInfoT[iIndex].m_aIndex = nullptr;
     m_xDynamicT.m_xIndexInfoT[iIndex].m_aIndexTree = nullptr;
+    m_xDynamicT.m_xIndexInfoT[iIndex].m_aJoinHash = nullptr;
+    m_xDynamicT.m_xIndexInfoT[iIndex].m_aJoinHashPin = nullptr;
+    m_xDynamicT.m_xIndexInfoT[iIndex].m_bJoinHashSmall = 0;
     m_xDynamicT.m_xIndexInfoT[iIndex].m_aIndexDef = nullptr;
     m_xDynamicT.m_xIndexInfoT[iIndex].m_aEntWrk = (Ent_int * )(void * ) & pLogicUnit->m_oEntWrkT;
     m_xDynamicT.m_xIndexInfoT[iIndex].m_aEntKey = ((EntWrk *) m_xDynamicT.m_xIndexInfoT[iIndex].m_aEntWrk)->aKey();
@@ -257,6 +260,9 @@ Dynamic::Dynamic(LogicUnit* pLogicUnit)
     m_xDynamicT.m_xIndexInfoJ[iIndex].m_bNoLeShortcut = bNoLeShortcut;
     m_xDynamicT.m_xIndexInfoJ[iIndex].m_iKeyLast = 0;
     m_xDynamicT.m_xIndexInfoJ[iIndex].m_aHashJoin = nullptr;
+    m_xDynamicT.m_xIndexInfoJ[iIndex].m_aJoinHash = nullptr;
+    m_xDynamicT.m_xIndexInfoJ[iIndex].m_aJoinHashPin = nullptr;
+    m_xDynamicT.m_xIndexInfoJ[iIndex].m_bJoinHashSmall = 0;
     m_xDynamicT.m_xIndexInfoJ[iIndex].m_auHjBloom = nullptr;
     m_xDynamicT.m_xIndexInfoJ[iIndex].m_uHjBloomMask = 0;
     m_xDynamicT.m_xIndexInfoJ[iIndex].m_iHjEntries = 0;
@@ -282,6 +288,9 @@ Dynamic::Dynamic(LogicUnit* pLogicUnit)
     m_xDynamicT.m_xIndexInfoPL[iIndex].m_aEntLast = nullptr;
     m_xDynamicT.m_xIndexInfoPL[iIndex].m_bNoLeShortcut = bNoLeShortcut;
     m_xDynamicT.m_xIndexInfoPL[iIndex].m_aGbyHash = nullptr;
+    m_xDynamicT.m_xIndexInfoPL[iIndex].m_aJoinHash = nullptr;
+    m_xDynamicT.m_xIndexInfoPL[iIndex].m_aJoinHashPin = nullptr;
+    m_xDynamicT.m_xIndexInfoPL[iIndex].m_bJoinHashSmall = 0;
     m_xDynamicT.m_xIndexInfoPL[iIndex].m_aEntWrk = (void *) &pLogicUnit->m_oEntWrkPL;
     m_xDynamicT.m_xIndexInfoPL[iIndex].m_aEntKey = ((EntWrk *) m_xDynamicT.m_xIndexInfoPL[iIndex].m_aEntWrk)->aKey();
     m_xDynamicT.m_xIndexInfoPL[iIndex].m_aEntBottom = nullptr;
