@@ -33261,7 +33261,7 @@ void Task::vAddMunged(Task* )
     "\n"
     "      //\"dynamicOP TOGGLING TO ABNORMAL HANDLERS FOR OP\"  .\n"
     "      \"default_abnormalHandlers\" FIND execute\n"
-    "      \"default_lowMemHandlers\" FIND execute\n"
+    "      \"toggle_PdsRowBufferHandler\" FIND execute\n"
     "      //\"dynamicOP TOGGLED TO ABNORMAL HANDLERS FOR OP\" .\n"
     "    else\n"
     "      errorCode op__execErr\n"
