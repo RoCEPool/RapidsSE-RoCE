@@ -1022,18 +1022,34 @@ namespace {
     return sWord;
   }
 
+  // no parameters, and none of the words whose value is of the moment; whole
+  // words (p_brand is not rand); a word inside a string literal also counts
   bool bSqlCacheable(const char* azSql)
   {
-    std::string sLower(azSql);
-    for (char& c : sLower)
+    static const char* aszNot[] = {"now", "today", "rand", "random", "sysdate", "localtime", "localtimestamp",
+                                   "uuid", "explain", "user", "session_user", "into"};
+    std::string sWord;
+    for (const char* az = azSql; ; az++) {
+      char c = *az;
       if (c >= 'A' && c <= 'Z')
         c |= 0x20;
-    static const char* aszNot[] = {"?", "current", "now", "today", "rand", "sysdate", "localtime", "uuid",
-                                   "explain", "user", "session", "into"};
-    for (const char* sz : aszNot)
-      if (sLower.find(sz) != std::string::npos)
+      if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_') {
+        sWord += c;
+        continue;
+      }
+      if (! sWord.empty()) {
+        if (sWord.compare(0, 7, "current") == 0)
+          return false;
+        for (const char* sz : aszNot)
+          if (sWord == sz)
+            return false;
+        sWord.clear();
+      }
+      if (c == '?')
         return false;
-    return true;
+      if (c == '\0')
+        return true;
+    }
   }
 }
 
