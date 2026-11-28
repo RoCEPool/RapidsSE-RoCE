@@ -402,7 +402,9 @@ void vHashJoinPosition_int(Dynamic_T* aDynamicT) {
 
   L_HJScanBuf__HJ_N__:
   hjScanI++;
-  hjScanN = iExtern_HashJoinScanBuffer(&__INDEX_INFO__[CURRENT_DUP_OP], hjScanI, &hjScanBuf, (void**)&hjScanKeys);
+  // (the rows of the buffer whose key has stored rows, found for the whole
+  // buffer at once: iExtern_HashJoinScanHits)
+  hjScanN = iExtern_HashJoinScanHits(&__INDEX_INFO__[CURRENT_DUP_OP], hjScanI, &hjScanBuf, (void**)&hjScanKeys);
   if (hjScanN < 0)
     goto L_Return;
   hjScanItem = -1;
@@ -411,24 +413,14 @@ void vHashJoinPosition_int(Dynamic_T* aDynamicT) {
   hjScanItem++;
   if (hjScanItem >= hjScanN)
     goto L_HJScanBuf__HJ_N__;
-  {
-    u8 uHjKey = (u8)hjScanKeys[hjScanItem] * 0x9E3779B97F4A7C15ull;
-    uHjKey ^= uHjKey >> 29;
-    u8 uHjMask = __INDEX_INFO__[CURRENT_DUP_OP].m_uHjBloomMask;
-    u8* auHjBloom = __INDEX_INFO__[CURRENT_DUP_OP].m_auHjBloom;
-    u8 vHjKey = uHjKey >> 32;
-    if (auHjBloom &&
-        ( ! (auHjBloom[(uHjKey & uHjMask) >> 6] & (1ull << (uHjKey & 63))) ||
-          ! (auHjBloom[(vHjKey & uHjMask) >> 6] & (1ull << (vHjKey & 63))) ))
-      goto L_HJScanRow__HJ_N__;
-  }
-  hjNode = (char*)aExtern_HashJoinFirst(&__INDEX_INFO__[CURRENT_DUP_OP], hjScanKeys[hjScanItem]);
-  if ( ! hjNode)
-    goto L_HJScanRow__HJ_N__;
+  // hit: [item of the row][first stored row of its key]; the stored rows of
+  // the next hit are fetched while this one is joined
+  hjNode = (char*)hjScanKeys[2 * hjScanItem + 1];
+  __builtin_prefetch((char*)hjScanKeys[2 * hjScanItem + 3]);
   memset(&hjScanEnt[0], 0, sizeof(hjScanEnt));
   hjScanEnt[0].Rrf.m_uBuffer = (u8)hjScanBuf;
-  hjScanEnt[0].Rrf.m_uItem   = (u8)hjScanItem;
-  hjScanEnt[0].m_iIntElm0    = hjScanKeys[hjScanItem];
+  hjScanEnt[0].Rrf.m_uItem   = (u8)hjScanKeys[2 * hjScanItem];
+  hjScanEnt[0].m_iIntElm0    = *(i8*)(hjNode + 16);
 
   L_HJScanUse__HJ_N__:
   p__STRUCT_FROM___PREV_OP = (struct __STRUCT_FROM___PREV_OP*)(hjNode + 24);
