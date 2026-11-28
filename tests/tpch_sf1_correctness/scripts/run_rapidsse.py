@@ -47,7 +47,7 @@ def stop():
 
 
 def start(data_dir, node_log):
-    """Starts one node with two partitions, loads the schema and the data. Returns the loaded row
+    """Starts one node with TPCH_SE_PARTITIONS partitions (default two), loads the schema and the data. Returns the loaded row
     counts per table."""
     stop()
     log = open(node_log, 'a')

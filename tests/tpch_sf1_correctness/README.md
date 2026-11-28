@@ -175,6 +175,6 @@ machine. `.github/workflows/tpch-reference.yml` keeps the committed DuckDB refer
 `TPCH_SE_PARTITIONS` and `TPCH_SE_THREADS` set the partitions and threads of the node (default
 2 and 2; CI uses 4 threads). Verified with 1, 2 and 4 partitions.
 
-One node, two partitions, two threads; `orders` partitioned on `O_CUSTKEY`, `region` and
+One node; in CI four partitions and four threads on the four CPUs of the runner (TPCH_SE_PARTITIONS, TPCH_SE_THREADS; the defaults of the scripts are two and two); `orders` partitioned on `O_CUSTKEY`, `region` and
 `nation` replicated (see `schema.sql`). Several nodes and the RoCEPool backend are not covered by
 this test yet.

@@ -56,7 +56,8 @@ jobs:
     env:
       GIT_LFS_SKIP_SMUDGE: "1"
       TPCH_SF1_DATA: /tmp/tpch_sf1
-      TPCH_SE_PARTITIONS: "2"
+      TPCH_SE_PARTITIONS: "4"
+      TPCH_SE_SIZE: "10GB"
       TPCH_SE_THREADS: "4"
       TPCH_BUILD_NOTE: "RapidsSE built with -O2; its generated query code with -O3."
       BUILD_FLAGS: "-O2"
@@ -139,7 +140,7 @@ jobs:
     env:
       GIT_LFS_SKIP_SMUDGE: "1"
       TPCH_SF1_DATA: /tmp/tpch_sf1
-      TPCH_SE_PARTITIONS: "2"
+      TPCH_SE_PARTITIONS: "4"
       TPCH_SE_THREADS: "4"
       BUILD_FLAGS: "-O2"
     steps:
@@ -213,7 +214,7 @@ jobs:
     env:
       GIT_LFS_SKIP_SMUDGE: "1"
       TPCH_SF1_DATA: /tmp/tpch_sf1
-      TPCH_SE_PARTITIONS: "2"
+      TPCH_SE_PARTITIONS: "4"
       TPCH_SE_THREADS: "4"
       BUILD_FLAGS: "-O2"
     steps:
