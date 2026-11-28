@@ -293,7 +293,11 @@ void vHashJoinPosition_int(Dynamic_T* aDynamicT) {
   i8 hjScanI, hjScanN, hjScanItem, hjScanBuf;
   i8* hjScanKeys;
   struct Ent_int hjScanEnt[2];
+  void* hjFromRow;
 #define __HJ_VCH__ {-1}
+#define __HJ_REL__ 0
+#define __HJ_MIN__ 500000
+#define __HJ_FROM_ROW__ hjFromRow
 
 	__L_LABEL_OUTER_LOOP__:
 
@@ -311,6 +315,12 @@ void vHashJoinPosition_int(Dynamic_T* aDynamicT) {
       __INDEX_INFO__[CURRENT_DUP_OP].m_iHjSeen++;
       goto L_HJPosition__HJ_N__;
     }
+    // (an outer, semi or anti join only replays: against a small table the
+    // index is as fast as the entries of a scan, and no row need be stored.
+    // TPC-H Q16: 60,000 rows against the 5,000 suppliers of a partition.
+    // Job tag /hash_join_replay_small: any table, for tests.)
+    if (__HJ_REL__ && __INDEX_INFO__[CURRENT_DUP_OP].m_iHjEntries < __HJ_MIN__)
+      goto L_HJPosition__HJ_N__;
     char* aHjRow = (char*)aExtern_HashJoinInsert(&__INDEX_INFO__[CURRENT_DUP_OP],
         *(i8*)__INDEX_INFO__[CURRENT_DUP_OP].m_aEntKey, sizeof(struct __STRUCT_FROM___PREV_OP));
     memcpy(aHjRow, p__STRUCT_FROM___PREV_OP, sizeof(struct __STRUCT_FROM___PREV_OP));
@@ -322,7 +332,9 @@ void vHashJoinPosition_int(Dynamic_T* aDynamicT) {
           char* szHjStr = (char*)*piHjCell;
           if (bPdsRowBuffer)
             szHjStr += (i8)piHjCell;
-          ((i8*)aHjRow)[aiHjVch[k]] = (i8)aExtern_HashJoinStr(&__INDEX_INFO__[CURRENT_DUP_OP], szHjStr);
+          // (__HJ_REL__: as in a row buffer, the string relative to its cell)
+          ((i8*)aHjRow)[aiHjVch[k]] = (i8)aExtern_HashJoinStr(&__INDEX_INFO__[CURRENT_DUP_OP], szHjStr)
+                                      - (__HJ_REL__ ? (i8)&((i8*)aHjRow)[aiHjVch[k]] : 0);
         }
       }
     }
@@ -334,7 +346,7 @@ void vHashJoinPosition_int(Dynamic_T* aDynamicT) {
   // hash join, probe (called by the EOS handler): the joined table's index in
   // key order; each entry with stored rows is joined with each of them
   L_HJProbe__HJ_N__:
-  if (aDynamicT->m_bHashProbe == 2)
+  if (aDynamicT->m_bHashProbe == 2 || aDynamicT->m_bHashProbe == 4)
     goto L_HJReplay__HJ_N__;
   if (aDynamicT->m_bHashProbe == 3)
     goto L_HJScan__HJ_N__;
@@ -452,12 +464,27 @@ void vHashJoinPosition_int(Dynamic_T* aDynamicT) {
   if ( ! hjNode)
     goto L_Return;
   p__STRUCT_FROM___PREV_OP = (struct __STRUCT_FROM___PREV_OP*)(hjNode + 24);
-  bPdsRowBuffer = false;
+  // (the operators behind the join read the arriving row through its row
+  // info; its strings as stored at the build)
+  __HJ_FROM_ROW__ = (void*)(hjNode + 24);
+  bPdsRowBuffer = __HJ_REL__;
+  aDynamicT->m_iJoinedRows = 0;
+  aDynamicT->m_bProcessRow = true;
   p__STRUCT_TO___CURRENT_OP = (struct __STRUCT_TO___CURRENT_OP*)__ROW_INFO_TO__[CURRENT_DUP_OP].m_aRowCellArray;
   __ROW_INFO_TO__[CURRENT_DUP_OP].m_acStrArea = __ROW_INFO_TO__[CURRENT_DUP_OP].m_acStrAreaSav;
   szStrArea = __ROW_INFO_TO__[CURRENT_DUP_OP].m_acStrArea;
   *(i8*)__INDEX_INFO__[CURRENT_DUP_OP].m_aEntKey = *(i8*)(hjNode + 16);
+  goto L_HJPosition__HJ_N__;
 
+  L_HJReplayNext__HJ_N__:
+  hjNode = *(char**)(hjNode + 8);
+  goto L_HJReplayRow__HJ_N__;
+
+  // (the position of the index is the end of this fragment: for an outer,
+  // semi or anti join it is cut here and that join's own position follows,
+  // CombinedSrc::vAppendCodeHashJoin. When m_bHashProbe is 4 the range of
+  // the key comes from the entries collected by the scan of the key column
+  // instead of the index: vExtern_IndexTreePositionGE_int.)
   L_HJPosition__HJ_N__:
   __INDEX_POSITION_LOWER__(&__INDEX_INFO__[CURRENT_DUP_OP]);
   if ( ! __INDEX_INFO__[CURRENT_DUP_OP].m_aEntInt) {
@@ -466,10 +493,6 @@ void vHashJoinPosition_int(Dynamic_T* aDynamicT) {
   }
   aDynamicT->m_fp_vExtern_IndexTreePositionLE_int(&__INDEX_INFO__[CURRENT_DUP_OP]);
   goto __L_LABEL_INDEX_DEREF__;
-
-  L_HJReplayNext__HJ_N__:
-  hjNode = *(char**)(hjNode + 8);
-  goto L_HJReplayRow__HJ_N__;
 
 #endif
 	__L_LABEL_INDEX_DEREF__:
@@ -670,6 +693,8 @@ void vIndexJoinReturn(Dynamic_T* aDynamicT) {
 #ifdef WITH_CLANG
   if (aDynamicT->m_bHashProbe == 3)
     __INDEX_INFO__[CURRENT_DUP_OP].m_aEntInt = (struct Ent_int*)__INDEX_INFO__[CURRENT_DUP_OP].m_aEntUpper;
+  else if (aDynamicT->m_bHashProbe == 4)
+    __INDEX_INFO__[CURRENT_DUP_OP].m_aEntInt = __INDEX_INFO__[CURRENT_DUP_OP].m_aEntInt + 1;
   else
     __INDEX_INFO__[CURRENT_DUP_OP].m_aEntInt = (struct Ent_int*)aDynamicT->m_fp_aExtern_EntBufferNextEntry(
       &__INDEX_INFO__[CURRENT_DUP_OP].m_aEntBuffer, __INDEX_INFO__[CURRENT_DUP_OP].m_aEntInt);
@@ -753,6 +778,8 @@ i8 iIndexJoinConstraint(Dynamic_T* aDynamicT) {
 #ifdef WITH_CLANG
   if (aDynamicT->m_bHashProbe == 3)
     __INDEX_INFO__[CURRENT_DUP_OP].m_aEntInt = (struct Ent_int*)__INDEX_INFO__[CURRENT_DUP_OP].m_aEntUpper;
+  else if (aDynamicT->m_bHashProbe == 4)
+    __INDEX_INFO__[CURRENT_DUP_OP].m_aEntInt = __INDEX_INFO__[CURRENT_DUP_OP].m_aEntInt + 1;
   else
     __INDEX_INFO__[CURRENT_DUP_OP].m_aEntInt = (struct Ent_int*)aDynamicT->m_fp_aExtern_EntBufferNextEntry(
       &__INDEX_INFO__[CURRENT_DUP_OP].m_aEntBuffer, __INDEX_INFO__[CURRENT_DUP_OP].m_aEntInt);
@@ -821,6 +848,8 @@ i8 iIndexAntiJoinConstraint(Dynamic_T* aDynamicT) {
     // move to next entry
     if (aDynamicT->m_bHashProbe == 3)
       aDynamicT->m_xIndexInfoJ[CURRENT_DUP_OP].m_aEntInt = (struct Ent_int*)aDynamicT->m_xIndexInfoJ[CURRENT_DUP_OP].m_aEntUpper;
+    else if (aDynamicT->m_bHashProbe == 4)
+      aDynamicT->m_xIndexInfoJ[CURRENT_DUP_OP].m_aEntInt = aDynamicT->m_xIndexInfoJ[CURRENT_DUP_OP].m_aEntInt + 1;
     else
       aDynamicT->m_xIndexInfoJ[CURRENT_DUP_OP].m_aEntInt = (struct Ent_int*)aDynamicT->m_fp_aExtern_EntBufferNextEntry(
         &aDynamicT->m_xIndexInfoJ[CURRENT_DUP_OP].m_aEntBuffer, aDynamicT->m_xIndexInfoJ[CURRENT_DUP_OP].m_aEntInt);
@@ -882,6 +911,8 @@ i8 iIndexSemiJoinConstraint(Dynamic_T* aDynamicT) {
         // move to next entry
     if (aDynamicT->m_bHashProbe == 3)
       aDynamicT->m_xIndexInfoJ[CURRENT_DUP_OP].m_aEntInt = (struct Ent_int*)aDynamicT->m_xIndexInfoJ[CURRENT_DUP_OP].m_aEntUpper;
+    else if (aDynamicT->m_bHashProbe == 4)
+      aDynamicT->m_xIndexInfoJ[CURRENT_DUP_OP].m_aEntInt = aDynamicT->m_xIndexInfoJ[CURRENT_DUP_OP].m_aEntInt + 1;
     else
       aDynamicT->m_xIndexInfoJ[CURRENT_DUP_OP].m_aEntInt = (struct Ent_int*)aDynamicT->m_fp_aExtern_EntBufferNextEntry(
         &aDynamicT->m_xIndexInfoJ[CURRENT_DUP_OP].m_aEntBuffer, aDynamicT->m_xIndexInfoJ[CURRENT_DUP_OP].m_aEntInt);

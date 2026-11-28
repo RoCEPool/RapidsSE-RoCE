@@ -1,0 +1,283 @@
+/*----------------------------------------------------------------------------*/
+/* hashJoinReplay.test -- outer, semi and anti joins as hash joins            */
+/*----------------------------------------------------------------------------*/
+
+// An outer, semi or anti join on one integer key that is the first operator
+// of its stage stores the arriving rows and, at the end of the input, replays
+// them in arrival order against the entries of their keys, collected by one
+// scan of the joined table's key column (IndexTree.cpp HashJoin, bRange), or
+// against the index. A table partition below 500,000 rows is joined through
+// its index as before; /hash_join_replay_small lifts that for these tables.
+// Each query runs as an index join (no tag), replaying against the scan,
+// with /hash_join_walk, replaying against the index
+// (/optimiser_off_hash_join_scan), and with /optimiser_off_hash_join_replay.
+// The expected rows were computed from TPCH/SF_0001 in Python.
+
+create table ${testName2}_orders (
+  O_ORDERKEY      INTEGER       NOT NULL,
+  O_CUSTKEY       INTEGER       NOT NULL,
+  O_ORDERSTATUS   CHAR(1)       NOT NULL,
+  O_TOTALPRICE    DECIMAL(15,2) NOT NULL,
+  O_ORDERDATE     DATE          NOT NULL,
+  O_ORDERPRIORITY CHAR(15)      NOT NULL,
+  O_CLERK         CHAR(15)      NOT NULL,
+  O_SHIPPRIORITY  INTEGER       NOT NULL,
+  O_COMMENT       VARCHAR(79)   NOT NULL
+);
+success
+create index ${testName2}_IxO_ORDERKEY on ${testName2}_orders (O_ORDERKEY);
+affected: 0
+load ${testName2}_orders "../TPCH/SF_0001/orders.tbl" <field_delimiter> = "|";
+success
+
+create table ${testName2}_lineitem (
+   L_ORDERKEY      INTEGER       NOT NULL,
+   L_PARTKEY       INTEGER       NOT NULL,
+   L_SUPPKEY       INTEGER       NOT NULL,
+   L_LINENUMBER    INTEGER       NOT NULL,
+   L_QUANTITY      DECIMAL(15,2) NOT NULL,
+   L_EXTENDEDPRICE DECIMAL(15,2) NOT NULL,
+   L_DISCOUNT      DECIMAL(15,2) NOT NULL,
+   L_TAX           DECIMAL(15,2) NOT NULL,
+   L_RETURNFLAG    CHAR(1)       NOT NULL,
+   L_LINESTATUS    CHAR(1)       NOT NULL,
+   L_SHIPDATE      DATE          NOT NULL,
+   L_COMMITDATE    DATE          NOT NULL,
+   L_RECEIPTDATE   DATE          NOT NULL,
+   L_SHIPINSTRUCT  CHAR(25)      NOT NULL,
+   L_SHIPMODE      CHAR(10)      NOT NULL,
+   L_COMMENT       VARCHAR(44)   NOT NULL
+);
+success
+create index ${testName2}_IxL_ORDERKEY on ${testName2}_lineitem (L_ORDERKEY);
+affected: 0
+load ${testName2}_lineitem "../TPCH/SF_0001/lineitem.tbl" <field_delimiter> = "|";
+success
+
+select count(*), sum(l1.l_quantity) from ${testName2}_lineitem l1 where l1.l_receiptdate > l1.l_commitdate and exists (select * from ${testName2}_lineitem l2 where l2.l_orderkey = l1.l_orderkey and l2.l_suppkey <> l1.l_suppkey);
+rows: (3570, 90822.00)
+
+/hash_join_replay_small
+select count(*), sum(l1.l_quantity) from ${testName2}_lineitem l1 where l1.l_receiptdate > l1.l_commitdate and exists (select * from ${testName2}_lineitem l2 where l2.l_orderkey = l1.l_orderkey and l2.l_suppkey <> l1.l_suppkey);
+rows: (3570, 90822.00)
+
+/hash_join_replay_small
+/hash_join_walk
+select count(*), sum(l1.l_quantity) from ${testName2}_lineitem l1 where l1.l_receiptdate > l1.l_commitdate and exists (select * from ${testName2}_lineitem l2 where l2.l_orderkey = l1.l_orderkey and l2.l_suppkey <> l1.l_suppkey);
+rows: (3570, 90822.00)
+
+/hash_join_replay_small
+/optimiser_off_hash_join_scan
+select count(*), sum(l1.l_quantity) from ${testName2}_lineitem l1 where l1.l_receiptdate > l1.l_commitdate and exists (select * from ${testName2}_lineitem l2 where l2.l_orderkey = l1.l_orderkey and l2.l_suppkey <> l1.l_suppkey);
+rows: (3570, 90822.00)
+
+/optimiser_off_hash_join_replay
+select count(*), sum(l1.l_quantity) from ${testName2}_lineitem l1 where l1.l_receiptdate > l1.l_commitdate and exists (select * from ${testName2}_lineitem l2 where l2.l_orderkey = l1.l_orderkey and l2.l_suppkey <> l1.l_suppkey);
+rows: (3570, 90822.00)
+
+select count(*), sum(l1.l_quantity) from ${testName2}_lineitem l1 where l1.l_receiptdate > l1.l_commitdate and exists (select * from ${testName2}_lineitem l2 where l2.l_orderkey = l1.l_orderkey and l2.l_suppkey <> l1.l_suppkey) and not exists (select * from ${testName2}_lineitem l3 where l3.l_orderkey = l1.l_orderkey and l3.l_suppkey <> l1.l_suppkey and l3.l_receiptdate > l3.l_commitdate);
+rows: (307, 7852.00)
+
+/hash_join_replay_small
+select count(*), sum(l1.l_quantity) from ${testName2}_lineitem l1 where l1.l_receiptdate > l1.l_commitdate and exists (select * from ${testName2}_lineitem l2 where l2.l_orderkey = l1.l_orderkey and l2.l_suppkey <> l1.l_suppkey) and not exists (select * from ${testName2}_lineitem l3 where l3.l_orderkey = l1.l_orderkey and l3.l_suppkey <> l1.l_suppkey and l3.l_receiptdate > l3.l_commitdate);
+rows: (307, 7852.00)
+
+/hash_join_replay_small
+/hash_join_walk
+select count(*), sum(l1.l_quantity) from ${testName2}_lineitem l1 where l1.l_receiptdate > l1.l_commitdate and exists (select * from ${testName2}_lineitem l2 where l2.l_orderkey = l1.l_orderkey and l2.l_suppkey <> l1.l_suppkey) and not exists (select * from ${testName2}_lineitem l3 where l3.l_orderkey = l1.l_orderkey and l3.l_suppkey <> l1.l_suppkey and l3.l_receiptdate > l3.l_commitdate);
+rows: (307, 7852.00)
+
+/hash_join_replay_small
+/optimiser_off_hash_join_scan
+select count(*), sum(l1.l_quantity) from ${testName2}_lineitem l1 where l1.l_receiptdate > l1.l_commitdate and exists (select * from ${testName2}_lineitem l2 where l2.l_orderkey = l1.l_orderkey and l2.l_suppkey <> l1.l_suppkey) and not exists (select * from ${testName2}_lineitem l3 where l3.l_orderkey = l1.l_orderkey and l3.l_suppkey <> l1.l_suppkey and l3.l_receiptdate > l3.l_commitdate);
+rows: (307, 7852.00)
+
+/optimiser_off_hash_join_replay
+select count(*), sum(l1.l_quantity) from ${testName2}_lineitem l1 where l1.l_receiptdate > l1.l_commitdate and exists (select * from ${testName2}_lineitem l2 where l2.l_orderkey = l1.l_orderkey and l2.l_suppkey <> l1.l_suppkey) and not exists (select * from ${testName2}_lineitem l3 where l3.l_orderkey = l1.l_orderkey and l3.l_suppkey <> l1.l_suppkey and l3.l_receiptdate > l3.l_commitdate);
+rows: (307, 7852.00)
+
+select count(*), max(o_clerk), min(o_orderpriority) from ${testName2}_orders where exists (select * from ${testName2}_lineitem where l_orderkey = o_orderkey and l_quantity > 45 and l_shipdate > date '1995-01-01');
+rows: (297, 'Clerk#000000996', '1-URGENT')
+
+/hash_join_replay_small
+select count(*), max(o_clerk), min(o_orderpriority) from ${testName2}_orders where exists (select * from ${testName2}_lineitem where l_orderkey = o_orderkey and l_quantity > 45 and l_shipdate > date '1995-01-01');
+rows: (297, 'Clerk#000000996', '1-URGENT')
+
+/hash_join_replay_small
+/hash_join_walk
+select count(*), max(o_clerk), min(o_orderpriority) from ${testName2}_orders where exists (select * from ${testName2}_lineitem where l_orderkey = o_orderkey and l_quantity > 45 and l_shipdate > date '1995-01-01');
+rows: (297, 'Clerk#000000996', '1-URGENT')
+
+/hash_join_replay_small
+/optimiser_off_hash_join_scan
+select count(*), max(o_clerk), min(o_orderpriority) from ${testName2}_orders where exists (select * from ${testName2}_lineitem where l_orderkey = o_orderkey and l_quantity > 45 and l_shipdate > date '1995-01-01');
+rows: (297, 'Clerk#000000996', '1-URGENT')
+
+/optimiser_off_hash_join_replay
+select count(*), max(o_clerk), min(o_orderpriority) from ${testName2}_orders where exists (select * from ${testName2}_lineitem where l_orderkey = o_orderkey and l_quantity > 45 and l_shipdate > date '1995-01-01');
+rows: (297, 'Clerk#000000996', '1-URGENT')
+
+select count(*) from ${testName2}_orders where o_orderpriority = '1-URGENT' and exists (select * from ${testName2}_lineitem where l_orderkey = o_orderkey and l_quantity > 45 and l_shipdate > date '1995-01-01');
+rows: (57)
+
+/hash_join_replay_small
+select count(*) from ${testName2}_orders where o_orderpriority = '1-URGENT' and exists (select * from ${testName2}_lineitem where l_orderkey = o_orderkey and l_quantity > 45 and l_shipdate > date '1995-01-01');
+rows: (57)
+
+/hash_join_replay_small
+/hash_join_walk
+select count(*) from ${testName2}_orders where o_orderpriority = '1-URGENT' and exists (select * from ${testName2}_lineitem where l_orderkey = o_orderkey and l_quantity > 45 and l_shipdate > date '1995-01-01');
+rows: (57)
+
+/hash_join_replay_small
+/optimiser_off_hash_join_scan
+select count(*) from ${testName2}_orders where o_orderpriority = '1-URGENT' and exists (select * from ${testName2}_lineitem where l_orderkey = o_orderkey and l_quantity > 45 and l_shipdate > date '1995-01-01');
+rows: (57)
+
+/optimiser_off_hash_join_replay
+select count(*) from ${testName2}_orders where o_orderpriority = '1-URGENT' and exists (select * from ${testName2}_lineitem where l_orderkey = o_orderkey and l_quantity > 45 and l_shipdate > date '1995-01-01');
+rows: (57)
+
+select count(*), max(o_clerk), min(o_clerk) from ${testName2}_orders where not exists (select * from ${testName2}_lineitem where l_orderkey = o_orderkey and l_quantity > 45);
+rows: (997, 'Clerk#000001000', 'Clerk#000000001')
+
+/hash_join_replay_small
+select count(*), max(o_clerk), min(o_clerk) from ${testName2}_orders where not exists (select * from ${testName2}_lineitem where l_orderkey = o_orderkey and l_quantity > 45);
+rows: (997, 'Clerk#000001000', 'Clerk#000000001')
+
+/hash_join_replay_small
+/hash_join_walk
+select count(*), max(o_clerk), min(o_clerk) from ${testName2}_orders where not exists (select * from ${testName2}_lineitem where l_orderkey = o_orderkey and l_quantity > 45);
+rows: (997, 'Clerk#000001000', 'Clerk#000000001')
+
+/hash_join_replay_small
+/optimiser_off_hash_join_scan
+select count(*), max(o_clerk), min(o_clerk) from ${testName2}_orders where not exists (select * from ${testName2}_lineitem where l_orderkey = o_orderkey and l_quantity > 45);
+rows: (997, 'Clerk#000001000', 'Clerk#000000001')
+
+/optimiser_off_hash_join_replay
+select count(*), max(o_clerk), min(o_clerk) from ${testName2}_orders where not exists (select * from ${testName2}_lineitem where l_orderkey = o_orderkey and l_quantity > 45);
+rows: (997, 'Clerk#000001000', 'Clerk#000000001')
+
+select count(*), count(l_orderkey), sum(l_quantity) from ${testName2}_orders left outer join ${testName2}_lineitem on o_orderkey = l_orderkey and l_quantity > 45;
+rows: (1602, 605, 28998.00)
+
+/hash_join_replay_small
+select count(*), count(l_orderkey), sum(l_quantity) from ${testName2}_orders left outer join ${testName2}_lineitem on o_orderkey = l_orderkey and l_quantity > 45;
+rows: (1602, 605, 28998.00)
+
+/hash_join_replay_small
+/hash_join_walk
+select count(*), count(l_orderkey), sum(l_quantity) from ${testName2}_orders left outer join ${testName2}_lineitem on o_orderkey = l_orderkey and l_quantity > 45;
+rows: (1602, 605, 28998.00)
+
+/hash_join_replay_small
+/optimiser_off_hash_join_scan
+select count(*), count(l_orderkey), sum(l_quantity) from ${testName2}_orders left outer join ${testName2}_lineitem on o_orderkey = l_orderkey and l_quantity > 45;
+rows: (1602, 605, 28998.00)
+
+/optimiser_off_hash_join_replay
+select count(*), count(l_orderkey), sum(l_quantity) from ${testName2}_orders left outer join ${testName2}_lineitem on o_orderkey = l_orderkey and l_quantity > 45;
+rows: (1602, 605, 28998.00)
+
+select o_orderpriority, count(*), count(l_orderkey), sum(l_quantity) from ${testName2}_orders left outer join ${testName2}_lineitem on o_orderkey = l_orderkey and l_quantity > 45 group by o_orderpriority order by o_orderpriority;
+rows: ('1-URGENT', 316, 109, 5239.00)
+      ('2-HIGH', 312, 117, 5614.00)
+      ('3-MEDIUM', 326, 133, 6381.00)
+      ('4-NOT SPECIFIED', 334, 128, 6124.00)
+      ('5-LOW', 314, 118, 5640.00)
+
+/hash_join_replay_small
+select o_orderpriority, count(*), count(l_orderkey), sum(l_quantity) from ${testName2}_orders left outer join ${testName2}_lineitem on o_orderkey = l_orderkey and l_quantity > 45 group by o_orderpriority order by o_orderpriority;
+rows: ('1-URGENT', 316, 109, 5239.00)
+      ('2-HIGH', 312, 117, 5614.00)
+      ('3-MEDIUM', 326, 133, 6381.00)
+      ('4-NOT SPECIFIED', 334, 128, 6124.00)
+      ('5-LOW', 314, 118, 5640.00)
+
+/hash_join_replay_small
+/hash_join_walk
+select o_orderpriority, count(*), count(l_orderkey), sum(l_quantity) from ${testName2}_orders left outer join ${testName2}_lineitem on o_orderkey = l_orderkey and l_quantity > 45 group by o_orderpriority order by o_orderpriority;
+rows: ('1-URGENT', 316, 109, 5239.00)
+      ('2-HIGH', 312, 117, 5614.00)
+      ('3-MEDIUM', 326, 133, 6381.00)
+      ('4-NOT SPECIFIED', 334, 128, 6124.00)
+      ('5-LOW', 314, 118, 5640.00)
+
+/hash_join_replay_small
+/optimiser_off_hash_join_scan
+select o_orderpriority, count(*), count(l_orderkey), sum(l_quantity) from ${testName2}_orders left outer join ${testName2}_lineitem on o_orderkey = l_orderkey and l_quantity > 45 group by o_orderpriority order by o_orderpriority;
+rows: ('1-URGENT', 316, 109, 5239.00)
+      ('2-HIGH', 312, 117, 5614.00)
+      ('3-MEDIUM', 326, 133, 6381.00)
+      ('4-NOT SPECIFIED', 334, 128, 6124.00)
+      ('5-LOW', 314, 118, 5640.00)
+
+/optimiser_off_hash_join_replay
+select o_orderpriority, count(*), count(l_orderkey), sum(l_quantity) from ${testName2}_orders left outer join ${testName2}_lineitem on o_orderkey = l_orderkey and l_quantity > 45 group by o_orderpriority order by o_orderpriority;
+rows: ('1-URGENT', 316, 109, 5239.00)
+      ('2-HIGH', 312, 117, 5614.00)
+      ('3-MEDIUM', 326, 133, 6381.00)
+      ('4-NOT SPECIFIED', 334, 128, 6124.00)
+      ('5-LOW', 314, 118, 5640.00)
+
+select c, count(*) from (select o_orderkey, count(l_orderkey) c from ${testName2}_orders left outer join ${testName2}_lineitem on o_orderkey = l_orderkey and l_returnflag = 'R' group by o_orderkey) t group by c order by c;
+rows: (0, 847)
+      (1, 222)
+      (2, 192)
+      (3, 141)
+      (4, 68)
+      (5, 26)
+      (6, 3)
+      (7, 1)
+
+/hash_join_replay_small
+select c, count(*) from (select o_orderkey, count(l_orderkey) c from ${testName2}_orders left outer join ${testName2}_lineitem on o_orderkey = l_orderkey and l_returnflag = 'R' group by o_orderkey) t group by c order by c;
+rows: (0, 847)
+      (1, 222)
+      (2, 192)
+      (3, 141)
+      (4, 68)
+      (5, 26)
+      (6, 3)
+      (7, 1)
+
+/hash_join_replay_small
+/hash_join_walk
+select c, count(*) from (select o_orderkey, count(l_orderkey) c from ${testName2}_orders left outer join ${testName2}_lineitem on o_orderkey = l_orderkey and l_returnflag = 'R' group by o_orderkey) t group by c order by c;
+rows: (0, 847)
+      (1, 222)
+      (2, 192)
+      (3, 141)
+      (4, 68)
+      (5, 26)
+      (6, 3)
+      (7, 1)
+
+/hash_join_replay_small
+/optimiser_off_hash_join_scan
+select c, count(*) from (select o_orderkey, count(l_orderkey) c from ${testName2}_orders left outer join ${testName2}_lineitem on o_orderkey = l_orderkey and l_returnflag = 'R' group by o_orderkey) t group by c order by c;
+rows: (0, 847)
+      (1, 222)
+      (2, 192)
+      (3, 141)
+      (4, 68)
+      (5, 26)
+      (6, 3)
+      (7, 1)
+
+/optimiser_off_hash_join_replay
+select c, count(*) from (select o_orderkey, count(l_orderkey) c from ${testName2}_orders left outer join ${testName2}_lineitem on o_orderkey = l_orderkey and l_returnflag = 'R' group by o_orderkey) t group by c order by c;
+rows: (0, 847)
+      (1, 222)
+      (2, 192)
+      (3, 141)
+      (4, 68)
+      (5, 26)
+      (6, 3)
+      (7, 1)
+
+drop table ${testName2}_orders;
+success
+drop table ${testName2}_lineitem;
+success

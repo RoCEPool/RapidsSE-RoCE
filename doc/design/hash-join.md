@@ -85,3 +85,52 @@ over partitions, `/stageTimes`): Q7 S06 (lineitem) 190 -> 152 ms, S04
   operator of a row handler: still index joins.
 - The scan still reads every key of the joined table; the matched rows are
   then decoded one by one through the column-cache join path.
+
+## Outer, semi and anti joins
+
+The scan above joins each row of the joined table with the stored rows of its
+key, in the order of the joined table. That fits an inner join only: an outer
+join has to emit the stored rows that found nothing, a semi join each stored
+row once, an anti join the rows that found nothing or only rows that fail the
+constraint. Their generated code decides this per arriving row, over the
+range of index entries of its key.
+
+These joins are now hash joins that only replay (flag 32 of
+`iExtern_HashJoinMode`, mode 4):
+
+1. Build as before: the arriving rows are stored. Their strings stay relative
+   to their cells, as in a row buffer (`__HJ_REL__`), because the operators
+   behind a semi or anti join read the arriving row itself, with the code of a
+   row buffer.
+2. At the end of the input, one scan of the joined table's cached key column
+   (Bloom filter, then the slots of the stored keys) collects the row
+   references whose key has stored rows; a counting sort lays them out as
+   made-up index entries (`Ent_int`: key and row reference), one range per key
+   (`HashJoin::vBuildRanges`).
+3. The stored rows are replayed in arrival order through the join's own
+   position code. `vExtern_IndexTreePositionGE_int` hands out the range of the
+   key from those entries instead of descending the index
+   (`bHashJoinRange`); the step to the next entry is `+ 1`. The rest of the
+   join (constraint, NULL row of an outer join, the single output of a semi
+   join) runs unchanged, on the same ranges an index join would see, except
+   for the order of the entries within a key.
+
+The fragment `vHashJoinPosition_int` now ends with the position of the index;
+for these joins `vAppendCodeHashJoin` cuts it there and the join's own
+position fragment follows. In the replay the row info of the arriving row
+points at the stored row, and `m_iJoinedRows` / `m_bProcessRow` are reset as
+at the top of the row loop.
+
+Where it does not apply: when the scan cannot be prepared, or with
+`/optimiser_off_hash_join_scan`, the replay positions the index (mode 2, as an
+inner join with few rows). A table partition below 500,000 rows is joined
+through its index from the start and no row is stored (TPC-H Q16 joins 60,000
+rows with the 5,000 suppliers of a partition: the index is in the cache);
+`/hash_join_replay_small` lifts that limit for tests.
+`/optimiser_off_hash_join_replay` turns the whole change off.
+
+Used at SF1 by Q4 (semi, lineitem), Q13 (outer, orders), Q21 (anti, lineitem)
+and Q22 (anti, orders).
+
+Test: `Regression/hashJoinReplay.test`. The regression lists were also run
+once with the limit at 0 for every query.

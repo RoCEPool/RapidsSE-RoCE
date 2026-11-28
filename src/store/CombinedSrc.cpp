@@ -191,6 +191,13 @@ void CombinedSrc::vSynthesizeCode(Stencil* pStencil, bool bFirstStage, bool bLas
         vAppendCodeFragment(pOpSketch, "vExprStack"_Stz);
 
         // - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+        // (a hash join stores the arriving rows first; see bHashJoinEligible)
+        if (bHashJoinEligible(pStencil, iOpSketch, eCurrentHandler, true)) {
+          vAppendCodeHashJoin(pOpSketch, pOperatorFile, true);
+          vsHashJoinStages.push_back(std::string("R") + (const char*) pStencil->szStageNm()->azChar());
+        }
+
+        // - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
         // position at lower bound
 				if (pOpSketch->eSketchKind() == SK_ANTIJOIN) {
 					if (pOpSketch->m_pIndexDef->eKeyKind() == KE_INT)
@@ -241,9 +248,12 @@ void CombinedSrc::vSynthesizeCode(Stencil* pStencil, bool bFirstStage, bool bLas
         vAppendFunctionHeader(pOpSketch, eCurrentHandler, pStencil->szStageNm(), bHasIndexInflate);
 
         // a hash join probes now, through the row handler of the stage
-        for (const std::string& sStage : vsHashJoinStages)
-          if (sStage == pStencil->szStageNm()->azChar()) {
-            i8 iHjFlags = (AM::JOB::bHasTag("<hash_join_walk>"_Stz) ? 1 : 0) |
+        // ("H<stage>", or "R<stage>" for a join that can only replay: flag 32)
+        for (const std::string& sKindStage : vsHashJoinStages)
+          if (sKindStage.compare(1, std::string::npos, (const char*) pStencil->szStageNm()->azChar()) == 0) {
+            const std::string sStage = sKindStage.substr(1);
+            i8 iHjFlags = (sKindStage[0] == 'R' ? 32 : 0) |
+                          (AM::JOB::bHasTag("<hash_join_walk>"_Stz) ? 1 : 0) |
                           (AM::JOB::bHasTag("<hash_join_replay>"_Stz) ? 2 : 0) |
                           (AM::JOB::bHasTag("<optimiser_off_hash_join_bloom>"_Stz) ? 4 : 0) |
                           (AM::JOB::bHasTag("<hash_join_trace>"_Stz) ? 8 : 0) |
@@ -618,6 +628,12 @@ void CombinedSrc::vSynthesizeCode(Stencil* pStencil, bool bFirstStage, bool bLas
 					// generate expressions for populating the key
 					vAppendCodeFragment(pOpSketch, "vExprStack"_Stz);
 
+          // (a hash join stores the arriving rows first; see bHashJoinEligible)
+          if (bHashJoinEligible(pStencil, iOpSketch, eCurrentHandler, true)) {
+            vAppendCodeHashJoin(pOpSketch, pOperatorFile, true);
+            vsHashJoinStages.push_back(std::string("R") + (const char*) pStencil->szStageNm()->azChar());
+          }
+
 					if (pOpSketch->m_pIndexDef->eKeyKind() == KE_INT)
 						vAppendCodeFragment(pOpSketch, "vIndexLeftOuterJoinPosition_int"_Stz, pOperatorFile);
 					else
@@ -663,7 +679,7 @@ void CombinedSrc::vSynthesizeCode(Stencil* pStencil, bool bFirstStage, bool bLas
           // position the index (or build and probe a hash join)
           if (bHashJoinEligible(pStencil, iOpSketch, eCurrentHandler)) {
             vAppendCodeHashJoin(pOpSketch, pOperatorFile);
-            vsHashJoinStages.push_back(pStencil->szStageNm()->azChar());
+            vsHashJoinStages.push_back(std::string("H") + (const char*) pStencil->szStageNm()->azChar());
           }
 					else if (pOpSketch->m_pIndexDef->eKeyKind() == KE_INT)
             vAppendCodeFragment(pOpSketch, "vIndexJoinPosition_int"_Stz, pOperatorFile);
@@ -1141,7 +1157,11 @@ void CombinedSrc::vAppendCodeHavingGroups(void)
 /* join on one integer key that is the first operator of a row handler, and   */
 /* only with job tag /hash_join.                                              */
 /*----------------------------------------------------------------------------*/
-bool CombinedSrc::bHashJoinEligible(Stencil* pStencil, i8 iOpSketch, eHK eHandler)
+// (bReplayOnly: an outer, semi or anti join. Its rows are stored the same
+// way; the probe looks each stored row up, in arrival order, in the entries
+// of its key collected by one scan of the joined table's key column, see
+// iExtern_HashJoinMode. Job tag /optimiser_off_hash_join_replay: index join.)
+bool CombinedSrc::bHashJoinEligible(Stencil* pStencil, i8 iOpSketch, eHK eHandler, bool bReplayOnly)
 {
   _precondition_(_ADDRESS_,_MAGIC_,CN_COMBINEDSRC,_FOOTER_);
 
@@ -1149,7 +1169,10 @@ bool CombinedSrc::bHashJoinEligible(Stencil* pStencil, i8 iOpSketch, eHK eHandle
       AM::JOB::bHasTag("<optimiser_off_all>"_Stz))
     return false;
   OpSketch* pOpSketch = pStencil->pGet(iOpSketch);
-  if (pOpSketch->m_bCrossJoin || pOpSketch->m_bLeftOuter || pOpSketch->m_iDupOpNo != 0 ||
+  if (bReplayOnly && (AM::JOB::bHasTag("<optimiser_off_hash_join_replay>"_Stz) ||
+                      pOpSketch->m_sLabelOuterLoop.azChar()[0] == '\0'))
+    return false;
+  if (pOpSketch->m_bCrossJoin || (pOpSketch->m_bLeftOuter && ! bReplayOnly) || pOpSketch->m_iDupOpNo != 0 ||
       pOpSketch->m_pIndexDef->eKeyKind() != KE_INT)
     return false;
   if (eHandler != HK_PDSROWBUFFER && eHandler != HK_PDSROWBUFFER_FULL)
@@ -1189,7 +1212,7 @@ void CombinedSrc::vAppendText(const char* szText)
   vInsertText(m_azCodeCrs, szText);
 }
 
-void CombinedSrc::vAppendCodeHashJoin(OpSketch* pOpSketch, File* pOperatorFile)
+void CombinedSrc::vAppendCodeHashJoin(OpSketch* pOpSketch, File* pOperatorFile, bool bReplayOnly)
 {
   _precondition_(_ADDRESS_,_MAGIC_,CN_COMBINEDSRC,_FOOTER_);
 
@@ -1208,12 +1231,12 @@ void CombinedSrc::vAppendCodeHashJoin(OpSketch* pOpSketch, File* pOperatorFile)
     sCode.replace(p, 10, sVch);
   for (size_t p; (p = sCode.find("__HJ_N__")) != std::string::npos; )
     sCode.replace(p, 8, sNo);
-  m_azCodeCrs = azStart;
-  *m_azCodeCrs = '\0';
-  vAppendText(sCode.c_str());
+  for (size_t p; (p = sCode.find("__HJ_REL__")) != std::string::npos; )
+    sCode.replace(p, 10, bReplayOnly ? "1" : "0");
+  // (the smallest table partition an outer, semi or anti join stores rows for)
+  for (size_t p; (p = sCode.find("__HJ_MIN__")) != std::string::npos; )
+    sCode.replace(p, 10, AM::JOB::bHasTag("<hash_join_replay_small>"_Stz) ? "0" : "500000");
 
-  // in the row handler: its locals, the entry to the probe, and the return to
-  // the next stored row where an index join returns to the next arriving row
   char* azHandler = nullptr;
   for (char* a = azStart; a > m_caCode; a--)
     if (strncmp(a, "int iPdsRowHandler_", 19) == 0) {
@@ -1221,12 +1244,46 @@ void CombinedSrc::vAppendCodeHashJoin(OpSketch* pOpSketch, File* pOperatorFile)
       break;
     }
   RASSERT(azHandler);
+
+  // the row info of the arriving row, as the operator's header reads it
+  // ("// FROM": p<struct> = (struct <struct>*)<row info>.m_aRowCellArray;)
+  std::string sFromRow = "hjFromRow";
+  {
+    std::string sHead(azHandler, azStart - azHandler);
+    size_t pFrom = sHead.rfind("// FROM\n");
+    size_t pEq = pFrom == std::string::npos ? pFrom : sHead.find("*)", pFrom);
+    size_t pEnd = pEq == std::string::npos ? pEq : sHead.find(".m_aRowCellArray;", pEq);
+    size_t pEol = pFrom == std::string::npos ? pFrom : sHead.find('\n', pFrom + 8);
+    if (pEnd != std::string::npos && pEol != std::string::npos && pEnd < pEol)
+      sFromRow = sHead.substr(pEq + 2, pEnd - pEq - 2) + ".m_aRowCellArray";
+    else
+      RASSERT(! bReplayOnly);
+  }
+  for (size_t p; (p = sCode.find("__HJ_FROM_ROW__")) != std::string::npos; )
+    sCode.replace(p, 15, sFromRow);
+
+  // an outer, semi or anti join positions the index with its own code, which
+  // the caller appends next: the fragment ends at the label of the position
+  if (bReplayOnly) {
+    std::string sPos = "  L_HJPosition" + sNo + ":\n";
+    size_t pPos = sCode.rfind(sPos);
+    RASSERT(pPos != std::string::npos);
+    sCode.erase(pPos + sPos.size());
+    sCode += "  ;\n#endif\n";
+  }
+  m_azCodeCrs = azStart;
+  *m_azCodeCrs = '\0';
+  vAppendText(sCode.c_str());
+
+  // in the row handler: its locals, the entry to the probe, and the return to
+  // the next stored row where an index join returns to the next arriving row
   const char* szPaW = "paW = &aDynamicT->m_aW[0];\n";
   char* azPaW = strstr(azHandler, szPaW);
   RASSERT(azPaW && azPaW < azStart);
   std::string sEntry = "  void* hjEnt = 0; void* hjBuf = 0; void* hjNextEnt = 0; void* hjNextBuf = 0; char* hjNode = 0;\n"
                        "  i8 hjScanI = 0, hjScanN = 0, hjScanItem = 0, hjScanBuf = 0; i8* hjScanKeys = 0;\n"
                        "  struct Ent_int hjScanEnt[2];\n"
+                       "  void* hjFromRow = 0; (void)hjFromRow;\n"
                        "  if (aDynamicT->m_bHashProbe)\n    goto L_HJProbe" + sNo + ";\n";
   vInsertText(azPaW + strlen(szPaW), sEntry.c_str());
   std::string sLoop = std::string(pOpSketch->m_sLabelOuterLoop.azChar()) + ":\n";
@@ -1234,7 +1291,8 @@ void CombinedSrc::vAppendCodeHashJoin(OpSketch* pOpSketch, File* pOperatorFile)
   RASSERT(azLoop);
   std::string sNext = "  if (aDynamicT->m_bHashProbe == 1)\n    goto L_HJNext" + sNo + ";\n"
                       "  if (aDynamicT->m_bHashProbe == 2)\n    goto L_HJReplayNext" + sNo + ";\n"
-                      "  if (aDynamicT->m_bHashProbe == 3)\n    goto L_HJScanNext" + sNo + ";\n";
+                      "  if (aDynamicT->m_bHashProbe == 3)\n    goto L_HJScanNext" + sNo + ";\n"
+                      "  if (aDynamicT->m_bHashProbe == 4)\n    goto L_HJReplayNext" + sNo + ";\n";
   vInsertText(azLoop + sLoop.size(), sNext.c_str());
 }
 

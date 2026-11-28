@@ -368,9 +368,17 @@ extern "C" void vExtern_IndexTreePositionGE_gen(void* aIndexInfo) {
 /*----------------------------------------------------------------------------*/
 /* position at entry greater than equal to given int key                      */
 /*----------------------------------------------------------------------------*/
+// hash join that replays its stored rows against the entries collected by a
+// scan of the joined table's key column (HashJoin, bRange): the range of the
+// key; false when the index is to be positioned
+static bool bHashJoinRange(IndexInfo* pIndexInfo);
+static bool bHashJoinRanges(IndexInfo* pIndexInfo);
+
 extern "C" void vExtern_IndexTreePositionGE_int(void* aIndexInfo) {
 
 	IndexInfo *pIndexInfo = (IndexInfo *) aIndexInfo;
+	if (pIndexInfo->m_aHashJoin && bHashJoinRange(pIndexInfo))
+		return;
 	IndexTree *pIndexTree = (IndexTree *) pIndexInfo->m_aIndexTree;
 	Key *aKey = (Key *) pIndexInfo->m_aEntKey;
 
@@ -512,6 +520,9 @@ extern "C" void vExtern_IndexTreePositionLE_gen(void* aIndexInfo) {
 extern "C" void vExtern_IndexTreePositionLE_int(void* aIndexInfo) {
 
 	IndexInfo *pIndexInfo = (IndexInfo *) aIndexInfo;
+	// (the range of a replaying hash join has its upper end already)
+	if (pIndexInfo->m_aHashJoin && bHashJoinRanges(pIndexInfo))
+		return;
 	IndexTree *pIndexTree = (IndexTree *) pIndexInfo->m_aIndexTree;
 	Key *aKey = (Key *) pIndexInfo->m_aEntKey;
 
@@ -1914,6 +1925,13 @@ namespace {
     struct ScanBuf { i8 iBuffer; i8 nHeads; const i8* aiKeys; void* pPin; };
     std::vector<ScanBuf> vScan;
     bool bBuilt = true;                  // axSlot holds every stored row
+    // replay against the scan (outer, semi and anti joins): for each slot the
+    // entries of the joined rows with its key, made up like hjScanEnt (key and
+    // row reference), one range after the other; the last entry is the end of
+    // every empty range
+    bool bRange = false;
+    std::vector<u8> auRangeOff;          // slot -> first entry; [slots] = total
+    std::vector<Ent_int> axRangeEnt;
 
     static u8 uHash(i8 iKey) { u8 u = (u8) iKey * 0x9E3779B97F4A7C15ull; return u ^ (u >> 29); }
 
@@ -1979,6 +1997,56 @@ namespace {
         }
       }
       bBuilt = true;
+    }
+
+    // the slot of the key, or -1
+    i8 iSlot(i8 iKey) const
+    {
+      u8 u = uHash(iKey) & uMask;
+      while (axSlot[u].aFirst) {
+        if (axSlot[u].iKey == iKey)
+          return (i8) u;
+        u = (u + 1) & uMask;
+      }
+      return -1;
+    }
+
+    // The entries of the joined rows whose key has stored rows, grouped by
+    // key: one pass over the scanned key column (the Bloom filter first, as
+    // the scan of an inner join) collects (slot, buffer, item), a counting
+    // sort by slot lays them out.
+    void vBuildRanges(const u8* auBloomBits, u8 uBloomMask)
+    {
+      struct Hit { u8 uSlot; i8 iBuffer; i8 iItem; };
+      std::vector<Hit> axHit;
+      auRangeOff.assign(axSlot.size() + 1, 0);
+      for (const ScanBuf& x : vScan)
+        for (i8 i = 0; i < x.nHeads; i++) {
+          i8 iKey = x.aiKeys[i];
+          u8 u = uHash(iKey);
+          u8 v = u >> 32;
+          if (auBloomBits &&
+              ( ! (auBloomBits[(u & uBloomMask) >> 6] & (1ull << (u & 63))) ||
+                ! (auBloomBits[(v & uBloomMask) >> 6] & (1ull << (v & 63))) ))
+            continue;
+          i8 iAt = iSlot(iKey);
+          if (iAt < 0)
+            continue;
+          axHit.push_back(Hit{(u8) iAt, x.iBuffer, i});
+          auRangeOff[iAt + 1]++;
+        }
+      for (size_t i = 1; i < auRangeOff.size(); i++)
+        auRangeOff[i] += auRangeOff[i - 1];
+      axRangeEnt.assign(axHit.size() + 1, Ent_int());
+      memset((void*) axRangeEnt.data(), 0, axRangeEnt.size() * sizeof(Ent_int));
+      std::vector<u8> auNext(auRangeOff.begin(), auRangeOff.end() - 1);
+      for (const Hit& x : axHit) {
+        Ent_int& rEnt = axRangeEnt[auNext[x.uSlot]++];
+        rEnt.Rrf.m_uBuffer = (u8) x.iBuffer;
+        rEnt.Rrf.m_uItem   = (u8) x.iItem;
+        rEnt.m_iIntElm0    = axSlot[x.uSlot].iKey;
+      }
+      bRange = true;
     }
 
     char* aFirst(i8 iKey)
@@ -2102,6 +2170,35 @@ extern "C" i8 iExtern_HashJoinMode(void* aIndexInfo, i8 iFlags)
     return 2;
   if (! pHash->bBuilt)
     pHash->vBuild();
+  // an outer, semi or anti join (flag 32) replays in either case: against
+  // the index, or where an inner join would scan against the entries of the
+  // scanned rows that have a stored key (job tag /optimiser_off_hash_join_scan,
+  // or a table whose key column cannot be scanned: the index)
+  if (iFlags & 32) {
+    if ((iFlags & 16) || ! bHashJoinScanPrepare(pIndexInfo, pHash))
+      return 2;
+    const u8* auBits = nullptr;
+    u8 uBloomMask = 0;
+    if (! (iFlags & 4)) {
+      u8 nBits = 64;
+      while (nBits < (u8) pHash->nUsed * 16)
+        nBits <<= 1;
+      pHash->auBloom.assign(nBits / 64, 0);
+      for (const HashJoin::Slot& x : pHash->axSlot)
+        if (x.aFirst) {
+          u8 u = HashJoin::uHash(x.iKey);
+          pHash->auBloom[(u & (nBits - 1)) >> 6] |= 1ull << (u & 63);
+          u8 v = u >> 32;
+          pHash->auBloom[(v & (nBits - 1)) >> 6] |= 1ull << (v & 63);
+        }
+      auBits = pHash->auBloom.data();
+      uBloomMask = nBits - 1;
+    }
+    pHash->vBuildRanges(auBits, uBloomMask);
+    if (iFlags & 8)
+      vTrace("hash join: replay against %lld scanned entries\n"_Stz, (long long) pHash->axRangeEnt.size() - 1);
+    return 4;
+  }
   // the Bloom filter: 16 bits per key, two bits per key (job tag
   // /optimiser_off_hash_join_bloom: none, every entry looks in the hash)
   if (iFlags & 4)
@@ -2127,6 +2224,30 @@ extern "C" i8 iExtern_HashJoinMode(void* aIndexInfo, i8 iFlags)
     return 3;
   }
   return 1;
+}
+
+static bool bHashJoinRanges(IndexInfo* pIndexInfo)
+{
+  return ((HashJoin*) pIndexInfo->m_aHashJoin)->bRange;
+}
+
+static bool bHashJoinRange(IndexInfo* pIndexInfo)
+{
+  HashJoin* pHash = (HashJoin*) pIndexInfo->m_aHashJoin;
+  if (! pHash->bRange)
+    return false;
+  i8 iAt = pHash->iSlot(*(i8*) pIndexInfo->m_aEntKey);
+  Ent_int* aEnd = &pHash->axRangeEnt.back();
+  if (iAt < 0 || pHash->auRangeOff[iAt] == pHash->auRangeOff[iAt + 1]) {
+    pIndexInfo->m_aEntInt = aEnd;
+    pIndexInfo->m_aEntUpper = aEnd;
+  }
+  else {
+    pIndexInfo->m_aEntInt = &pHash->axRangeEnt[pHash->auRangeOff[iAt]];
+    pIndexInfo->m_aEntUpper = &pHash->axRangeEnt[pHash->auRangeOff[iAt + 1]];
+  }
+  pIndexInfo->m_aEntBuffer = nullptr;
+  return true;
 }
 
 // the entries of the joined index (the rows of its table partition)

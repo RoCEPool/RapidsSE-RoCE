@@ -78,9 +78,9 @@ namespace STORE {
     void vGbyKeyCache(void);
     void vAppendCodeHavingGroups(void);
     void vInsertText(char* azAt, const char* szText);
-    bool bHashJoinEligible(Stencil* pStencil, i8 iOpSketch, eHK eHandler);
+    bool bHashJoinEligible(Stencil* pStencil, i8 iOpSketch, eHK eHandler, bool bReplayOnly = false);
     void vAppendText(const char* szText);
-    void vAppendCodeHashJoin(OpSketch* pOpSketch, File* pOperatorFile);
+    void vAppendCodeHashJoin(OpSketch* pOpSketch, File* pOperatorFile, bool bReplayOnly = false);
     void vAppendCodeInflateCols(OpSketch* pOpSketch, Stz* szReturnPrefix, File* pCodeFile = nullptr);
     void vAppendCodeInflateInjCols(OpSketch* pOpSketch, Stz* szReturnPrefix, File* pCodeFile = nullptr);
 		void vAppendCodeInflateRightCols(OpSketch* pOpSketch, Stz* szReturnPrefix, File* pCodeFile = nullptr);
