@@ -1742,6 +1742,7 @@ namespace
     std::vector<Slot>  axSlot;
     std::vector<char*> apBlock;       // general keys: block per slot (null: empty)
     u8                 uMask = 0;
+    u8                 uShift = 63;   // integer keys: 64 - log2(slots)
     i8                 nUsed = 0;
     std::vector<char*> xSorted;       // the blocks in key order (traversal)
     size_t             iNext = 0;
@@ -1760,6 +1761,14 @@ namespace
       return u;
     }
 
+    // The slot of a key is the top bits of its hash, so the slots are in
+    // hash order and stay so when the table doubles: a group at slot i moves
+    // to slot 2i or 2i+1 (plus its probe distance), and vGrow reads the old
+    // table and writes the new one front to back. With the low bits a
+    // doubling scattered the groups over the new table, a cache miss for each
+    // (TPC-H Q18: 750,000 groups a partition, moved once on average).
+    u8 uSlotOf(i8 iKey) const { return uHash(iKey) >> uShift; }
+
     void vGrow(void)
     {
       std::vector<Slot> axOld;
@@ -1767,10 +1776,19 @@ namespace
       u8 nSlots = axOld.empty() ? 1024 : axOld.size() * 2;
       axSlot.assign(nSlots, Slot{0, nullptr});
       uMask = nSlots - 1;
-      for (const Slot& x : axOld) {
+      uShift = 64;
+      for (u8 n = nSlots; n > 1; n >>= 1)
+        uShift--;
+      // the groups that wrapped around the end of the old table are at its
+      // start: they go in last, as they came last in hash order
+      size_t iStart = 0;
+      while (iStart < axOld.size() && axOld[iStart].pBlock)
+        iStart++;
+      for (size_t k = 0; k < axOld.size(); k++) {
+        const Slot& x = axOld[(iStart + k) % axOld.size()];
         if (! x.pBlock)
           continue;
-        u8 u = uHash(x.iKey) & uMask;
+        u8 u = uSlotOf(x.iKey);
         while (axSlot[u].pBlock)
           u = (u + 1) & uMask;
         axSlot[u] = x;
@@ -1863,7 +1881,7 @@ namespace
     {
       if ((u8)(nUsed + 1) * 2 > axSlot.size())
         vGrow();
-      u8 u = uHash(iKey) & uMask;
+      u8 u = uSlotOf(iKey);
       while (axSlot[u].pBlock) {
         if (axSlot[u].iKey == iKey) {
           *pbNew = false;
