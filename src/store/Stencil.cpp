@@ -133,6 +133,10 @@ eEC Stencil::eSynthesise(PipelineDef *pPipelineDef) {
   // no longer reads)
   for (i8 i_Stage = nStages - 2; i_Stage >= 0; i_Stage--)
     CombinedSrc::bPruneTub(vsCode[i_Stage], vsCode[i_Stage + 1]);
+  // the filter of a stage on the groups of the stage before it, in that
+  // stage's traversal of the groups (CombinedSrc::bFilterInEos)
+  for (i8 i_Stage = 0; i_Stage + 1 < nStages; i_Stage++)
+    CombinedSrc::bFilterInEos(vsCode[i_Stage], vsCode[i_Stage + 1]);
   for (i8 i_Stage = 0; i_Stage < nStages; i_Stage++)
     pPipelineDef->pGet(i_Stage)->vCode((Stz*) vsCode[i_Stage].c_str());
 

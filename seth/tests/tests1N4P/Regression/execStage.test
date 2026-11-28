@@ -1,0 +1,172 @@
+/*----------------------------------------------------------------------------*/
+/* execStage.test -- less work per row in the stages of a query               */
+/*----------------------------------------------------------------------------*/
+
+// - A filter on the groups of a GROUP BY (HAVING) is applied in the traversal
+//   of the groups, before a group gets a row (CombinedSrc bFilterInEos).
+// - A semi or anti join reads the columns its constraint names from the
+//   column cache; the others are not fetched.
+// - On one node the groups of the partitions are merged at the origin only
+//   (Card_Deck bDropNodeMerge_gbyAgg).
+// - An index join whose row leaves out columns of the joined table reads the
+//   others from the column cache.
+// Each query runs with and without the job tag that turns its part off. The
+// expected rows were computed from TPCH/SF_0001 in Python.
+
+create table ${testName2}_orders (
+  O_ORDERKEY      INTEGER       NOT NULL,
+  O_CUSTKEY       INTEGER       NOT NULL,
+  O_ORDERSTATUS   CHAR(1)       NOT NULL,
+  O_TOTALPRICE    DECIMAL(15,2) NOT NULL,
+  O_ORDERDATE     DATE          NOT NULL,
+  O_ORDERPRIORITY CHAR(15)      NOT NULL,
+  O_CLERK         CHAR(15)      NOT NULL,
+  O_SHIPPRIORITY  INTEGER       NOT NULL,
+  O_COMMENT       VARCHAR(79)   NOT NULL
+);
+success
+create index ${testName2}_IxO_ORDERKEY on ${testName2}_orders (O_ORDERKEY);
+affected: 0
+load ${testName2}_orders "../TPCH/SF_0001/orders.tbl" <field_delimiter> = "|";
+success
+
+create table ${testName2}_lineitem (
+   L_ORDERKEY      INTEGER       NOT NULL,
+   L_PARTKEY       INTEGER       NOT NULL,
+   L_SUPPKEY       INTEGER       NOT NULL,
+   L_LINENUMBER    INTEGER       NOT NULL,
+   L_QUANTITY      DECIMAL(15,2) NOT NULL,
+   L_EXTENDEDPRICE DECIMAL(15,2) NOT NULL,
+   L_DISCOUNT      DECIMAL(15,2) NOT NULL,
+   L_TAX           DECIMAL(15,2) NOT NULL,
+   L_RETURNFLAG    CHAR(1)       NOT NULL,
+   L_LINESTATUS    CHAR(1)       NOT NULL,
+   L_SHIPDATE      DATE          NOT NULL,
+   L_COMMITDATE    DATE          NOT NULL,
+   L_RECEIPTDATE   DATE          NOT NULL,
+   L_SHIPINSTRUCT  CHAR(25)      NOT NULL,
+   L_SHIPMODE      CHAR(10)      NOT NULL,
+   L_COMMENT       VARCHAR(44)   NOT NULL
+);
+success
+create index ${testName2}_IxL_ORDERKEY on ${testName2}_lineitem (L_ORDERKEY);
+affected: 0
+load ${testName2}_lineitem "../TPCH/SF_0001/lineitem.tbl" <field_delimiter> = "|";
+success
+
+select count(*), sum(s), min(k), max(k) from (select l_orderkey k, sum(l_quantity) s from ${testName2}_lineitem group by l_orderkey having sum(l_quantity) > 200) t;
+rows: (84, 18580.00, 39, 5959)
+
+/optimiser_off_eos_filter
+select count(*), sum(s), min(k), max(k) from (select l_orderkey k, sum(l_quantity) s from ${testName2}_lineitem group by l_orderkey having sum(l_quantity) > 200) t;
+rows: (84, 18580.00, 39, 5959)
+
+select l_orderkey, sum(l_quantity) from ${testName2}_lineitem group by l_orderkey having sum(l_quantity) > 250 order by l_orderkey;
+rows: (2208, 256.00)
+      (2567, 266.00)
+      (3460, 254.00)
+      (4421, 255.00)
+
+/optimiser_off_eos_filter
+select l_orderkey, sum(l_quantity) from ${testName2}_lineitem group by l_orderkey having sum(l_quantity) > 250 order by l_orderkey;
+rows: (2208, 256.00)
+      (2567, 266.00)
+      (3460, 254.00)
+      (4421, 255.00)
+
+select count(*), min(k), max(k) from (select l_orderkey k, sum(l_quantity) s, count(*) c from ${testName2}_lineitem group by l_orderkey having sum(l_quantity) > 200 and count(*) >= 7) t;
+rows: (64, 68, 5959)
+
+/optimiser_off_eos_filter
+select count(*), min(k), max(k) from (select l_orderkey k, sum(l_quantity) s, count(*) c from ${testName2}_lineitem group by l_orderkey having sum(l_quantity) > 200 and count(*) >= 7) t;
+rows: (64, 68, 5959)
+
+select count(*) from (select l_suppkey k, max(l_extendedprice) m from ${testName2}_lineitem group by l_suppkey having max(l_extendedprice) < 60000) t;
+rows: (10)
+
+/optimiser_off_eos_filter
+select count(*) from (select l_suppkey k, max(l_extendedprice) m from ${testName2}_lineitem group by l_suppkey having max(l_extendedprice) < 60000) t;
+rows: (10)
+
+select count(*) from (select l_suppkey k, max(l_extendedprice) m from ${testName2}_lineitem group by l_suppkey having max(l_extendedprice) > 60000) t;
+rows: (0)
+
+/optimiser_off_eos_filter
+select count(*) from (select l_suppkey k, max(l_extendedprice) m from ${testName2}_lineitem group by l_suppkey having max(l_extendedprice) > 60000) t;
+rows: (0)
+
+select count(*), sum(l1.l_quantity) from ${testName2}_lineitem l1 where l1.l_receiptdate > l1.l_commitdate and exists (select * from ${testName2}_lineitem l2 where l2.l_orderkey = l1.l_orderkey and l2.l_suppkey <> l1.l_suppkey);
+rows: (3570, 90822.00)
+
+/optimiser_off_semi_join_prune
+select count(*), sum(l1.l_quantity) from ${testName2}_lineitem l1 where l1.l_receiptdate > l1.l_commitdate and exists (select * from ${testName2}_lineitem l2 where l2.l_orderkey = l1.l_orderkey and l2.l_suppkey <> l1.l_suppkey);
+rows: (3570, 90822.00)
+
+/optimiser_off_col_cache_join
+select count(*), sum(l1.l_quantity) from ${testName2}_lineitem l1 where l1.l_receiptdate > l1.l_commitdate and exists (select * from ${testName2}_lineitem l2 where l2.l_orderkey = l1.l_orderkey and l2.l_suppkey <> l1.l_suppkey);
+rows: (3570, 90822.00)
+
+select count(*), sum(l1.l_quantity) from ${testName2}_lineitem l1 where l1.l_receiptdate > l1.l_commitdate and exists (select * from ${testName2}_lineitem l2 where l2.l_orderkey = l1.l_orderkey and l2.l_suppkey <> l1.l_suppkey) and not exists (select * from ${testName2}_lineitem l3 where l3.l_orderkey = l1.l_orderkey and l3.l_suppkey <> l1.l_suppkey and l3.l_receiptdate > l3.l_commitdate);
+rows: (307, 7852.00)
+
+/optimiser_off_semi_join_prune
+select count(*), sum(l1.l_quantity) from ${testName2}_lineitem l1 where l1.l_receiptdate > l1.l_commitdate and exists (select * from ${testName2}_lineitem l2 where l2.l_orderkey = l1.l_orderkey and l2.l_suppkey <> l1.l_suppkey) and not exists (select * from ${testName2}_lineitem l3 where l3.l_orderkey = l1.l_orderkey and l3.l_suppkey <> l1.l_suppkey and l3.l_receiptdate > l3.l_commitdate);
+rows: (307, 7852.00)
+
+/optimiser_off_col_cache_join
+select count(*), sum(l1.l_quantity) from ${testName2}_lineitem l1 where l1.l_receiptdate > l1.l_commitdate and exists (select * from ${testName2}_lineitem l2 where l2.l_orderkey = l1.l_orderkey and l2.l_suppkey <> l1.l_suppkey) and not exists (select * from ${testName2}_lineitem l3 where l3.l_orderkey = l1.l_orderkey and l3.l_suppkey <> l1.l_suppkey and l3.l_receiptdate > l3.l_commitdate);
+rows: (307, 7852.00)
+
+select count(*), sum(o_totalprice) from ${testName2}_orders where exists (select * from ${testName2}_lineitem where l_orderkey = o_orderkey and l_quantity > 45 and l_shipdate > date '1995-01-01');
+rows: (297, 42296122.14)
+
+/optimiser_off_semi_join_prune
+select count(*), sum(o_totalprice) from ${testName2}_orders where exists (select * from ${testName2}_lineitem where l_orderkey = o_orderkey and l_quantity > 45 and l_shipdate > date '1995-01-01');
+rows: (297, 42296122.14)
+
+select count(*), sum(o_totalprice) from ${testName2}_orders where not exists (select * from ${testName2}_lineitem where l_orderkey = o_orderkey and l_quantity > 45);
+rows: (997, 79877337.20)
+
+/optimiser_off_semi_join_prune
+select count(*), sum(o_totalprice) from ${testName2}_orders where not exists (select * from ${testName2}_lineitem where l_orderkey = o_orderkey and l_quantity > 45);
+rows: (997, 79877337.20)
+
+select l_shipmode, l_returnflag, count(*), sum(l_quantity), min(l_extendedprice), max(l_extendedprice) from ${testName2}_lineitem group by l_shipmode, l_returnflag order by l_shipmode, l_returnflag limit 4;
+rows: ('AIR', 'A', 223, 5399.00, 947.04, 51751.35)
+      ('AIR', 'N', 438, 11195.00, 902.00, 54359.00)
+      ('AIR', 'R', 175, 4166.00, 987.08, 53124.82)
+      ('FOB', 'A', 202, 5237.00, 940.04, 53811.31)
+
+/optimiser_off_single_node_gbyagg
+select l_shipmode, l_returnflag, count(*), sum(l_quantity), min(l_extendedprice), max(l_extendedprice) from ${testName2}_lineitem group by l_shipmode, l_returnflag order by l_shipmode, l_returnflag limit 4;
+rows: ('AIR', 'A', 223, 5399.00, 947.04, 51751.35)
+      ('AIR', 'N', 438, 11195.00, 902.00, 54359.00)
+      ('AIR', 'R', 175, 4166.00, 987.08, 53124.82)
+      ('FOB', 'A', 202, 5237.00, 940.04, 53811.31)
+
+select count(*) from (select l_shipmode, l_returnflag, avg(l_discount) from ${testName2}_lineitem group by l_shipmode, l_returnflag) t;
+rows: (21)
+
+/optimiser_off_single_node_gbyagg
+select count(*) from (select l_shipmode, l_returnflag, avg(l_discount) from ${testName2}_lineitem group by l_shipmode, l_returnflag) t;
+rows: (21)
+
+select o_orderpriority, count(*), sum(l_extendedprice * (1 - l_discount)) from ${testName2}_orders, ${testName2}_lineitem where o_orderkey = l_orderkey and o_orderdate < date '1995-01-01' group by o_orderpriority order by o_orderpriority;
+rows: ('1-URGENT', 522, 12239105.7789)
+      ('2-HIGH', 512, 12368150.5170)
+      ('3-MEDIUM', 548, 13168644.5753)
+      ('4-NOT SPECIFIED', 610, 15001676.2631)
+      ('5-LOW', 548, 13178292.9081)
+
+/optimiser_off_col_cache_join
+select o_orderpriority, count(*), sum(l_extendedprice * (1 - l_discount)) from ${testName2}_orders, ${testName2}_lineitem where o_orderkey = l_orderkey and o_orderdate < date '1995-01-01' group by o_orderpriority order by o_orderpriority;
+rows: ('1-URGENT', 522, 12239105.7789)
+      ('2-HIGH', 512, 12368150.5170)
+      ('3-MEDIUM', 548, 13168644.5753)
+      ('4-NOT SPECIFIED', 610, 15001676.2631)
+      ('5-LOW', 548, 13178292.9081)
+
+drop table ${testName2}_orders;
+success
+drop table ${testName2}_lineitem;
+success

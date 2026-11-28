@@ -405,6 +405,47 @@ bool Card_Deck::bLocalise_gbyAgg(CardIter* pCI)
 }
 
 /*----------------------------------------------------------------------------*/
+/* A GROUP BY that runs in the partitions is merged twice: on each node (one  */
+/* row per group leaves the node instead of one per group and partition) and  */
+/* at the origin. On a cluster of one node the node merge saves no traffic,   */
+/* and the origin merge repeats it on the same groups (TPC-H Q10: 38,000      */
+/* groups with long string keys were merged, written out and read twice).     */
+/* The node merge is dropped there; the origin merges the partitions. Only    */
+/* when both merge the groups column by column (bMergesGroupsOf), so that the */
+/* origin reads the rows of the partitions as it read those of the node.      */
+/* Optimisation name: single_node_gbyagg.                                     */
+/*----------------------------------------------------------------------------*/
+bool Card_Deck::bDropNodeMerge_gbyAgg(void)
+{
+  _precondition_(_ADDRESS_,_MAGIC_,CN_CARD,_FOOTER_);
+
+  if (AM::GRID::nKnownNodes() > 1)
+    return false;
+
+  bool bDropped = false;
+  for (i8 i_Main = 0; i_Main < nChildCards(); i_Main++) {
+    Card* p_main = pGetChild(i_Main);
+    if (! p_main->bIsOp() || CK_o_GBYAGG != p_main->eCard() || AL_PARTITION != eLevelOf(p_main))
+      continue;
+    Card_OP* p_OP = (Card_OP*) p_main;
+    i8 i_node   = iNextOp(this, i_Main);
+    i8 i_origin = C_UNKNOWN == i_node ? C_UNKNOWN : iNextOp(this, i_node);
+    if (C_UNKNOWN == i_origin)
+      continue;
+    Card_OP* p_node   = (Card_OP*) pGetChild(i_node);
+    Card_OP* p_origin = (Card_OP*) pGetChild(i_origin);
+    if (CK_o_GBYAGG != p_node->eCard()   || AL_NODE   != eLevelOf(p_node) ||
+        CK_o_GBYAGG != p_origin->eCard() || AL_ORIGIN != eLevelOf(p_origin) ||
+        ! bMergesGroupsOf(p_node, p_OP) || ! bMergesGroupsOf(p_origin, p_OP))
+      continue;
+    vRemoveChild(p_node);
+    delete p_node;
+    bDropped = true;
+  }
+  return bDropped;
+}
+
+/*----------------------------------------------------------------------------*/
 /*                                                                            */
 /*----------------------------------------------------------------------------*/
 eXK Card_Deck::eAddStageCast_toPrev_cast(CardIter*        pCI,
